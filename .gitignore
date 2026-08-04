@@ -1,0 +1,35 @@
+# CMake build trees and generated files
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/compile_commands.json
+/Makefile
+/*.ninja
+/.ninja_*
+
+# Local dependency/tool caches
+/.cache/
+
+# IDE and editor state
+/.vs/
+/.vscode/
+*.user
+*.suo
+*.VC.db
+
+# Runtime state
+/MyRenderer.ini
+*.log
+
+# Unsupported MVP assets (keep the repository lightweight)
+/assets/models/*.dae
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+
+# Do not add a global *.obj rule: OBJ files under assets/models are source assets.
