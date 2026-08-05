@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
@@ -12,11 +13,13 @@
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/mat3x3.hpp>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
 #include "app/AppIcon.h"
+#include "app/FileDialog.h"
 #include "io/AssimpImporter.h"
 #include "io/ModelImporter.h"
 #include "io/ObjLoader.h"
@@ -38,6 +41,26 @@ const char* glString(unsigned int name) {
     return value == nullptr ? "Unknown" : reinterpret_cast<const char*>(value);
 }
 
+const char* diagnosticScopeName(ModelDiagnosticScope scope) {
+    switch (scope) {
+    case ModelDiagnosticScope::File: return "File";
+    case ModelDiagnosticScope::Node: return "Node";
+    case ModelDiagnosticScope::Mesh: return "Mesh";
+    case ModelDiagnosticScope::Material: return "Material";
+    case ModelDiagnosticScope::Texture: return "Texture";
+    }
+    return "Unknown";
+}
+
+const char* diagnosticSeverityName(ModelDiagnosticSeverity severity) {
+    switch (severity) {
+    case ModelDiagnosticSeverity::Info: return "Info";
+    case ModelDiagnosticSeverity::Warning: return "Warning";
+    case ModelDiagnosticSeverity::Error: return "Error";
+    }
+    return "Unknown";
+}
+
 } // namespace
 
 Application::Application()
@@ -57,6 +80,10 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* msaa = std::getenv("MYRENDERER_MSAA")) {
         rendererSettings_.msaaSamples = std::atoi(msaa) <= 1 ? 1 : 4;
     }
+    if (const char* value = std::getenv("MYRENDERER_PBR")) rendererSettings_.pbrEnabled = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_IBL")) rendererSettings_.iblEnabled = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_SHADOWS")) rendererSettings_.shadowsEnabled = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_BLOOM")) rendererSettings_.bloom = std::atoi(value) != 0;
 
     std::filesystem::path modelToLoad = initialModel;
     if (modelToLoad.empty()) {
@@ -74,11 +101,26 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* screenshotPath = std::getenv("MYRENDERER_SCREENSHOT")) {
         pendingScreenshotPath_ = std::filesystem::absolute(screenshotPath).lexically_normal();
     }
+    const char* recoveryModelValue = std::getenv("MYRENDERER_RECOVERY_TEST");
+    const std::filesystem::path recoveryModel = recoveryModelValue == nullptr
+        ? std::filesystem::path{}
+        : std::filesystem::path(recoveryModelValue);
+    bool recoveryScheduled = recoveryModel.empty();
 
     int smokeTestFrames = std::getenv("MYRENDERER_SMOKE_TEST") == nullptr ? -1 : 5;
     previousFrameTime_ = glfwGetTime();
     while (!glfwWindowShouldClose(window_)) {
+        const double cpuFrameStart = glfwGetTime();
         glfwPollEvents();
+        if (droppedModelPath_.has_value() && !pendingModelImport_.has_value()) {
+            const std::filesystem::path dropped = std::move(*droppedModelPath_);
+            droppedModelPath_.reset();
+            loadModel(dropped);
+        }
+        updateModelLoad();
+        if (!recoveryScheduled && model_ != nullptr && !pendingModelImport_.has_value()) {
+            recoveryScheduled = loadModel(recoveryModel);
+        }
         if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
             glfwSetWindowShouldClose(window_, GLFW_TRUE);
         }
@@ -117,13 +159,19 @@ int Application::run(const std::filesystem::path& initialModel) {
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window_);
-        if (smokeTestFrames > 0 && --smokeTestFrames == 0) {
+        const double measuredCpuTime = (glfwGetTime() - cpuFrameStart) * 1000.0;
+        cpuFrameTimeMilliseconds_ = cpuFrameTimeMilliseconds_ > 0.0
+            ? cpuFrameTimeMilliseconds_ * 0.9 + measuredCpuTime * 0.1
+            : measuredCpuTime;
+        if (smokeTestFrames > 0 && !pendingModelImport_.has_value() && --smokeTestFrames == 0) {
             glfwSetWindowShouldClose(window_, GLFW_TRUE);
         }
     }
 
+    const bool recoveryPassed = recoveryModel.empty()
+        || (recoveryScheduled && lastLoadFailed_ && model_ != nullptr);
     shutdown();
-    return 0;
+    return recoveryPassed ? 0 : 2;
 }
 
 void Application::initializeWindow() {
@@ -154,6 +202,13 @@ void Application::initializeWindow() {
         throw std::runtime_error("Failed to create an OpenGL 3.3 window");
     }
     setMyRendererWindowIcon(window_);
+    glfwSetWindowUserPointer(window_, this);
+    glfwSetDropCallback(window_, [](GLFWwindow* window, int count, const char** paths) {
+        auto* application = static_cast<Application*>(glfwGetWindowUserPointer(window));
+        if (application != nullptr) {
+            application->queueDroppedFiles(count, paths);
+        }
+    });
     glfwSetWindowSizeLimits(window_, 960, 600, GLFW_DONT_CARE, GLFW_DONT_CARE);
     glfwMakeContextCurrent(window_);
     glfwSwapInterval(vsync_ ? 1 : 0);
@@ -213,7 +268,9 @@ void Application::initializeGui() {
 void Application::initializeRenderer() {
     renderer_ = std::make_unique<Renderer>(
         sourceRoot_ / "shaders" / "basic.vert",
-        sourceRoot_ / "shaders" / "basic.frag"
+        sourceRoot_ / "shaders" / "basic.frag",
+        sourceRoot_ / "shaders" / "debug_lines.vert",
+        sourceRoot_ / "shaders" / "debug_lines.frag"
     );
 }
 
@@ -227,6 +284,15 @@ void Application::shutdown() {
         return;
     }
     shutdownComplete_ = true;
+
+    if (pendingModelImport_.has_value()) {
+        pendingModelImport_->future.wait();
+        try {
+            pendingModelImport_->future.get();
+        } catch (...) {
+        }
+        pendingModelImport_.reset();
+    }
 
     if (window_ != nullptr) {
         glfwMakeContextCurrent(window_);
@@ -251,6 +317,15 @@ void Application::drawMainMenu() {
         return;
     }
     if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Open model...", "Ctrl+O", false, !pendingModelImport_.has_value())) {
+            std::string dialogError;
+            const auto selected = openModelFileDialog(dialogError);
+            if (selected.has_value()) {
+                loadModel(*selected);
+            } else if (!dialogError.empty()) {
+                statusMessage_ = "Open failed: " + dialogError;
+            }
+        }
         if (ImGui::BeginMenu("Open bundled model")) {
             for (const auto& path : availableModels_) {
                 if (ImGui::MenuItem(path.filename().string().c_str())) {
@@ -259,7 +334,12 @@ void Application::drawMainMenu() {
             }
             ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Reload current", "Ctrl+R", false, !currentModelPath_.empty())) {
+        if (ImGui::MenuItem(
+            "Reload current",
+            "Ctrl+R",
+            false,
+            !currentModelPath_.empty() && !pendingModelImport_.has_value()
+        )) {
             loadModel(currentModelPath_);
         }
         if (ImGui::MenuItem("Save viewport PNG", nullptr, false, model_ != nullptr)) {
@@ -277,6 +357,9 @@ void Application::drawMainMenu() {
         }
         ImGui::MenuItem("Wireframe", nullptr, &rendererSettings_.wireframe);
         ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
+        ImGui::Separator();
+        ImGui::MenuItem("Ground grid", nullptr, &rendererSettings_.showGrid);
+        ImGui::MenuItem("XYZ axes", nullptr, &rendererSettings_.showAxes);
         ImGui::MenuItem("Auto rotate", nullptr, &autoRotate_);
         ImGui::EndMenu();
     }
@@ -340,17 +423,41 @@ void Application::drawScenePanel() {
     ImGui::SeparatorText("Open path");
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputText("##ModelPath", modelPathBuffer_.data(), modelPathBuffer_.size());
-    if (ImGui::Button("Load model", ImVec2(-1.0f, 0.0f))) {
-        loadModel(modelPathBuffer_.data());
+    const bool loadInProgress = pendingModelImport_.has_value();
+    ImGui::BeginDisabled(loadInProgress);
+    if (ImGui::Button("Browse...", ImVec2(-1.0f, 0.0f))) {
+        std::string dialogError;
+        const auto selected = openModelFileDialog(dialogError);
+        if (selected.has_value()) {
+            const std::string selectedPath = selected->string();
+            std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", selectedPath.c_str());
+            loadModel(*selected);
+        } else if (!dialogError.empty()) {
+            statusMessage_ = "Open failed: " + dialogError;
+        }
     }
+    if (ImGui::Button("Load entered path", ImVec2(-1.0f, 0.0f))) {
+        loadModel(std::filesystem::u8path(modelPathBuffer_.data()));
+    }
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("You can also drop OBJ, DAE, glTF or GLB files onto the window.");
 
     ImGui::Spacing();
     ImGui::SeparatorText("Status");
     ImGui::TextWrapped("%s", statusMessage_.c_str());
-    if (!modelWarnings_.empty() && ImGui::TreeNode("Loader warnings")) {
-        ImGui::TextWrapped("%s", modelWarnings_.c_str());
-        ImGui::TreePop();
+    if (pendingModelImport_.has_value()) {
+        const double elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - pendingModelImport_->startedAt
+        ).count();
+        const float activity = static_cast<float>(std::fmod(elapsed * 0.35, 1.0));
+        ImGui::ProgressBar(activity, ImVec2(-1.0f, 0.0f), "Importing on CPU...");
+        ImGui::TextDisabled(
+            "%.2f MiB | %.1f s elapsed | current scene stays active",
+            static_cast<double>(pendingModelImport_->fileSize) / (1024.0 * 1024.0),
+            elapsed
+        );
     }
+    drawDiagnostics();
     ImGui::End();
 }
 
@@ -372,11 +479,13 @@ void Application::drawInspectorPanel() {
     if (ImGui::BeginTabBar("InspectorTabs")) {
         if (ImGui::BeginTabItem("Object")) {
             ImGui::SeparatorText("Transform");
+            ImGui::DragFloat3("Position", &modelPosition_.x, 0.01f, 0.0f, 0.0f, "%.2f");
             ImGui::DragFloat3("Rotation", &modelRotationDegrees_.x, 0.25f, -360.0f, 360.0f, "%.1f deg");
             ImGui::SliderFloat("Scale", &modelScale_, 0.1f, 4.0f, "%.2f");
             ImGui::Checkbox("Auto rotate", &autoRotate_);
             if (ImGui::Button("Reset transform", ImVec2(-1.0f, 0.0f))) {
                 resetObjectTransform();
+                camera_.reset(modelPosition_);
             }
 
             ImGui::SeparatorText("Material");
@@ -405,10 +514,29 @@ void Application::drawInspectorPanel() {
         }
 
         if (ImGui::BeginTabItem("Renderer")) {
+            ImGui::SeparatorText("PBR & environment");
+            ImGui::Checkbox("Metallic-roughness PBR", &rendererSettings_.pbrEnabled);
+            ImGui::Checkbox("Image-based lighting", &rendererSettings_.iblEnabled);
+            ImGui::Checkbox("Skybox", &rendererSettings_.skyboxEnabled);
+            ImGui::Checkbox("Shadow mapping", &rendererSettings_.shadowsEnabled);
+            ImGui::SliderFloat("Environment", &rendererSettings_.environmentIntensity, 0.0f, 2.0f, "%.2f");
+            ImGui::TextDisabled("Shadow map: %d x %d", renderer_->shadowResolution(), renderer_->shadowResolution());
+
+            ImGui::SeparatorText("Post processing");
+            ImGui::Checkbox("ACES tone mapping", &rendererSettings_.toneMapping);
+            ImGui::Checkbox("Bloom", &rendererSettings_.bloom);
+            ImGui::SliderFloat("Exposure", &rendererSettings_.exposure, 0.1f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+            ImGui::BeginDisabled(!rendererSettings_.bloom);
+            ImGui::SliderFloat("Bloom threshold", &rendererSettings_.bloomThreshold, 0.1f, 4.0f, "%.2f");
+            ImGui::SliderFloat("Bloom intensity", &rendererSettings_.bloomIntensity, 0.0f, 1.0f, "%.2f");
+            ImGui::EndDisabled();
+
             ImGui::SeparatorText("Rasterization");
             ImGui::Checkbox("Wireframe", &rendererSettings_.wireframe);
             ImGui::Checkbox("Back-face culling", &rendererSettings_.cullBackFaces);
             ImGui::Checkbox("Normal mapping", &rendererSettings_.normalMapping);
+            ImGui::Checkbox("Ground grid", &rendererSettings_.showGrid);
+            ImGui::Checkbox("XYZ axes + gizmo", &rendererSettings_.showAxes);
             ImGui::ColorEdit3("Background", &rendererSettings_.backgroundColor.x);
             const char* msaaOptions[] = {"1x", "4x"};
             int msaaSelection = rendererSettings_.msaaSamples > 1 ? 1 : 0;
@@ -426,12 +554,36 @@ void Application::drawInspectorPanel() {
                 camera_.setFieldOfView(fieldOfView);
             }
             if (ImGui::Button("Frame model", ImVec2(-1.0f, 0.0f))) {
-                camera_.reset();
+                camera_.reset(modelPosition_);
             }
 
             ImGui::SeparatorText("Runtime");
             if (ImGui::Checkbox("VSync", &vsync_)) {
                 glfwSwapInterval(vsync_ ? 1 : 0);
+            }
+            ImGui::Text("CPU frame: %.2f ms", cpuFrameTimeMilliseconds_);
+            if (renderer_->hasGpuFrameTime()) {
+                ImGui::Text("GPU viewport: %.2f ms", renderer_->gpuFrameTimeMilliseconds());
+            } else {
+                ImGui::TextDisabled("GPU viewport: collecting...");
+            }
+            ImGui::Text("Draw calls: %zu", renderer_->drawCallCount());
+            ImGui::Text("Active passes: %zu", renderer_->activePassNames().size());
+            for (const auto& passName : renderer_->activePassNames()) {
+                ImGui::BulletText("%s", passName.c_str());
+            }
+            ImGui::Text("Triangles: %zu", model_ ? loadedTriangleCount_ : 0U);
+            ImGui::Text(
+                "Texture memory: %.2f MiB",
+                static_cast<double>(loadedTextureMemoryBytes_) / (1024.0 * 1024.0)
+            );
+            if (lastLoadTotalMilliseconds_ > 0.0) {
+                ImGui::TextDisabled(
+                    "Last load: %.1f ms CPU + %.1f ms GPU = %.1f ms",
+                    lastCpuImportMilliseconds_,
+                    lastGpuUploadMilliseconds_,
+                    lastLoadTotalMilliseconds_
+                );
             }
             ImGui::TextWrapped("%s", gpuDescription_.c_str());
             ImGui::EndTabItem();
@@ -458,12 +610,16 @@ void Application::drawViewportPanel() {
 
     ImGui::SetCursorPos(ImVec2(10.0f, 30.0f));
     if (ImGui::SmallButton("Frame")) {
-        camera_.reset();
+        camera_.reset(modelPosition_);
     }
     ImGui::SameLine();
     if (ImGui::SmallButton("Save PNG")) {
         pendingScreenshotPath_ = nextScreenshotPath();
     }
+    ImGui::SameLine();
+    ImGui::Checkbox("Grid", &rendererSettings_.showGrid);
+    ImGui::SameLine();
+    ImGui::Checkbox("Axes", &rendererSettings_.showAxes);
     ImGui::SameLine();
     ImGui::TextDisabled("RMB orbit | MMB pan | Wheel zoom");
     ImGui::SetCursorPosY(55.0f);
@@ -475,7 +631,7 @@ void Application::drawViewportPanel() {
     const glm::mat4 normalization =
         glm::scale(glm::mat4(1.0f), glm::vec3(modelNormalizationScale_))
         * glm::translate(glm::mat4(1.0f), -modelCenter_);
-    glm::mat4 modelMatrix(1.0f);
+    glm::mat4 modelMatrix = glm::translate(glm::mat4(1.0f), modelPosition_);
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.z), glm::vec3(0.0f, 0.0f, 1.0f));
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.y), glm::vec3(0.0f, 1.0f, 0.0f));
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.x), glm::vec3(1.0f, 0.0f, 0.0f));
@@ -483,7 +639,7 @@ void Application::drawViewportPanel() {
     modelMatrix *= normalization;
     renderer_->render(model_.get(), camera_, modelMatrix, rendererSettings_, width, height);
 
-    if (!pendingScreenshotPath_.empty()) {
+    if (!pendingScreenshotPath_.empty() && model_ != nullptr && !pendingModelImport_.has_value()) {
         std::string screenshotError;
         if (renderer_->saveScreenshot(pendingScreenshotPath_, screenshotError)) {
             statusMessage_ = "Saved screenshot (MSAA "
@@ -516,7 +672,113 @@ void Application::drawViewportPanel() {
             camera_.pan(io.MouseDelta.x, io.MouseDelta.y);
         }
     }
+    if (rendererSettings_.showAxes) {
+        drawOrientationGizmo();
+    }
     ImGui::End();
+}
+
+void Application::drawOrientationGizmo() {
+    const ImVec2 imageMin = ImGui::GetItemRectMin();
+    const ImVec2 imageMax = ImGui::GetItemRectMax();
+    if (imageMax.x - imageMin.x < 120.0f || imageMax.y - imageMin.y < 120.0f) {
+        return;
+    }
+
+    struct AxisGuide {
+        glm::vec3 direction;
+        const char* label;
+        ImU32 color;
+        glm::vec3 cameraDirection{0.0f};
+    };
+    std::array<AxisGuide, 3> axes{
+        AxisGuide{{1.0f, 0.0f, 0.0f}, "X", IM_COL32(255, 70, 70, 255)},
+        AxisGuide{{0.0f, 1.0f, 0.0f}, "Y", IM_COL32(70, 235, 95, 255)},
+        AxisGuide{{0.0f, 0.0f, 1.0f}, "Z", IM_COL32(70, 125, 255, 255)}
+    };
+    const glm::mat3 viewRotation(camera_.viewMatrix());
+    for (AxisGuide& axis : axes) {
+        axis.cameraDirection = viewRotation * axis.direction;
+    }
+    std::sort(axes.begin(), axes.end(), [](const AxisGuide& left, const AxisGuide& right) {
+        return left.cameraDirection.z < right.cameraDirection.z;
+    });
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    const ImVec2 center(imageMin.x + 58.0f, imageMax.y - 58.0f);
+    constexpr float radius = 34.0f;
+    drawList->AddCircleFilled(center, 47.0f, IM_COL32(10, 13, 20, 185), 32);
+    drawList->AddCircle(center, 47.0f, IM_COL32(115, 125, 150, 145), 32, 1.0f);
+    for (const AxisGuide& axis : axes) {
+        const ImVec2 endpoint(
+            center.x + axis.cameraDirection.x * radius,
+            center.y - axis.cameraDirection.y * radius
+        );
+        drawList->AddLine(center, endpoint, axis.color, 3.0f);
+        drawList->AddCircleFilled(endpoint, 4.5f, axis.color, 12);
+        const ImVec2 textSize = ImGui::CalcTextSize(axis.label);
+        const float offsetX = endpoint.x >= center.x ? 7.0f : -textSize.x - 7.0f;
+        const float offsetY = endpoint.y >= center.y ? 4.0f : -textSize.y - 4.0f;
+        drawList->AddText({endpoint.x + offsetX, endpoint.y + offsetY}, axis.color, axis.label);
+    }
+    drawList->AddCircleFilled(center, 3.5f, IM_COL32(230, 235, 245, 255), 12);
+}
+
+void Application::drawDiagnostics() {
+    if (modelDiagnostics_.empty()) {
+        ImGui::TextDisabled("No import diagnostics.");
+        return;
+    }
+
+    if (!ImGui::TreeNodeEx("Import diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
+        return;
+    }
+    static constexpr std::array<ModelDiagnosticScope, 5> scopes{
+        ModelDiagnosticScope::File,
+        ModelDiagnosticScope::Node,
+        ModelDiagnosticScope::Mesh,
+        ModelDiagnosticScope::Material,
+        ModelDiagnosticScope::Texture
+    };
+    for (const ModelDiagnosticScope scope : scopes) {
+        const std::size_t count = static_cast<std::size_t>(std::count_if(
+            modelDiagnostics_.begin(),
+            modelDiagnostics_.end(),
+            [scope](const ModelDiagnostic& diagnostic) { return diagnostic.scope == scope; }
+        ));
+        if (count == 0U) {
+            continue;
+        }
+        const std::string label = std::string(diagnosticScopeName(scope))
+                                + " (" + std::to_string(count) + ")";
+        if (!ImGui::TreeNode(label.c_str())) {
+            continue;
+        }
+        for (std::size_t index = 0; index < modelDiagnostics_.size(); ++index) {
+            const ModelDiagnostic& diagnostic = modelDiagnostics_[index];
+            if (diagnostic.scope != scope) {
+                continue;
+            }
+            ImGui::PushID(static_cast<int>(index));
+            const ImVec4 color = diagnostic.severity == ModelDiagnosticSeverity::Error
+                ? ImVec4(1.0f, 0.35f, 0.35f, 1.0f)
+                : diagnostic.severity == ModelDiagnosticSeverity::Warning
+                    ? ImVec4(1.0f, 0.75f, 0.25f, 1.0f)
+                    : ImVec4(0.45f, 0.72f, 1.0f, 1.0f);
+            ImGui::TextColored(
+                color,
+                "%s%s%s",
+                diagnosticSeverityName(diagnostic.severity),
+                diagnostic.context.empty() ? "" : " - ",
+                diagnostic.context.c_str()
+            );
+            ImGui::TextWrapped("%s", diagnostic.message.c_str());
+            ImGui::Separator();
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
+    }
+    ImGui::TreePop();
 }
 
 void Application::drawAboutPopup() {
@@ -562,6 +824,11 @@ void Application::discoverModels() {
 }
 
 bool Application::loadModel(const std::filesystem::path& path) {
+    if (pendingModelImport_.has_value()) {
+        statusMessage_ = "A model is already loading; wait for it to finish before starting another import.";
+        return false;
+    }
+
     try {
         const auto resolved = resolvePath(path);
         const ModelImporter* importer = findImporter(resolved);
@@ -569,56 +836,163 @@ bool Application::loadModel(const std::filesystem::path& path) {
             throw std::runtime_error("No model importer supports: " + resolved.string());
         }
 
-        ModelImportResult loaded = importer->load(resolved);
-        auto newModel = std::make_unique<GpuModel>(
-            loaded.model,
-            renderer_->textureCache(),
-            loaded.warnings
-        );
-        const glm::vec3 extent = loaded.model.boundsMax - loaded.model.boundsMin;
-        const float maximumExtent = std::max({extent.x, extent.y, extent.z});
-        if (!std::isfinite(maximumExtent) || maximumExtent <= 1e-8f) {
-            throw std::runtime_error("Model bounds are empty or degenerate");
-        }
-
-        model_ = std::move(newModel);
-        currentModelPath_ = resolved;
-        loadedMeshCount_ = model_->meshCount();
-        loadedSubmeshCount_ = model_->submeshCount();
-        loadedVertexCount_ = model_->vertexCount();
-        loadedTriangleCount_ = model_->triangleCount();
-        loadedMaterialCount_ = model_->materialCount();
-        loadedTextureCount_ = model_->textureCount();
-        loadedDecodedTextureCount_ = model_->loadedTextureCount();
-        loadedFallbackTextureCount_ = model_->fallbackTextureCount();
-        loadedTextureMemoryBytes_ = model_->textureMemoryBytes();
-        modelCenter_ = 0.5f * (loaded.model.boundsMin + loaded.model.boundsMax);
-        modelNormalizationScale_ = 1.4f / maximumExtent;
-        modelWarnings_ = loaded.warnings;
-        resetObjectTransform();
-        camera_.reset();
-
-        const std::string pathString = currentModelPath_.string();
+        std::error_code fileSizeError;
+        const std::uintmax_t fileSize = std::filesystem::file_size(resolved, fileSizeError);
+        modelDiagnostics_.clear();
+        modelDiagnostics_.push_back(ModelDiagnostic{
+            ModelDiagnosticScope::File,
+            ModelDiagnosticSeverity::Info,
+            resolved.filename().string(),
+            "CPU asset import started; the current scene will remain active until validation succeeds."
+        });
+        const std::string pathString = resolved.string();
         std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", pathString.c_str());
-        statusMessage_ = "Loaded " + currentModelPath_.filename().string() + " ("
-                       + std::to_string(loadedMeshCount_) + " mesh, "
-                       + std::to_string(loadedSubmeshCount_) + " submesh, "
-                       + std::to_string(loadedVertexCount_) + " vertices, "
-                       + std::to_string(loadedTriangleCount_) + " triangles, "
-                       + std::to_string(loadedMaterialCount_) + " materials, "
-                       + std::to_string(loadedTextureCount_) + " textures, "
-                       + std::to_string(loadedDecodedTextureCount_) + " decoded, "
-                       + std::to_string(loadedFallbackTextureCount_) + " fallback)";
+        statusMessage_ = "Loading " + resolved.filename().string() + " on a background CPU task...";
+        lastLoadFailed_ = false;
         std::cout << statusMessage_ << '\n';
-        if (!modelWarnings_.empty()) {
-            std::cout << "Model warnings:\n" << modelWarnings_;
-        }
+
+        auto future = std::async(std::launch::async, [importer, resolved]() {
+            const auto startedAt = std::chrono::steady_clock::now();
+            ModelImportResult loaded = importer->load(resolved);
+            loaded.cpuTimeMilliseconds = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - startedAt
+            ).count();
+            return loaded;
+        });
+        pendingModelImport_.emplace(PendingModelImport{
+            resolved,
+            std::move(future),
+            std::chrono::steady_clock::now(),
+            fileSizeError ? 0U : fileSize
+        });
         return true;
     } catch (const std::exception& error) {
+        lastLoadFailed_ = true;
         statusMessage_ = std::string("Load failed: ") + error.what();
+        modelDiagnostics_.clear();
+        modelDiagnostics_.push_back(ModelDiagnostic{
+            ModelDiagnosticScope::File,
+            ModelDiagnosticSeverity::Error,
+            path.filename().string(),
+            error.what()
+        });
         std::cerr << statusMessage_ << '\n';
         return false;
     }
+}
+
+void Application::updateModelLoad() {
+    if (!pendingModelImport_.has_value()
+        || pendingModelImport_->future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+        return;
+    }
+
+    PendingModelImport pending = std::move(*pendingModelImport_);
+    pendingModelImport_.reset();
+    try {
+        ModelImportResult loaded = pending.future.get();
+        finishModelLoad(pending.path, std::move(loaded));
+    } catch (const std::exception& error) {
+        lastLoadFailed_ = true;
+        lastLoadTotalMilliseconds_ = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - pending.startedAt
+        ).count();
+        statusMessage_ = "Load failed; current scene preserved: " + std::string(error.what());
+        modelDiagnostics_.clear();
+        modelDiagnostics_.push_back(ModelDiagnostic{
+            ModelDiagnosticScope::File,
+            ModelDiagnosticSeverity::Error,
+            pending.path.filename().string(),
+            error.what()
+        });
+        std::cerr << statusMessage_ << '\n';
+    }
+}
+
+void Application::finishModelLoad(const std::filesystem::path& path, ModelImportResult loaded) {
+    const auto gpuUploadStartedAt = std::chrono::steady_clock::now();
+    std::vector<TextureUploadWarning> textureWarnings;
+    auto newModel = std::make_unique<GpuModel>(
+        loaded.model,
+        renderer_->textureCache(),
+        textureWarnings
+    );
+    const glm::vec3 extent = loaded.model.boundsMax - loaded.model.boundsMin;
+    const float maximumExtent = std::max({extent.x, extent.y, extent.z});
+    if (!std::isfinite(maximumExtent) || maximumExtent <= 1e-8f) {
+        throw std::runtime_error("Model bounds are empty or degenerate");
+    }
+
+    lastCpuImportMilliseconds_ = loaded.cpuTimeMilliseconds;
+    lastGpuUploadMilliseconds_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - gpuUploadStartedAt
+    ).count();
+    lastLoadTotalMilliseconds_ = lastCpuImportMilliseconds_ + lastGpuUploadMilliseconds_;
+    lastLoadFailed_ = false;
+    modelDiagnostics_ = std::move(loaded.diagnostics);
+    for (auto& warning : textureWarnings) {
+        modelDiagnostics_.push_back(ModelDiagnostic{
+            ModelDiagnosticScope::Texture,
+            ModelDiagnosticSeverity::Warning,
+            std::move(warning.textureName),
+            std::move(warning.message)
+        });
+    }
+
+    model_ = std::move(newModel);
+    currentModelPath_ = path;
+    loadedMeshCount_ = model_->meshCount();
+    loadedSubmeshCount_ = model_->submeshCount();
+    loadedVertexCount_ = model_->vertexCount();
+    loadedTriangleCount_ = model_->triangleCount();
+    loadedMaterialCount_ = model_->materialCount();
+    loadedTextureCount_ = model_->textureCount();
+    loadedDecodedTextureCount_ = model_->loadedTextureCount();
+    loadedFallbackTextureCount_ = model_->fallbackTextureCount();
+    loadedTextureMemoryBytes_ = model_->textureMemoryBytes();
+    modelCenter_ = 0.5f * (loaded.model.boundsMin + loaded.model.boundsMax);
+    modelNormalizationScale_ = 1.4f / maximumExtent;
+    resetObjectTransform();
+    camera_.reset();
+
+    const std::string pathString = currentModelPath_.string();
+    std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", pathString.c_str());
+    statusMessage_ = "Loaded " + currentModelPath_.filename().string() + " ("
+                   + std::to_string(loadedMeshCount_) + " mesh, "
+                   + std::to_string(loadedSubmeshCount_) + " submesh, "
+                   + std::to_string(loadedVertexCount_) + " vertices, "
+                   + std::to_string(loadedTriangleCount_) + " triangles, "
+                   + std::to_string(loadedMaterialCount_) + " materials, "
+                   + std::to_string(loadedTextureCount_) + " textures, "
+                   + std::to_string(loadedDecodedTextureCount_) + " decoded, "
+                   + std::to_string(loadedFallbackTextureCount_) + " fallback; "
+                   + std::to_string(static_cast<int>(lastLoadTotalMilliseconds_)) + " ms)";
+    std::cout << statusMessage_ << '\n';
+    for (const ModelDiagnostic& diagnostic : modelDiagnostics_) {
+        if (diagnostic.severity == ModelDiagnosticSeverity::Info) {
+            continue;
+        }
+        std::cout << diagnosticSeverityName(diagnostic.severity) << " ["
+                  << diagnosticScopeName(diagnostic.scope) << "] "
+                  << diagnostic.context << ": " << diagnostic.message << '\n';
+    }
+}
+
+void Application::queueDroppedFiles(int count, const char** paths) {
+    if (count <= 0 || paths == nullptr) {
+        return;
+    }
+    for (int index = 0; index < count; ++index) {
+        const std::filesystem::path candidate = std::filesystem::u8path(paths[index]);
+        if (findImporter(candidate) != nullptr) {
+            droppedModelPath_ = candidate;
+            statusMessage_ = "Dropped " + candidate.filename().string() + "; queued for loading.";
+            return;
+        }
+    }
+    const std::filesystem::path candidate = std::filesystem::u8path(paths[0]);
+    droppedModelPath_ = candidate;
+    statusMessage_ = "Dropped file is not a supported model: " + candidate.filename().string();
 }
 
 const ModelImporter* Application::findImporter(const std::filesystem::path& path) const {
@@ -662,6 +1036,7 @@ std::filesystem::path Application::nextScreenshotPath() const {
 }
 
 void Application::resetObjectTransform() {
+    modelPosition_ = glm::vec3(0.0f);
     modelRotationDegrees_ = glm::vec3(0.0f);
     modelScale_ = 1.0f;
 }

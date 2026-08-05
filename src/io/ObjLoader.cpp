@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <glm/geometric.hpp>
@@ -99,7 +100,7 @@ std::filesystem::path resolveTexturePath(
         : (baseDirectory / std::filesystem::path(textureName)).lexically_normal();
 }
 
-void generateTangents(MeshData& mesh, std::string& warnings) {
+void generateTangents(MeshData& mesh, ModelImportResult& result) {
     std::vector<glm::vec3> tangentAccumulation(mesh.vertices.size(), glm::vec3(0.0f));
     std::vector<glm::vec3> bitangentAccumulation(mesh.vertices.size(), glm::vec3(0.0f));
     std::size_t degenerateUvTriangles = 0;
@@ -151,9 +152,14 @@ void generateTangents(MeshData& mesh, std::string& warnings) {
     }
 
     if (degenerateUvTriangles > 0U || invalidVertices > 0U) {
-        warnings += "Tangent generation skipped " + std::to_string(degenerateUvTriangles)
-                 + " triangle(s) with degenerate UVs; " + std::to_string(invalidVertices)
-                 + " vertex tangent(s) will use geometric normals.\n";
+        result.addDiagnostic(
+            ModelDiagnosticScope::Mesh,
+            ModelDiagnosticSeverity::Warning,
+            mesh.name,
+            "Tangent generation skipped " + std::to_string(degenerateUvTriangles)
+                + " triangle(s) with degenerate UVs; " + std::to_string(invalidVertices)
+                + " vertex tangent(s) will use geometric normals."
+        );
     }
 }
 
@@ -192,10 +198,17 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
     }
 
     ModelImportResult result;
-    result.warnings = diagnostics;
     result.model.name = path.stem().string();
     result.model.sourcePath = std::filesystem::absolute(path).lexically_normal();
     result.model.rootNode.name = result.model.name;
+    if (!diagnostics.empty()) {
+        result.addDiagnostic(
+            ModelDiagnosticScope::File,
+            ModelDiagnosticSeverity::Warning,
+            result.model.sourcePath.filename().string(),
+            diagnostics
+        );
+    }
 
     std::unordered_map<std::string, std::int32_t> textureIndices;
     auto appendTexture = [&](const std::string& textureName, bool srgb) -> std::int32_t {
@@ -235,6 +248,12 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
             sourceMaterial.normal_texname,
             false
         );
+        material.metallicFactor = std::clamp(static_cast<float>(sourceMaterial.metallic), 0.0f, 1.0f);
+        // tinyobj uses zero for an absent Pr extension; keep the renderer's
+        // conservative rough default unless the MTL explicitly supplied a value.
+        if (sourceMaterial.roughness > 0.0) {
+            material.roughnessFactor = std::clamp(static_cast<float>(sourceMaterial.roughness), 0.04f, 1.0f);
+        }
         result.model.materials.push_back(std::move(material));
     }
 
@@ -245,6 +264,7 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
     bool hasTextureCoordinates = false;
     const bool flatShading = requestsFlatShading(path);
     std::uint64_t cornerSequence = 0;
+    std::unordered_set<int> reportedInvalidMaterials;
 
     auto appendVertex = [&](const tinyobj::index_t& index) -> std::uint32_t {
         const std::uint64_t split = flatShading && index.normal_index < 0 ? ++cornerSequence : 0U;
@@ -313,9 +333,20 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
                 continue;
             }
 
-            const int faceMaterial = faceIndex < shape.mesh.material_ids.size()
+            int faceMaterial = faceIndex < shape.mesh.material_ids.size()
                 ? shape.mesh.material_ids[faceIndex]
                 : -1;
+            if (faceMaterial >= 0 && static_cast<std::size_t>(faceMaterial) >= materials.size()) {
+                if (reportedInvalidMaterials.insert(faceMaterial).second) {
+                    result.addDiagnostic(
+                        ModelDiagnosticScope::Material,
+                        ModelDiagnosticSeverity::Warning,
+                        "material #" + std::to_string(faceMaterial),
+                        "Shape " + shapeName + " references a missing material; using the default material."
+                    );
+                }
+                faceMaterial = -1;
+            }
             if (!hasActiveSubmesh) {
                 currentMaterial = faceMaterial;
                 firstIndex = output.indices.size();
@@ -374,13 +405,18 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
             }
         }
         if (degenerateTriangles > 0) {
-            result.warnings += "Skipped " + std::to_string(degenerateTriangles)
-                             + " degenerate triangle(s) while generating normals.\n";
+            result.addDiagnostic(
+                ModelDiagnosticScope::Mesh,
+                ModelDiagnosticSeverity::Warning,
+                output.name,
+                "Skipped " + std::to_string(degenerateTriangles)
+                    + " degenerate triangle(s) while generating normals."
+            );
         }
     }
 
     if (hasTextureCoordinates) {
-        generateTangents(output, result.warnings);
+        generateTangents(output, result);
     }
 
     result.model.boundsMin = output.boundsMin;

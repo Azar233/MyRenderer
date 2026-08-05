@@ -1,13 +1,17 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <filesystem>
+#include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include <glm/vec3.hpp>
 
+#include "io/ModelImporter.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
 
@@ -37,10 +41,15 @@ private:
     void drawScenePanel();
     void drawInspectorPanel();
     void drawViewportPanel();
+    void drawOrientationGizmo();
     void drawAboutPopup();
+    void drawDiagnostics();
 
     void discoverModels();
     bool loadModel(const std::filesystem::path& path);
+    void updateModelLoad();
+    void finishModelLoad(const std::filesystem::path& path, ModelImportResult loaded);
+    void queueDroppedFiles(int count, const char** paths);
     const ModelImporter* findImporter(const std::filesystem::path& path) const;
     std::filesystem::path resolvePath(const std::filesystem::path& path) const;
     std::filesystem::path nextScreenshotPath() const;
@@ -62,10 +71,20 @@ private:
     std::vector<std::filesystem::path> availableModels_;
     std::array<char, 1024> modelPathBuffer_{};
     std::string statusMessage_{"Ready"};
-    std::string modelWarnings_;
     std::string gpuDescription_;
+    std::vector<ModelDiagnostic> modelDiagnostics_;
+
+    struct PendingModelImport {
+        std::filesystem::path path;
+        std::future<ModelImportResult> future;
+        std::chrono::steady_clock::time_point startedAt;
+        std::uintmax_t fileSize{0};
+    };
+    std::optional<PendingModelImport> pendingModelImport_;
+    std::optional<std::filesystem::path> droppedModelPath_;
 
     glm::vec3 modelCenter_{0.0f};
+    glm::vec3 modelPosition_{0.0f};
     glm::vec3 modelRotationDegrees_{0.0f};
     float modelNormalizationScale_{1.0f};
     float modelScale_{1.0f};
@@ -79,10 +98,15 @@ private:
     std::size_t loadedFallbackTextureCount_{0};
     std::size_t loadedTextureMemoryBytes_{0};
     std::size_t unsupportedModelCount_{0};
+    double cpuFrameTimeMilliseconds_{0.0};
+    double lastCpuImportMilliseconds_{0.0};
+    double lastGpuUploadMilliseconds_{0.0};
+    double lastLoadTotalMilliseconds_{0.0};
 
     bool showAbout_{false};
     bool showImGuiDemo_{false};
     bool autoRotate_{false};
     bool vsync_{true};
+    bool lastLoadFailed_{false};
     double previousFrameTime_{0.0};
 };

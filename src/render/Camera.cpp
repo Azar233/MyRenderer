@@ -44,8 +44,8 @@ void Camera::zoom(float wheelDelta) {
     distance_ = std::clamp(distance_, 0.35f, 40.0f);
 }
 
-void Camera::reset() {
-    target_ = glm::vec3(0.0f);
+void Camera::reset(const glm::vec3& target) {
+    target_ = target;
     yawRadians_ = 0.75f;
     pitchRadians_ = 0.35f;
     distance_ = 3.2f;

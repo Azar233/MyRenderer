@@ -52,6 +52,7 @@ public:
 
     TextureLoadResult load(const TextureData& source);
     const std::shared_ptr<Texture2D>& whiteTexture() const { return whiteTexture_; }
+    const std::shared_ptr<Texture2D>& linearWhiteTexture() const { return linearWhiteTexture_; }
     const std::shared_ptr<Texture2D>& missingTexture() const { return missingTexture_; }
     const std::shared_ptr<Texture2D>& flatNormalTexture() const { return flatNormalTexture_; }
     std::size_t cachedTextureCount() const;
@@ -60,6 +61,7 @@ private:
     std::unordered_map<std::string, std::weak_ptr<Texture2D>> textures_;
     std::unordered_set<std::string> fallbackKeys_;
     std::shared_ptr<Texture2D> whiteTexture_;
+    std::shared_ptr<Texture2D> linearWhiteTexture_;
     std::shared_ptr<Texture2D> missingTexture_;
     std::shared_ptr<Texture2D> flatNormalTexture_;
 };

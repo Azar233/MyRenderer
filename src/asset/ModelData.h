@@ -40,6 +40,8 @@ struct MaterialData {
     glm::vec4 baseColorFactor{1.0f};
     std::int32_t baseColorTextureIndex{-1};
     std::int32_t normalTextureIndex{-1};
+    // glTF packs roughness in G and metallic in B.
+    std::int32_t metallicRoughnessTextureIndex{-1};
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
 };

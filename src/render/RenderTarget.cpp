@@ -125,14 +125,14 @@ void RenderTarget::resize(int width, int height, int samples) {
 
     glGenFramebuffers(1, &resolveFramebuffer_);
     glBindFramebuffer(GL_FRAMEBUFFER, resolveFramebuffer_);
-    glGenTextures(1, &colorTexture_);
-    glBindTexture(GL_TEXTURE_2D, colorTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glGenTextures(1, &hdrColorTexture_);
+    glBindTexture(GL_TEXTURE_2D, hdrColorTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width_, height_, 0, GL_RGBA, GL_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hdrColorTexture_, 0);
 
     if (samples_ > 1) {
         requireComplete("resolve");
@@ -140,7 +140,7 @@ void RenderTarget::resize(int width, int height, int samples) {
         glBindFramebuffer(GL_FRAMEBUFFER, multisampleFramebuffer_);
         glGenRenderbuffers(1, &multisampleColor_);
         glBindRenderbuffer(GL_RENDERBUFFER, multisampleColor_);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples_, GL_RGBA8, width_, height_);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples_, GL_RGBA16F, width_, height_);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, multisampleColor_);
     }
 
@@ -154,24 +154,43 @@ void RenderTarget::resize(int width, int height, int samples) {
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthStencil_);
     requireComplete(samples_ > 1 ? "multisample viewport" : "viewport");
 
+    glGenFramebuffers(1, &finalFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, finalFramebuffer_);
+    glGenTextures(1, &finalColorTexture_);
+    glBindTexture(GL_TEXTURE_2D, finalColorTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, finalColorTexture_, 0);
+    requireComplete("final LDR");
+
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void RenderTarget::bind() const {
+void RenderTarget::bindScene() const {
     glBindFramebuffer(
         GL_FRAMEBUFFER,
         samples_ > 1 ? multisampleFramebuffer_ : resolveFramebuffer_
     );
 }
 
-void RenderTarget::resolveAndUnbind() const {
+void RenderTarget::resolveScene() const {
     if (samples_ > 1) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampleFramebuffer_);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolveFramebuffer_);
         glBlitFramebuffer(0, 0, width_, height_, 0, 0, width_, height_, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     }
+}
+
+void RenderTarget::bindFinal() const {
+    glBindFramebuffer(GL_FRAMEBUFFER, finalFramebuffer_);
+}
+
+void RenderTarget::unbind() const {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -183,7 +202,7 @@ bool RenderTarget::savePng(const std::filesystem::path& path, std::string& error
     std::vector<std::uint8_t> pixels(
         static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 4U
     );
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, resolveFramebuffer_);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, finalFramebuffer_);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -194,12 +213,16 @@ bool RenderTarget::savePng(const std::filesystem::path& path, std::string& error
 void RenderTarget::destroy() {
     if (depthStencil_ != 0U) glDeleteRenderbuffers(1, &depthStencil_);
     if (multisampleColor_ != 0U) glDeleteRenderbuffers(1, &multisampleColor_);
-    if (colorTexture_ != 0U) glDeleteTextures(1, &colorTexture_);
+    if (finalColorTexture_ != 0U) glDeleteTextures(1, &finalColorTexture_);
+    if (hdrColorTexture_ != 0U) glDeleteTextures(1, &hdrColorTexture_);
+    if (finalFramebuffer_ != 0U) glDeleteFramebuffers(1, &finalFramebuffer_);
     if (multisampleFramebuffer_ != 0U) glDeleteFramebuffers(1, &multisampleFramebuffer_);
     if (resolveFramebuffer_ != 0U) glDeleteFramebuffers(1, &resolveFramebuffer_);
     depthStencil_ = 0U;
     multisampleColor_ = 0U;
-    colorTexture_ = 0U;
+    finalColorTexture_ = 0U;
+    hdrColorTexture_ = 0U;
+    finalFramebuffer_ = 0U;
     multisampleFramebuffer_ = 0U;
     resolveFramebuffer_ = 0U;
     width_ = 0;

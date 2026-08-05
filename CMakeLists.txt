@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(MyRenderer VERSION 0.1.0 LANGUAGES C CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -96,15 +98,20 @@ add_executable(MyRenderer
     src/main.cpp
     src/app/AppIcon.cpp
     src/app/Application.cpp
+    src/app/FileDialog.cpp
     src/io/AssimpImporter.cpp
     src/io/ObjLoader.cpp
     src/render/Camera.cpp
+    src/render/DebugGrid.cpp
+    src/render/EnvironmentMap.cpp
     src/render/GpuModel.cpp
     src/render/Mesh.cpp
     src/render/OpenGlDebug.cpp
+    src/render/PostProcessor.cpp
     src/render/RenderTarget.cpp
     src/render/Renderer.cpp
     src/render/Shader.cpp
+    src/render/ShadowMap.cpp
     src/render/Texture2D.cpp
 )
 
@@ -117,6 +124,7 @@ if(WIN32)
         @ONLY
     )
     target_sources(MyRenderer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/MyRenderer.rc")
+    target_link_libraries(MyRenderer PRIVATE comdlg32)
 endif()
 
 target_include_directories(MyRenderer PRIVATE
@@ -153,4 +161,44 @@ add_custom_command(TARGET MyRenderer POST_BUILD
             ${CMAKE_CURRENT_SOURCE_DIR}/assets
             $<TARGET_FILE_DIR:MyRenderer>/assets
     COMMENT "Copying shaders and model assets"
+)
+
+if(BUILD_TESTING)
+    add_executable(MyRendererAssetTests
+        tests/AssetImportTests.cpp
+        src/io/AssimpImporter.cpp
+        src/io/ObjLoader.cpp
+    )
+    target_include_directories(MyRendererAssetTests PRIVATE src)
+    target_compile_definitions(MyRendererAssetTests PRIVATE
+        MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    target_link_libraries(MyRendererAssetTests PRIVATE
+        glm::glm
+        assimp::assimp
+        tinyobjloader
+    )
+    if(MSVC)
+        target_compile_options(MyRendererAssetTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererAssetTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME asset-import COMMAND MyRendererAssetTests)
+endif()
+
+add_custom_target(gpu-smoke
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/material_regression.obj
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=1
+            MYRENDERER_RECOVERY_TEST=${CMAKE_CURRENT_SOURCE_DIR}/assets/models/does_not_exist.obj
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/cube.obj
+    DEPENDS MyRenderer
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Running MyRenderer with a real OpenGL context"
 )

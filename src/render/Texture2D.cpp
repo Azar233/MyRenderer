@@ -246,6 +246,7 @@ std::size_t Texture2D::estimatedBytes() const {
 
 TextureCache::TextureCache()
     : whiteTexture_(Texture2D::solidColor(255, 255, 255, 255, true)),
+      linearWhiteTexture_(Texture2D::solidColor(255, 255, 255, 255, false)),
       missingTexture_(Texture2D::missingTexture(true)),
       flatNormalTexture_(Texture2D::solidColor(128, 128, 255, 255, false)) {
 }

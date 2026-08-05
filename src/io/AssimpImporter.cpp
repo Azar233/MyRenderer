@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <assimp/Importer.hpp>
@@ -19,6 +20,22 @@
 #include <glm/geometric.hpp>
 
 namespace {
+
+void addWarning(
+    std::string& warnings,
+    std::vector<ModelDiagnostic>& diagnostics,
+    ModelDiagnosticScope scope,
+    std::string context,
+    std::string message
+) {
+    warnings += message + "\n";
+    diagnostics.push_back(ModelDiagnostic{
+        scope,
+        ModelDiagnosticSeverity::Warning,
+        std::move(context),
+        std::move(message)
+    });
+}
 
 std::string lowercase(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
@@ -106,6 +123,8 @@ std::int32_t appendTextureReference(
     const aiString& reference,
     const std::filesystem::path& sourceDirectory,
     std::string& warnings,
+    std::vector<ModelDiagnostic>& diagnostics,
+    const std::string& materialName,
     bool srgb
 ) {
     const std::string value = reference.C_Str();
@@ -145,7 +164,13 @@ std::int32_t appendTextureReference(
                          + (srgb ? "::srgb" : "::linear");
         texture.encodedData = decodeDataUri(value);
         if (texture.encodedData.empty()) {
-            warnings += "Could not decode texture Data URI in " + model.sourcePath.string() + "\n";
+            addWarning(
+                warnings,
+                diagnostics,
+                ModelDiagnosticScope::Texture,
+                materialName,
+                "Could not decode texture Data URI in " + model.sourcePath.string()
+            );
         }
     } else {
         texture.sourcePath = std::filesystem::absolute(
@@ -175,6 +200,8 @@ std::int32_t materialTexture(
     std::unordered_map<std::string, std::int32_t>& textureIndices,
     const std::filesystem::path& sourceDirectory,
     std::string& warnings,
+    std::vector<ModelDiagnostic>& diagnostics,
+    const std::string& materialName,
     bool srgb
 ) {
     aiString reference;
@@ -187,6 +214,8 @@ std::int32_t materialTexture(
             reference,
             sourceDirectory,
             warnings,
+            diagnostics,
+            materialName,
             srgb
         );
     }
@@ -197,6 +226,7 @@ struct ImportContext {
     const aiScene& scene;
     ModelData& model;
     std::string& warnings;
+    std::vector<ModelDiagnostic>& diagnostics;
 
     std::optional<std::uint32_t> appendMesh(
         const aiMesh& source,
@@ -204,7 +234,13 @@ struct ImportContext {
         const std::string& nodeName
     ) {
         if (!source.HasPositions()) {
-            warnings += "Skipped mesh without positions: " + nodeName + "\n";
+            addWarning(
+                warnings,
+                diagnostics,
+                ModelDiagnosticScope::Mesh,
+                source.mName.length > 0U ? source.mName.C_Str() : nodeName,
+                "Skipped mesh without positions in node: " + nodeName
+            );
             return std::nullopt;
         }
 
@@ -264,7 +300,13 @@ struct ImportContext {
             mesh.indices.push_back(face.mIndices[mirrored ? 1U : 2U]);
         }
         if (mesh.indices.empty()) {
-            warnings += "Skipped mesh without triangle faces: " + mesh.name + "\n";
+            addWarning(
+                warnings,
+                diagnostics,
+                ModelDiagnosticScope::Mesh,
+                mesh.name,
+                "Skipped mesh without triangle faces."
+            );
             return std::nullopt;
         }
 
@@ -290,7 +332,13 @@ struct ImportContext {
         for (unsigned int meshIndex = 0; meshIndex < source.mNumMeshes; ++meshIndex) {
             const unsigned int sceneMeshIndex = source.mMeshes[meshIndex];
             if (sceneMeshIndex >= scene.mNumMeshes) {
-                warnings += "Skipped invalid mesh reference in node: " + node.name + "\n";
+                addWarning(
+                    warnings,
+                    diagnostics,
+                    ModelDiagnosticScope::Node,
+                    node.name,
+                    "Skipped invalid mesh reference #" + std::to_string(sceneMeshIndex) + "."
+                );
                 continue;
             }
             const auto modelMeshIndex = appendMesh(*scene.mMeshes[sceneMeshIndex], globalTransform, node.name);
@@ -352,6 +400,8 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
             || aiGetMaterialColor(&source, AI_MATKEY_COLOR_DIFFUSE, &baseColor) == AI_SUCCESS) {
             material.baseColorFactor = {baseColor.r, baseColor.g, baseColor.b, baseColor.a};
         }
+        source.Get(AI_MATKEY_METALLIC_FACTOR, material.metallicFactor);
+        source.Get(AI_MATKEY_ROUGHNESS_FACTOR, material.roughnessFactor);
         material.baseColorTextureIndex = materialTexture(
             source,
             aiTextureType_BASE_COLOR,
@@ -361,6 +411,8 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
             textureIndices,
             sourceDirectory,
             result.warnings,
+            result.diagnostics,
+            material.name,
             true
         );
         material.normalTextureIndex = materialTexture(
@@ -372,12 +424,27 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
             textureIndices,
             sourceDirectory,
             result.warnings,
+            result.diagnostics,
+            material.name,
+            false
+        );
+        material.metallicRoughnessTextureIndex = materialTexture(
+            source,
+            aiTextureType_GLTF_METALLIC_ROUGHNESS,
+            aiTextureType_METALNESS,
+            *scene,
+            result.model,
+            textureIndices,
+            sourceDirectory,
+            result.warnings,
+            result.diagnostics,
+            material.name,
             false
         );
         result.model.materials.push_back(std::move(material));
     }
 
-    ImportContext context{*scene, result.model, result.warnings};
+    ImportContext context{*scene, result.model, result.warnings, result.diagnostics};
     result.model.rootNode = context.appendNode(*scene->mRootNode, aiMatrix4x4{});
     if (result.model.meshes.empty()) {
         throw std::runtime_error("Imported model does not contain triangle meshes");

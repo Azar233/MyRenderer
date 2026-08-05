@@ -1,0 +1,39 @@
+{
+  "asset": {"version": "2.0", "generator": "MyRenderer Stage 7 fixture"},
+  "scene": 0,
+  "scenes": [{"nodes": [0, 1, 2, 3, 4]}],
+  "nodes": [
+    {"name": "DielectricRough", "mesh": 0, "translation": [-3.2, 0, 0]},
+    {"name": "DielectricSmooth", "mesh": 1, "translation": [-1.6, 0, 0]},
+    {"name": "Balanced", "mesh": 2, "translation": [0, 0, 0]},
+    {"name": "MetalRough", "mesh": 3, "translation": [1.6, 0, 0]},
+    {"name": "MetalSmooth", "mesh": 4, "translation": [3.2, 0, 0]}
+  ],
+  "meshes": [
+    {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 0}]},
+    {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 1}]},
+    {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 2}]},
+    {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 3}]},
+    {"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 4}]}
+  ],
+  "materials": [
+    {"name": "Dielectric Rough", "pbrMetallicRoughness": {"baseColorFactor": [0.8, 0.18, 0.08, 1], "metallicFactor": 0.0, "roughnessFactor": 0.9, "metallicRoughnessTexture": {"index": 0}}},
+    {"name": "Dielectric Smooth", "pbrMetallicRoughness": {"baseColorFactor": [0.10, 0.36, 0.8, 1], "metallicFactor": 0.0, "roughnessFactor": 0.12, "metallicRoughnessTexture": {"index": 0}}},
+    {"name": "Balanced", "pbrMetallicRoughness": {"baseColorFactor": [0.16, 0.65, 0.28, 1], "metallicFactor": 0.5, "roughnessFactor": 0.45, "metallicRoughnessTexture": {"index": 0}}},
+    {"name": "Metal Rough", "pbrMetallicRoughness": {"baseColorFactor": [0.85, 0.55, 0.16, 1], "metallicFactor": 1.0, "roughnessFactor": 0.72, "metallicRoughnessTexture": {"index": 0}}},
+    {"name": "Metal Smooth", "pbrMetallicRoughness": {"baseColorFactor": [0.92, 0.92, 0.95, 1], "metallicFactor": 1.0, "roughnessFactor": 0.08, "metallicRoughnessTexture": {"index": 0}}}
+  ],
+  "textures": [{"source": 0}],
+  "images": [{"name": "White metallic-roughness data", "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2dWQAAAAASUVORK5CYII="}],
+  "buffers": [{"byteLength": 192, "uri": "data:application/octet-stream;base64,AAAAAAAAgD8AAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAvwAAAAAAAAAAAAAAAAAAAAAAAIC/AAAAAAAAgL8AAAAAAAAAAAAAgD8AAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAvwAAAAAAAAAAAAAAAAAAAAAAAIC/AAAAAAAAgL8AAAAAAAABAAIAAAACAAMAAAADAAQAAAAEAAEABQACAAEABQADAAIABQAEAAMABQABAAQA"}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 72, "target": 34962},
+    {"buffer": 0, "byteOffset": 72, "byteLength": 72, "target": 34962},
+    {"buffer": 0, "byteOffset": 144, "byteLength": 48, "target": 34963}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 6, "type": "VEC3", "min": [-1, -1, -1], "max": [1, 1, 1]},
+    {"bufferView": 1, "componentType": 5126, "count": 6, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5123, "count": 24, "type": "SCALAR"}
+  ]
+}
