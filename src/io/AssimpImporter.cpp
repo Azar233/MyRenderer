@@ -3,9 +3,13 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
@@ -36,33 +40,157 @@ glm::mat4 toMat4(const aiMatrix4x4& value) {
     };
 }
 
-std::filesystem::path resolveTextureReference(
+std::vector<std::uint8_t> decodeBase64(std::string_view input) {
+    static constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<std::uint8_t> output;
+    output.reserve((input.size() * 3U) / 4U);
+    unsigned int accumulator = 0U;
+    int bits = 0;
+    for (const char character : input) {
+        if (character == '=') {
+            break;
+        }
+        const std::size_t value = alphabet.find(character);
+        if (value == std::string_view::npos) {
+            continue;
+        }
+        accumulator = (accumulator << 6U) | static_cast<unsigned int>(value);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            output.push_back(static_cast<std::uint8_t>((accumulator >> bits) & 0xffU));
+        }
+    }
+    return output;
+}
+
+std::vector<std::uint8_t> decodeDataUri(const std::string& uri) {
+    const std::size_t comma = uri.find(',');
+    if (comma == std::string::npos) {
+        return {};
+    }
+    const std::string_view metadata(uri.data(), comma);
+    const std::string_view payload(uri.data() + comma + 1U, uri.size() - comma - 1U);
+    if (metadata.find(";base64") != std::string_view::npos) {
+        return decodeBase64(payload);
+    }
+
+    auto hexValue = [](char value) -> int {
+        if (value >= '0' && value <= '9') return value - '0';
+        if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+        if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+        return -1;
+    };
+    std::vector<std::uint8_t> output;
+    output.reserve(payload.size());
+    for (std::size_t i = 0; i < payload.size(); ++i) {
+        if (payload[i] == '%' && i + 2U < payload.size()) {
+            const int high = hexValue(payload[i + 1U]);
+            const int low = hexValue(payload[i + 2U]);
+            if (high >= 0 && low >= 0) {
+                output.push_back(static_cast<std::uint8_t>((high << 4) | low));
+                i += 2U;
+                continue;
+            }
+        }
+        output.push_back(static_cast<std::uint8_t>(payload[i]));
+    }
+    return output;
+}
+
+std::int32_t appendTextureReference(
+    const aiScene& scene,
+    ModelData& model,
+    std::unordered_map<std::string, std::int32_t>& textureIndices,
+    const aiString& reference,
     const std::filesystem::path& sourceDirectory,
-    const aiString& reference
+    std::string& warnings,
+    bool srgb
 ) {
     const std::string value = reference.C_Str();
     if (value.empty()) {
-        return {};
+        return -1;
     }
-    if (value.front() == '*') {
-        // Assimp uses *N for a texture embedded in the source asset.
-        return std::filesystem::path(value);
+
+    TextureData texture;
+    const auto embeddedResult = scene.GetEmbeddedTextureAndIndex(value.c_str());
+    if (embeddedResult.first != nullptr) {
+        const aiTexture& embedded = *embeddedResult.first;
+        texture.name = embedded.mFilename.length > 0U ? embedded.mFilename.C_Str() : value;
+        texture.cacheKey = model.sourcePath.generic_string() + "::embedded::"
+                         + std::to_string(embeddedResult.second)
+                         + (srgb ? "::srgb" : "::linear");
+        if (embedded.mHeight == 0U) {
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(embedded.pcData);
+            texture.encodedData.assign(bytes, bytes + embedded.mWidth);
+        } else {
+            texture.width = embedded.mWidth;
+            texture.height = embedded.mHeight;
+            texture.rgbaPixels.resize(
+                static_cast<std::size_t>(embedded.mWidth) * embedded.mHeight * 4U
+            );
+            for (std::size_t i = 0; i < static_cast<std::size_t>(embedded.mWidth) * embedded.mHeight; ++i) {
+                const aiTexel& pixel = embedded.pcData[i];
+                texture.rgbaPixels[i * 4U] = pixel.r;
+                texture.rgbaPixels[i * 4U + 1U] = pixel.g;
+                texture.rgbaPixels[i * 4U + 2U] = pixel.b;
+                texture.rgbaPixels[i * 4U + 3U] = pixel.a;
+            }
+        }
+    } else if (value.rfind("data:", 0U) == 0U) {
+        texture.name = "Data URI image";
+        texture.cacheKey = model.sourcePath.generic_string() + "::data-uri::"
+                         + std::to_string(std::hash<std::string>{}(value))
+                         + (srgb ? "::srgb" : "::linear");
+        texture.encodedData = decodeDataUri(value);
+        if (texture.encodedData.empty()) {
+            warnings += "Could not decode texture Data URI in " + model.sourcePath.string() + "\n";
+        }
+    } else {
+        texture.sourcePath = std::filesystem::absolute(
+            sourceDirectory / std::filesystem::path(value)
+        ).lexically_normal();
+        texture.name = texture.sourcePath.filename().string();
+        texture.cacheKey = texture.sourcePath.generic_string() + (srgb ? "::srgb" : "::linear");
     }
-    return (sourceDirectory / std::filesystem::path(value)).lexically_normal();
+    texture.srgb = srgb;
+
+    const auto found = textureIndices.find(texture.cacheKey);
+    if (found != textureIndices.end()) {
+        return found->second;
+    }
+    const auto index = static_cast<std::int32_t>(model.textures.size());
+    textureIndices.emplace(texture.cacheKey, index);
+    model.textures.push_back(std::move(texture));
+    return index;
 }
 
-std::filesystem::path materialTexture(
+std::int32_t materialTexture(
     const aiMaterial& material,
     aiTextureType preferredType,
     aiTextureType fallbackType,
-    const std::filesystem::path& sourceDirectory
+    const aiScene& scene,
+    ModelData& model,
+    std::unordered_map<std::string, std::int32_t>& textureIndices,
+    const std::filesystem::path& sourceDirectory,
+    std::string& warnings,
+    bool srgb
 ) {
     aiString reference;
     if (material.GetTexture(preferredType, 0, &reference) == AI_SUCCESS
         || material.GetTexture(fallbackType, 0, &reference) == AI_SUCCESS) {
-        return resolveTextureReference(sourceDirectory, reference);
+        return appendTextureReference(
+            scene,
+            model,
+            textureIndices,
+            reference,
+            sourceDirectory,
+            warnings,
+            srgb
+        );
     }
-    return {};
+    return -1;
 }
 
 struct ImportContext {
@@ -209,6 +337,7 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
     result.model.name = path.stem().string();
     result.model.sourcePath = std::filesystem::absolute(path).lexically_normal();
     const std::filesystem::path sourceDirectory = result.model.sourcePath.parent_path();
+    std::unordered_map<std::string, std::int32_t> textureIndices;
 
     result.model.materials.reserve(scene->mNumMaterials);
     for (unsigned int materialIndex = 0; materialIndex < scene->mNumMaterials; ++materialIndex) {
@@ -223,17 +352,27 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
             || aiGetMaterialColor(&source, AI_MATKEY_COLOR_DIFFUSE, &baseColor) == AI_SUCCESS) {
             material.baseColorFactor = {baseColor.r, baseColor.g, baseColor.b, baseColor.a};
         }
-        material.baseColorTexture = materialTexture(
+        material.baseColorTextureIndex = materialTexture(
             source,
             aiTextureType_BASE_COLOR,
             aiTextureType_DIFFUSE,
-            sourceDirectory
+            *scene,
+            result.model,
+            textureIndices,
+            sourceDirectory,
+            result.warnings,
+            true
         );
-        material.normalTexture = materialTexture(
+        material.normalTextureIndex = materialTexture(
             source,
             aiTextureType_NORMALS,
             aiTextureType_HEIGHT,
-            sourceDirectory
+            *scene,
+            result.model,
+            textureIndices,
+            sourceDirectory,
+            result.warnings,
+            false
         );
         result.model.materials.push_back(std::move(material));
     }

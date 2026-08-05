@@ -54,6 +54,9 @@ int Application::run(const std::filesystem::path& initialModel) {
     initializeRenderer();
     initializeImporters();
     discoverModels();
+    if (const char* msaa = std::getenv("MYRENDERER_MSAA")) {
+        rendererSettings_.msaaSamples = std::atoi(msaa) <= 1 ? 1 : 4;
+    }
 
     std::filesystem::path modelToLoad = initialModel;
     if (modelToLoad.empty()) {
@@ -66,6 +69,10 @@ int Application::run(const std::filesystem::path& initialModel) {
         loadModel(modelToLoad);
     } else {
         statusMessage_ = "No supported model was found in assets/models";
+    }
+
+    if (const char* screenshotPath = std::getenv("MYRENDERER_SCREENSHOT")) {
+        pendingScreenshotPath_ = std::filesystem::absolute(screenshotPath).lexically_normal();
     }
 
     int smokeTestFrames = std::getenv("MYRENDERER_SMOKE_TEST") == nullptr ? -1 : 5;
@@ -255,6 +262,9 @@ void Application::drawMainMenu() {
         if (ImGui::MenuItem("Reload current", "Ctrl+R", false, !currentModelPath_.empty())) {
             loadModel(currentModelPath_);
         }
+        if (ImGui::MenuItem("Save viewport PNG", nullptr, false, model_ != nullptr)) {
+            pendingScreenshotPath_ = nextScreenshotPath();
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Exit", "Esc")) {
             glfwSetWindowShouldClose(window_, GLFW_TRUE);
@@ -370,11 +380,27 @@ void Application::drawInspectorPanel() {
             }
 
             ImGui::SeparatorText("Material");
-            ImGui::ColorEdit3("Base color", &rendererSettings_.baseColor.x);
+            ImGui::ColorEdit3("Base color tint", &rendererSettings_.baseColor.x);
             ImGui::SliderFloat("Ambient", &rendererSettings_.ambientStrength, 0.0f, 1.0f);
             ImGui::SliderFloat("Diffuse", &rendererSettings_.diffuseStrength, 0.0f, 2.0f);
             ImGui::SliderFloat("Specular", &rendererSettings_.specularStrength, 0.0f, 2.0f);
             ImGui::SliderFloat("Shininess", &rendererSettings_.shininess, 1.0f, 256.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+
+            ImGui::SeparatorText("Asset statistics");
+            if (model_) {
+                ImGui::Text("Meshes: %zu", loadedMeshCount_);
+                ImGui::Text("Submeshes / draw calls: %zu", loadedSubmeshCount_);
+                ImGui::Text("Materials: %zu", loadedMaterialCount_);
+                ImGui::Text("Textures: %zu", loadedTextureCount_);
+                ImGui::Text("Decoded textures: %zu", loadedDecodedTextureCount_);
+                ImGui::Text("Fallback textures: %zu", loadedFallbackTextureCount_);
+                ImGui::Text(
+                    "Estimated texture memory: %.2f MiB",
+                    static_cast<double>(loadedTextureMemoryBytes_) / (1024.0 * 1024.0)
+                );
+            } else {
+                ImGui::TextDisabled("No model loaded");
+            }
             ImGui::EndTabItem();
         }
 
@@ -382,7 +408,14 @@ void Application::drawInspectorPanel() {
             ImGui::SeparatorText("Rasterization");
             ImGui::Checkbox("Wireframe", &rendererSettings_.wireframe);
             ImGui::Checkbox("Back-face culling", &rendererSettings_.cullBackFaces);
+            ImGui::Checkbox("Normal mapping", &rendererSettings_.normalMapping);
             ImGui::ColorEdit3("Background", &rendererSettings_.backgroundColor.x);
+            const char* msaaOptions[] = {"1x", "4x"};
+            int msaaSelection = rendererSettings_.msaaSamples > 1 ? 1 : 0;
+            if (ImGui::Combo("MSAA", &msaaSelection, msaaOptions, 2)) {
+                rendererSettings_.msaaSamples = msaaSelection == 0 ? 1 : 4;
+            }
+            ImGui::TextDisabled("Active samples: %dx", renderer_->activeMsaaSamples());
 
             ImGui::SeparatorText("Directional light");
             ImGui::DragFloat3("Direction", &rendererSettings_.lightDirection.x, 0.01f, -1.0f, 1.0f, "%.2f");
@@ -428,6 +461,10 @@ void Application::drawViewportPanel() {
         camera_.reset();
     }
     ImGui::SameLine();
+    if (ImGui::SmallButton("Save PNG")) {
+        pendingScreenshotPath_ = nextScreenshotPath();
+    }
+    ImGui::SameLine();
     ImGui::TextDisabled("RMB orbit | MMB pan | Wheel zoom");
     ImGui::SetCursorPosY(55.0f);
 
@@ -445,6 +482,20 @@ void Application::drawViewportPanel() {
     modelMatrix = glm::scale(modelMatrix, glm::vec3(modelScale_));
     modelMatrix *= normalization;
     renderer_->render(model_.get(), camera_, modelMatrix, rendererSettings_, width, height);
+
+    if (!pendingScreenshotPath_.empty()) {
+        std::string screenshotError;
+        if (renderer_->saveScreenshot(pendingScreenshotPath_, screenshotError)) {
+            statusMessage_ = "Saved screenshot (MSAA "
+                           + std::to_string(renderer_->activeMsaaSamples())
+                           + "x): " + pendingScreenshotPath_.string();
+            std::cout << statusMessage_ << '\n';
+        } else {
+            statusMessage_ = "Screenshot failed: " + screenshotError;
+            std::cerr << statusMessage_ << '\n';
+        }
+        pendingScreenshotPath_.clear();
+    }
 
     ImGui::Image(
         static_cast<ImTextureID>(static_cast<std::uintptr_t>(renderer_->colorTexture())),
@@ -519,7 +570,11 @@ bool Application::loadModel(const std::filesystem::path& path) {
         }
 
         ModelImportResult loaded = importer->load(resolved);
-        auto newModel = std::make_unique<GpuModel>(loaded.model);
+        auto newModel = std::make_unique<GpuModel>(
+            loaded.model,
+            renderer_->textureCache(),
+            loaded.warnings
+        );
         const glm::vec3 extent = loaded.model.boundsMax - loaded.model.boundsMin;
         const float maximumExtent = std::max({extent.x, extent.y, extent.z});
         if (!std::isfinite(maximumExtent) || maximumExtent <= 1e-8f) {
@@ -532,6 +587,11 @@ bool Application::loadModel(const std::filesystem::path& path) {
         loadedSubmeshCount_ = model_->submeshCount();
         loadedVertexCount_ = model_->vertexCount();
         loadedTriangleCount_ = model_->triangleCount();
+        loadedMaterialCount_ = model_->materialCount();
+        loadedTextureCount_ = model_->textureCount();
+        loadedDecodedTextureCount_ = model_->loadedTextureCount();
+        loadedFallbackTextureCount_ = model_->fallbackTextureCount();
+        loadedTextureMemoryBytes_ = model_->textureMemoryBytes();
         modelCenter_ = 0.5f * (loaded.model.boundsMin + loaded.model.boundsMax);
         modelNormalizationScale_ = 1.4f / maximumExtent;
         modelWarnings_ = loaded.warnings;
@@ -544,8 +604,15 @@ bool Application::loadModel(const std::filesystem::path& path) {
                        + std::to_string(loadedMeshCount_) + " mesh, "
                        + std::to_string(loadedSubmeshCount_) + " submesh, "
                        + std::to_string(loadedVertexCount_) + " vertices, "
-                       + std::to_string(loadedTriangleCount_) + " triangles)";
+                       + std::to_string(loadedTriangleCount_) + " triangles, "
+                       + std::to_string(loadedMaterialCount_) + " materials, "
+                       + std::to_string(loadedTextureCount_) + " textures, "
+                       + std::to_string(loadedDecodedTextureCount_) + " decoded, "
+                       + std::to_string(loadedFallbackTextureCount_) + " fallback)";
         std::cout << statusMessage_ << '\n';
+        if (!modelWarnings_.empty()) {
+            std::cout << "Model warnings:\n" << modelWarnings_;
+        }
         return true;
     } catch (const std::exception& error) {
         statusMessage_ = std::string("Load failed: ") + error.what();
@@ -579,6 +646,19 @@ std::filesystem::path Application::resolvePath(const std::filesystem::path& path
         return std::filesystem::absolute(byFilename).lexically_normal();
     }
     return std::filesystem::absolute(path).lexically_normal();
+}
+
+std::filesystem::path Application::nextScreenshotPath() const {
+    const std::filesystem::path directory = sourceRoot_ / "screenshots";
+    const std::string stem = currentModelPath_.empty() ? "viewport" : currentModelPath_.stem().string();
+    for (std::size_t sequence = 1; sequence < 10000U; ++sequence) {
+        const std::filesystem::path candidate = directory
+            / (stem + "_" + std::to_string(sequence) + ".png");
+        if (!std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+    return directory / (stem + "_latest.png");
 }
 
 void Application::resetObjectTransform() {

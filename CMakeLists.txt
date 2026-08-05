@@ -105,6 +105,7 @@ add_executable(MyRenderer
     src/render/RenderTarget.cpp
     src/render/Renderer.cpp
     src/render/Shader.cpp
+    src/render/Texture2D.cpp
 )
 
 if(WIN32)
@@ -118,7 +119,12 @@ if(WIN32)
     target_sources(MyRenderer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/MyRenderer.rc")
 endif()
 
-target_include_directories(MyRenderer PRIVATE src)
+target_include_directories(MyRenderer PRIVATE
+    src
+    ${assimp_SOURCE_DIR}/contrib/stb
+    ${assimp_SOURCE_DIR}/contrib/zlib
+    ${assimp_BINARY_DIR}/contrib/zlib
+)
 target_compile_definitions(MyRenderer PRIVATE
     GLFW_INCLUDE_NONE
     MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
@@ -130,6 +136,7 @@ target_link_libraries(MyRenderer PRIVATE
     imgui_backend
     assimp::assimp
     tinyobjloader
+    zlibstatic
 )
 
 if(MSVC)

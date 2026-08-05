@@ -16,14 +16,30 @@ struct Vertex {
     glm::vec3 normal{0.0f, 1.0f, 0.0f};
     glm::vec2 texCoord0{0.0f};
     // xyz stores the tangent; w stores the bitangent handedness.
-    glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
+    // w is zero when no valid tangent basis is available, otherwise +/-1 handedness.
+    glm::vec4 tangent{1.0f, 0.0f, 0.0f, 0.0f};
+};
+
+// A format-independent texture source. Importers either provide an external
+// path, compressed image bytes, or uncompressed RGBA8 pixels. The render layer
+// never needs to know whether the original asset was OBJ, DAE, glTF, or GLB.
+struct TextureData {
+    std::string name;
+    std::string cacheKey;
+    std::filesystem::path sourcePath;
+    std::vector<std::uint8_t> encodedData;
+    std::vector<std::uint8_t> rgbaPixels;
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    // Color textures use sRGB sampling; data textures such as normal maps stay linear.
+    bool srgb{false};
 };
 
 struct MaterialData {
     std::string name{"Default"};
     glm::vec4 baseColorFactor{1.0f};
-    std::filesystem::path baseColorTexture;
-    std::filesystem::path normalTexture;
+    std::int32_t baseColorTextureIndex{-1};
+    std::int32_t normalTextureIndex{-1};
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
 };
@@ -56,6 +72,7 @@ struct ModelData {
     std::filesystem::path sourcePath;
     std::vector<MeshData> meshes;
     std::vector<MaterialData> materials;
+    std::vector<TextureData> textures;
     ModelNodeData rootNode;
     glm::vec3 boundsMin{std::numeric_limits<float>::max()};
     glm::vec3 boundsMax{std::numeric_limits<float>::lowest()};

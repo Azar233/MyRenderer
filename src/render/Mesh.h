@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <vector>
 
 #include "asset/ModelData.h"
@@ -13,7 +14,9 @@ public:
     Mesh(const Mesh&) = delete;
     Mesh& operator=(const Mesh&) = delete;
 
-    void draw() const;
+    using MaterialBinder = std::function<void(std::int32_t)>;
+
+    void draw(const MaterialBinder& bindMaterial) const;
     std::size_t vertexCount() const { return vertexCount_; }
     std::size_t triangleCount() const { return indexCount_ / 3; }
     std::size_t submeshCount() const { return submeshes_.size(); }

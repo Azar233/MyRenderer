@@ -99,6 +99,64 @@ std::filesystem::path resolveTexturePath(
         : (baseDirectory / std::filesystem::path(textureName)).lexically_normal();
 }
 
+void generateTangents(MeshData& mesh, std::string& warnings) {
+    std::vector<glm::vec3> tangentAccumulation(mesh.vertices.size(), glm::vec3(0.0f));
+    std::vector<glm::vec3> bitangentAccumulation(mesh.vertices.size(), glm::vec3(0.0f));
+    std::size_t degenerateUvTriangles = 0;
+
+    for (std::size_t i = 0; i + 2U < mesh.indices.size(); i += 3U) {
+        const std::uint32_t index0 = mesh.indices[i];
+        const std::uint32_t index1 = mesh.indices[i + 1U];
+        const std::uint32_t index2 = mesh.indices[i + 2U];
+        const Vertex& v0 = mesh.vertices[index0];
+        const Vertex& v1 = mesh.vertices[index1];
+        const Vertex& v2 = mesh.vertices[index2];
+        const glm::vec3 edge1 = v1.position - v0.position;
+        const glm::vec3 edge2 = v2.position - v0.position;
+        const glm::vec2 uv1 = v1.texCoord0 - v0.texCoord0;
+        const glm::vec2 uv2 = v2.texCoord0 - v0.texCoord0;
+        const float determinant = uv1.x * uv2.y - uv1.y * uv2.x;
+        if (std::abs(determinant) <= 1e-10f) {
+            ++degenerateUvTriangles;
+            continue;
+        }
+        const float reciprocal = 1.0f / determinant;
+        const glm::vec3 tangent = (edge1 * uv2.y - edge2 * uv1.y) * reciprocal;
+        const glm::vec3 bitangent = (edge2 * uv1.x - edge1 * uv2.x) * reciprocal;
+        for (const std::uint32_t index : {index0, index1, index2}) {
+            tangentAccumulation[index] += tangent;
+            bitangentAccumulation[index] += bitangent;
+        }
+    }
+
+    std::size_t invalidVertices = 0;
+    for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
+        Vertex& vertex = mesh.vertices[i];
+        const glm::vec3 normal = glm::normalize(vertex.normal);
+        glm::vec3 tangent = tangentAccumulation[i] - normal * glm::dot(normal, tangentAccumulation[i]);
+        if (glm::dot(tangent, tangent) <= 1e-12f) {
+            const glm::vec3 axis = std::abs(normal.y) < 0.999f
+                ? glm::vec3(0.0f, 1.0f, 0.0f)
+                : glm::vec3(1.0f, 0.0f, 0.0f);
+            tangent = glm::normalize(glm::cross(axis, normal));
+            vertex.tangent = glm::vec4(tangent, 0.0f);
+            ++invalidVertices;
+            continue;
+        }
+        tangent = glm::normalize(tangent);
+        const float handedness = glm::dot(glm::cross(normal, tangent), bitangentAccumulation[i]) < 0.0f
+            ? -1.0f
+            : 1.0f;
+        vertex.tangent = glm::vec4(tangent, handedness);
+    }
+
+    if (degenerateUvTriangles > 0U || invalidVertices > 0U) {
+        warnings += "Tangent generation skipped " + std::to_string(degenerateUvTriangles)
+                 + " triangle(s) with degenerate UVs; " + std::to_string(invalidVertices)
+                 + " vertex tangent(s) will use geometric normals.\n";
+    }
+}
+
 } // namespace
 
 bool ObjLoader::supports(const std::filesystem::path& path) const {
@@ -139,6 +197,30 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
     result.model.sourcePath = std::filesystem::absolute(path).lexically_normal();
     result.model.rootNode.name = result.model.name;
 
+    std::unordered_map<std::string, std::int32_t> textureIndices;
+    auto appendTexture = [&](const std::string& textureName, bool srgb) -> std::int32_t {
+        const std::filesystem::path texturePath = resolveTexturePath(baseDirectory, textureName);
+        if (texturePath.empty()) {
+            return -1;
+        }
+        const std::filesystem::path absolutePath = std::filesystem::absolute(texturePath).lexically_normal();
+        const std::string cacheKey = absolutePath.generic_string() + (srgb ? "::srgb" : "::linear");
+        const auto found = textureIndices.find(cacheKey);
+        if (found != textureIndices.end()) {
+            return found->second;
+        }
+
+        TextureData texture;
+        texture.name = absolutePath.filename().string();
+        texture.cacheKey = cacheKey;
+        texture.sourcePath = absolutePath;
+        texture.srgb = srgb;
+        const auto index = static_cast<std::int32_t>(result.model.textures.size());
+        result.model.textures.push_back(std::move(texture));
+        textureIndices.emplace(cacheKey, index);
+        return index;
+    };
+
     for (const auto& sourceMaterial : materials) {
         MaterialData material;
         material.name = sourceMaterial.name.empty() ? "Material" : sourceMaterial.name;
@@ -148,10 +230,10 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
             static_cast<float>(sourceMaterial.diffuse[2]),
             static_cast<float>(sourceMaterial.dissolve)
         );
-        material.baseColorTexture = resolveTexturePath(baseDirectory, sourceMaterial.diffuse_texname);
-        material.normalTexture = resolveTexturePath(
-            baseDirectory,
-            sourceMaterial.normal_texname.empty() ? sourceMaterial.bump_texname : sourceMaterial.normal_texname
+        material.baseColorTextureIndex = appendTexture(sourceMaterial.diffuse_texname, true);
+        material.normalTextureIndex = appendTexture(
+            sourceMaterial.normal_texname,
+            false
         );
         result.model.materials.push_back(std::move(material));
     }
@@ -160,6 +242,7 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
     output.name = result.model.name;
     std::unordered_map<VertexKey, std::uint32_t, VertexKeyHash> uniqueVertices;
     bool normalsComplete = true;
+    bool hasTextureCoordinates = false;
     const bool flatShading = requestsFlatShading(path);
     std::uint64_t cornerSequence = 0;
 
@@ -188,6 +271,7 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
         }
         if (index.texcoord_index >= 0) {
             vertex.texCoord0 = readVec2(attributes.texcoords, index.texcoord_index, "texture coordinate");
+            hasTextureCoordinates = true;
         }
 
         output.boundsMin = glm::min(output.boundsMin, vertex.position);
@@ -293,6 +377,10 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
             result.warnings += "Skipped " + std::to_string(degenerateTriangles)
                              + " degenerate triangle(s) while generating normals.\n";
         }
+    }
+
+    if (hasTextureCoordinates) {
+        generateTangents(output, result.warnings);
     }
 
     result.model.boundsMin = output.boundsMin;

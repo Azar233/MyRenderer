@@ -43,6 +43,7 @@ private:
     bool loadModel(const std::filesystem::path& path);
     const ModelImporter* findImporter(const std::filesystem::path& path) const;
     std::filesystem::path resolvePath(const std::filesystem::path& path) const;
+    std::filesystem::path nextScreenshotPath() const;
     void resetObjectTransform();
 
     GLFWwindow* window_{nullptr};
@@ -57,6 +58,7 @@ private:
 
     std::filesystem::path sourceRoot_;
     std::filesystem::path currentModelPath_;
+    std::filesystem::path pendingScreenshotPath_;
     std::vector<std::filesystem::path> availableModels_;
     std::array<char, 1024> modelPathBuffer_{};
     std::string statusMessage_{"Ready"};
@@ -71,6 +73,11 @@ private:
     std::size_t loadedSubmeshCount_{0};
     std::size_t loadedVertexCount_{0};
     std::size_t loadedTriangleCount_{0};
+    std::size_t loadedMaterialCount_{0};
+    std::size_t loadedTextureCount_{0};
+    std::size_t loadedDecodedTextureCount_{0};
+    std::size_t loadedFallbackTextureCount_{0};
+    std::size_t loadedTextureMemoryBytes_{0};
     std::size_t unsupportedModelCount_{0};
 
     bool showAbout_{false};

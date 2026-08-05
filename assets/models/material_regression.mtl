@@ -1,0 +1,19 @@
+newmtl ExternalUvTexture
+Ka 1.0 1.0 1.0
+Kd 1.0 1.0 1.0
+Ks 0.1 0.1 0.1
+Ns 32.0
+map_Kd textures/uv_quadrants.ppm
+norm textures/normal_test.ppm
+
+newmtl ConstantGreen
+Ka 0.1 0.3 0.1
+Kd 0.2 0.85 0.3
+Ks 0.1 0.1 0.1
+Ns 16.0
+
+newmtl MissingTexture
+Ka 1.0 1.0 1.0
+Kd 1.0 1.0 1.0
+Ks 0.0 0.0 0.0
+map_Kd textures/does_not_exist.png

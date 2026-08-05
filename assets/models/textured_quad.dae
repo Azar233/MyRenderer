@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+  <asset>
+    <contributor><authoring_tool>MyRenderer stage-4 regression asset</authoring_tool></contributor>
+    <unit name="meter" meter="1"/>
+    <up_axis>Y_UP</up_axis>
+  </asset>
+  <library_images>
+    <image id="uv-image" name="UvQuadrants">
+      <init_from>textures/uv_quadrants.ppm</init_from>
+    </image>
+  </library_images>
+  <library_effects>
+    <effect id="uv-effect">
+      <profile_COMMON>
+        <newparam sid="uv-surface">
+          <surface type="2D"><init_from>uv-image</init_from></surface>
+        </newparam>
+        <newparam sid="uv-sampler">
+          <sampler2D><source>uv-surface</source></sampler2D>
+        </newparam>
+        <technique sid="common">
+          <phong>
+            <diffuse><texture texture="uv-sampler" texcoord="UVSET0"/></diffuse>
+            <specular><color>0.1 0.1 0.1 1</color></specular>
+            <shininess><float>24</float></shininess>
+          </phong>
+        </technique>
+      </profile_COMMON>
+    </effect>
+  </library_effects>
+  <library_materials>
+    <material id="uv-material" name="ExternalUvMaterial">
+      <instance_effect url="#uv-effect"/>
+    </material>
+  </library_materials>
+  <library_geometries>
+    <geometry id="quad-geometry" name="TexturedQuad">
+      <mesh>
+        <source id="quad-positions">
+          <float_array id="quad-positions-array" count="12">-1 -1 0  1 -1 0  1 1 0  -1 1 0</float_array>
+          <technique_common><accessor source="#quad-positions-array" count="4" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common>
+        </source>
+        <source id="quad-normals">
+          <float_array id="quad-normals-array" count="3">0 0 1</float_array>
+          <technique_common><accessor source="#quad-normals-array" count="1" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common>
+        </source>
+        <source id="quad-uvs">
+          <float_array id="quad-uvs-array" count="8">0 0  1 0  1 1  0 1</float_array>
+          <technique_common><accessor source="#quad-uvs-array" count="4" stride="2"><param name="S" type="float"/><param name="T" type="float"/></accessor></technique_common>
+        </source>
+        <vertices id="quad-vertices"><input semantic="POSITION" source="#quad-positions"/></vertices>
+        <triangles material="UvMaterialSymbol" count="2">
+          <input semantic="VERTEX" source="#quad-vertices" offset="0"/>
+          <input semantic="NORMAL" source="#quad-normals" offset="1"/>
+          <input semantic="TEXCOORD" source="#quad-uvs" offset="2" set="0"/>
+          <p>0 0 0  1 0 1  2 0 2  0 0 0  2 0 2  3 0 3</p>
+        </triangles>
+      </mesh>
+    </geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene" name="Scene">
+      <node id="TexturedQuadNode" name="TexturedQuadNode">
+        <instance_geometry url="#quad-geometry">
+          <bind_material><technique_common>
+            <instance_material symbol="UvMaterialSymbol" target="#uv-material">
+              <bind_vertex_input semantic="UVSET0" input_semantic="TEXCOORD" input_set="0"/>
+            </instance_material>
+          </technique_common></bind_material>
+        </instance_geometry>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+  <scene><instance_visual_scene url="#Scene"/></scene>
+</COLLADA>

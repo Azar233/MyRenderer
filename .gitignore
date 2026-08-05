@@ -23,10 +23,13 @@
 
 # Runtime state
 /MyRenderer.ini
+/screenshots/
+/todolist.md
 *.log
 
 # Large local DAE samples (supported at runtime, excluded to keep Git lightweight)
 /assets/models/*.dae
+!/assets/models/textured_quad.dae
 
 # Operating-system metadata
 .DS_Store

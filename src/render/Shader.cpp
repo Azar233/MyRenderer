@@ -54,6 +54,10 @@ void Shader::setBool(const char* name, bool value) const {
     glUniform1i(uniformLocation(name), value ? 1 : 0);
 }
 
+void Shader::setInt(const char* name, int value) const {
+    glUniform1i(uniformLocation(name), value);
+}
+
 void Shader::setFloat(const char* name, float value) const {
     glUniform1f(uniformLocation(name), value);
 }

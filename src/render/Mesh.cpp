@@ -91,9 +91,10 @@ Mesh::~Mesh() {
     }
 }
 
-void Mesh::draw() const {
+void Mesh::draw(const MaterialBinder& bindMaterial) const {
     glBindVertexArray(vao_);
     for (const auto& submesh : submeshes_) {
+        bindMaterial(submesh.materialIndex);
         const auto byteOffset = static_cast<std::uintptr_t>(submesh.firstIndex) * sizeof(std::uint32_t);
         glDrawElements(
             GL_TRIANGLES,

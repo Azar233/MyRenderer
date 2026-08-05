@@ -4,6 +4,7 @@
 
 #include <glad/gl.h>
 
+#ifndef NDEBUG
 namespace {
 
 const char* debugSourceName(unsigned int source) {
@@ -58,6 +59,7 @@ void GLAPIENTRY openGlDebugCallback(
 }
 
 } // namespace
+#endif
 
 void initializeOpenGlDebugOutput() {
 #ifndef NDEBUG

@@ -9,12 +9,14 @@
 #include "render/GpuModel.h"
 #include "render/RenderTarget.h"
 #include "render/Shader.h"
+#include "render/Texture2D.h"
 
 Renderer::Renderer(
     const std::filesystem::path& vertexShaderPath,
     const std::filesystem::path& fragmentShaderPath
 ) : shader_(std::make_unique<Shader>(vertexShaderPath, fragmentShaderPath)),
-    renderTarget_(std::make_unique<RenderTarget>()) {
+    renderTarget_(std::make_unique<RenderTarget>()),
+    textureCache_(std::make_unique<TextureCache>()) {
 }
 
 Renderer::~Renderer() = default;
@@ -29,7 +31,7 @@ void Renderer::render(
 ) {
     width = std::max(width, 1);
     height = std::max(height, 1);
-    renderTarget_->resize(width, height);
+    renderTarget_->resize(width, height, settings.msaaSamples);
     renderTarget_->bind();
 
     glViewport(0, 0, width, height);
@@ -65,21 +67,33 @@ void Renderer::render(
             "uProjection",
             camera.projectionMatrix(static_cast<float>(width) / static_cast<float>(height))
         );
-        shader_->setVec3("uBaseColor", settings.baseColor);
         shader_->setVec3("uLightDirection", glm::normalize(lightDirection));
         shader_->setVec3("uCameraPosition", camera.position());
         shader_->setFloat("uAmbientStrength", settings.ambientStrength);
         shader_->setFloat("uDiffuseStrength", settings.diffuseStrength);
         shader_->setFloat("uSpecularStrength", settings.specularStrength);
         shader_->setFloat("uShininess", settings.shininess);
-        model->draw();
+        shader_->setBool("uNormalMappingEnabled", settings.normalMapping);
+        model->draw(*shader_, settings.baseColor);
     }
 
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glDisable(GL_CULL_FACE);
-    RenderTarget::unbind();
+    renderTarget_->resolveAndUnbind();
 }
 
 unsigned int Renderer::colorTexture() const {
     return renderTarget_->colorTexture();
+}
+
+TextureCache& Renderer::textureCache() {
+    return *textureCache_;
+}
+
+bool Renderer::saveScreenshot(const std::filesystem::path& path, std::string& error) const {
+    return renderTarget_->savePng(path, error);
+}
+
+int Renderer::activeMsaaSamples() const {
+    return renderTarget_->samples();
 }
