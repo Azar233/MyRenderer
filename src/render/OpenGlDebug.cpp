@@ -1,0 +1,82 @@
+#include "render/OpenGlDebug.h"
+
+#include <iostream>
+
+#include <glad/gl.h>
+
+namespace {
+
+const char* debugSourceName(unsigned int source) {
+    switch (source) {
+    case GL_DEBUG_SOURCE_API: return "API";
+    case GL_DEBUG_SOURCE_WINDOW_SYSTEM: return "window system";
+    case GL_DEBUG_SOURCE_SHADER_COMPILER: return "shader compiler";
+    case GL_DEBUG_SOURCE_THIRD_PARTY: return "third party";
+    case GL_DEBUG_SOURCE_APPLICATION: return "application";
+    case GL_DEBUG_SOURCE_OTHER: return "other";
+    default: return "unknown source";
+    }
+}
+
+const char* debugTypeName(unsigned int type) {
+    switch (type) {
+    case GL_DEBUG_TYPE_ERROR: return "error";
+    case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: return "deprecated behavior";
+    case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: return "undefined behavior";
+    case GL_DEBUG_TYPE_PORTABILITY: return "portability";
+    case GL_DEBUG_TYPE_PERFORMANCE: return "performance";
+    case GL_DEBUG_TYPE_MARKER: return "marker";
+    case GL_DEBUG_TYPE_PUSH_GROUP: return "push group";
+    case GL_DEBUG_TYPE_POP_GROUP: return "pop group";
+    case GL_DEBUG_TYPE_OTHER: return "other";
+    default: return "unknown type";
+    }
+}
+
+const char* debugSeverityName(unsigned int severity) {
+    switch (severity) {
+    case GL_DEBUG_SEVERITY_HIGH: return "high";
+    case GL_DEBUG_SEVERITY_MEDIUM: return "medium";
+    case GL_DEBUG_SEVERITY_LOW: return "low";
+    case GL_DEBUG_SEVERITY_NOTIFICATION: return "notification";
+    default: return "unknown severity";
+    }
+}
+
+void GLAPIENTRY openGlDebugCallback(
+    unsigned int source,
+    unsigned int type,
+    unsigned int id,
+    unsigned int severity,
+    int,
+    const char* message,
+    const void*
+) {
+    std::cerr << "OpenGL debug [" << debugSeverityName(severity) << "] "
+              << debugTypeName(type) << " from " << debugSourceName(source)
+              << " (id " << id << "): " << (message == nullptr ? "No message" : message) << '\n';
+}
+
+} // namespace
+
+void initializeOpenGlDebugOutput() {
+#ifndef NDEBUG
+    if (GLAD_GL_KHR_debug == 0 || glDebugMessageCallback == nullptr) {
+        std::cout << "OpenGL debug output: KHR_debug is unavailable\n";
+        return;
+    }
+
+    glEnable(GL_DEBUG_OUTPUT);
+    glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    glDebugMessageCallback(openGlDebugCallback, nullptr);
+    glDebugMessageControl(
+        GL_DONT_CARE,
+        GL_DONT_CARE,
+        GL_DEBUG_SEVERITY_NOTIFICATION,
+        0,
+        nullptr,
+        GL_FALSE
+    );
+    std::cout << "OpenGL debug output: enabled\n";
+#endif
+}

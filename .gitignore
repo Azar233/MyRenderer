@@ -25,7 +25,7 @@
 /MyRenderer.ini
 *.log
 
-# Unsupported MVP assets (keep the repository lightweight)
+# Large local DAE samples (supported at runtime, excluded to keep Git lightweight)
 /assets/models/*.dae
 
 # Operating-system metadata

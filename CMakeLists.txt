@@ -53,7 +53,22 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw glm glad tinyobjloader imgui)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
+set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_COLLADA_IMPORTER ON CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_GLTF_IMPORTER ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    assimp
+    GIT_REPOSITORY https://github.com/assimp/assimp.git
+    GIT_TAG v6.0.5
+    GIT_SHALLOW TRUE
+)
+
+FetchContent_MakeAvailable(glfw glm glad tinyobjloader imgui assimp)
 
 add_subdirectory(${glad_SOURCE_DIR}/cmake ${glad_BINARY_DIR}/cmake)
 glad_add_library(glad_gl_core_33 REPRODUCIBLE API gl:core=3.3)
@@ -79,13 +94,29 @@ target_link_libraries(imgui_backend PUBLIC glfw glad_gl_core_33)
 
 add_executable(MyRenderer
     src/main.cpp
+    src/app/AppIcon.cpp
     src/app/Application.cpp
+    src/io/AssimpImporter.cpp
     src/io/ObjLoader.cpp
     src/render/Camera.cpp
+    src/render/GpuModel.cpp
     src/render/Mesh.cpp
+    src/render/OpenGlDebug.cpp
     src/render/RenderTarget.cpp
+    src/render/Renderer.cpp
     src/render/Shader.cpp
 )
+
+if(WIN32)
+    enable_language(RC)
+    set(MYRENDERER_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/myrenderer.ico")
+    configure_file(
+        resources/MyRenderer.rc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/MyRenderer.rc"
+        @ONLY
+    )
+    target_sources(MyRenderer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/MyRenderer.rc")
+endif()
 
 target_include_directories(MyRenderer PRIVATE src)
 target_compile_definitions(MyRenderer PRIVATE
@@ -97,6 +128,7 @@ target_link_libraries(MyRenderer PRIVATE
     glfw
     glm::glm
     imgui_backend
+    assimp::assimp
     tinyobjloader
 )
 

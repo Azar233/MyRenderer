@@ -1,9 +1,8 @@
 #pragma once
 
-#include <filesystem>
 #include "io/ModelImporter.h"
 
-class ObjLoader final : public ModelImporter {
+class AssimpImporter final : public ModelImporter {
 public:
     bool supports(const std::filesystem::path& path) const override;
     ModelImportResult load(const std::filesystem::path& path) const override;

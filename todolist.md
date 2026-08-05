@@ -121,7 +121,7 @@ cmake --build build --config Debug
 - [x] 实现主循环：处理事件、清屏、交换缓冲。
 - [x] 使用实时 framebuffer/视口尺寸同步 `glViewport`。
 - [x] 实现 `Esc` 退出和 GLFW 资源释放。
-- [ ] Debug 构建注册 OpenGL debug callback（平台支持时启用）。
+- [x] Debug 构建注册 OpenGL debug callback（通过 `KHR_debug`，平台支持时启用）。
 
 验收：出现可缩放的稳定窗口，背景色正确且控制台无 OpenGL 错误。
 
@@ -129,9 +129,9 @@ cmake --build build --config Debug
 
 - [x] 创建最小顶点/片元 Shader 文件。
 - [x] 实现 `Shader` RAII 类：读取文件、编译、链接、错误日志、`use()`、uniform 设置。
-- [ ] 暂时创建一个硬编码三角形，建立 VAO/VBO，并用 `glDrawArrays` 绘制。
+- [x] 使用正式 OBJ Mesh 路径完成 GPU 管线冒烟测试，不再引入临时硬编码三角形。
 - [x] 验证 Shader 文件路径在从源码目录和构建目录运行时均可解析。
-- [ ] 冒烟测试通过后删除临时三角形代码，避免它混入正式 Mesh 路径。
+- [x] 正式代码中不存在临时三角形路径。
 
 验收：窗口中显示一个由 GPU 管线绘制的三角形；故意制造 Shader 语法错误时能看到可定位的日志。
 
@@ -167,7 +167,7 @@ cmake --build build --config Debug
 - [x] 法线使用 normal matrix（`transpose(inverse(mat3(model)))`）变换。
 - [x] 片元 Shader 实现环境光、方向光 Lambert 和 Blinn-Phong 高光。
 - [x] 设置清屏色、`GL_DEPTH_TEST` 和深度缓冲清理。
-- [ ] 首次验证时启用背面剔除；若 OBJ 绕序不一致，应允许临时关闭并记录原因。
+- [x] 已提供可切换的背面剔除；默认关闭以兼容绕序不一致的 OBJ。
 - [x] 使用 AABB 自动取景，让不同尺寸的模型初次加载即可见。
 
 验收：模型具有稳定的明暗层次，旋转模型矩阵后明暗和遮挡变化符合预期。
@@ -189,32 +189,84 @@ cmake --build build --config Debug
 .\build\Debug\MyRenderer.exe .\assets\models\cube.obj
 ```
 
-## 6. MVP 暂不实现
+## 6. Post-MVP 路线清单
 
-- PBR、阴影、纹理、法线贴图、天空盒、后处理和多 Pass 渲染。
-- MTL 材质的完整支持；首版使用统一材质颜色。
-- 场景图、多个模型实例、动画、骨骼、FBX/glTF 等格式。
-- ImGui 编辑器、文件选择器和复杂鼠标相机控制。
-- CPU 软光栅化器、光线追踪器、BVH、物理模拟与多线程渲染队列。
-- MSAA、离屏 Framebuffer、截图系统和性能分析 UI。
+状态约定：`[x]` 已完成，`[~]` 进行中，`[ ]` 待开始。每个阶段完成后在阶段下方追加完成日期、验证命令和结果摘要，不以“代码已写完”代替验收。
 
-## 7. MVP 之后的优先级
+### 阶段 1：MVP 基线收口
 
-1. Orbit Camera：鼠标旋转、缩放和观察模型。
-2. MTL 与漫反射纹理，并处理 UV 和纹理路径。
-3. 多 Mesh/多材质 Draw Call。
-4. 帧率、渲染模式和光照参数的小型 ImGui 面板。
-5. MSAA、Gamma 校正与 sRGB 工作流。
-6. glTF 加载、PBR、阴影映射和后处理。
+- [x] 让路线清单与现有 Orbit Camera、ImGui、离屏 Framebuffer、背面剔除等实现保持一致。
+- [x] 明确格式策略：OBJ 保持兼容；DAE 与 glTF 通过统一资产导入层接入，不继续扩展 OBJ 专用架构。
+- [x] Debug 构建请求 Debug Context，并在驱动支持时注册 `KHR_debug` 回调。
+- [x] MinGW Debug 构建无错误。
+- [x] 使用真实 OpenGL 上下文完成 OBJ 五帧冒烟测试。
 
-## 8. 建议的首轮开发顺序
+> 完成注释（2026-08-05）：阶段 1 已完成。`cmake --build build-mingw --parallel` 构建通过；隐藏窗口加载 `sphere.obj` 渲染 5 帧并以退出码 0 结束；NVIDIA 驱动报告 `KHR_debug` 已启用。回调捕获到一条 Shader 状态重编译性能提示（NVIDIA 消息 131218），不是渲染错误，留到阶段 2 调整状态设置后复测。
 
-严格按以下闭环推进，避免一次性搭完所有抽象后才发现管线不可用：
+### 阶段 2：渲染边界与统一资产数据
 
-1. CMake 可构建。
-2. GLFW 窗口可启动。
-3. GPU 三角形可见。
-4. OBJ 能解析并输出统计。
-5. OBJ 顶点上传 GPU 并绘制。
-6. 加入 MVP、深度测试和基础光照。
-7. 自动取景、错误处理、双模型验证和 README。
+- [x] 从 `Application` 提取 `Renderer`，让应用层只负责窗口、循环和 UI 编排。
+- [x] 定义格式无关的 `ModelData`、`MeshData`、`SubmeshData`、`MaterialData` 和节点变换。
+- [x] 定义统一 `ModelImporter` 接口；现有 `ObjLoader` 作为第一个实现接入。
+- [x] 为位置、法线、UV0、切线、索引范围和材质编号确定稳定的数据约定。
+- [x] 保证 cube、bunny、sphere 的模型统计与真实 OpenGL 渲染路径无回归。
+
+验收：替换内部数据结构后，现有 OBJ 仍可加载；渲染代码不包含 `.obj`、`.dae`、`.gltf` 等格式判断。
+
+> 完成注释（2026-08-05）：阶段 2 已完成。新增统一 `ModelData`/`ModelImporter`、`GpuModel` 与 `Renderer`；OBJ 已能生成 UV0、材质元数据和按 shape/材质范围划分的子网格。MinGW Debug 构建通过，cube（12 面）、bunny（5002 面）、sphere（320 面）均使用真实 OpenGL 上下文渲染 5 帧并以退出码 0 结束。`cow.dae` 会由导入器注册表明确报告暂不支持，未发生崩溃。NVIDIA 131218 性能提示在首次 Draw Call 仍会出现，确认属于驱动按状态编译 Shader 变体，不影响阶段验收。
+
+### 阶段 3：DAE 与 glTF 2.0 静态模型导入
+
+- [x] 在统一导入接口下接入多格式模型库，不让第三方类型泄漏到渲染层。
+- [x] 支持 DAE 的多 Mesh、节点变换、法线、UV0 和材质关联。
+- [x] 支持 glTF/GLB 的静态 Mesh、节点变换、UV0、材质和纹理引用。
+- [x] Scene 面板展示并允许加载 `.obj`、`.dae`、`.gltf`、`.glb`。
+- [x] 保留原 `ObjLoader` 回归路径；Assimp 构建只启用 COLLADA 与 glTF 导入器。
+
+验收：`bunny_hole.dae`、`cow.dae` 至少各完成一次可视化验收；`dragon2.dae` 完成加载压力测试；增加一个带 UV 的 glTF/GLB 固定测试资产。
+
+> 完成注释（2026-08-05）：阶段 3 已完成。接入官方 Assimp 6.0.5 的 import-only 构建，新增 `AssimpImporter`，节点全局变换会静态烘焙到 GPU Mesh，同时保留内部节点结构。`bunny_hole.dae`（2503 顶点/4968 面）与 `cow.dae`（2930 顶点/5856 面）完成真实窗口可视化验收；`dragon2.dae`（1082810 顶点/360944 面）在约 2.01 秒内完成加载、五帧渲染并正常退出；新增带 UV0、材质与节点变换的 `textured_triangle.gltf`，导入和渲染通过。OBJ 三模型回归仍由独立 `ObjLoader` 保证。
+
+### 阶段 4：UV、纹理与多材质渲染
+
+- [ ] 实现 `Texture2D` RAII、纹理解码、缓存和缺失纹理回退。
+- [ ] 按子网格和材质范围提交 Draw Call。
+- [ ] 支持 DAE 外部纹理与 glTF 外部、Data URI、GLB 内嵌纹理。
+- [ ] Shader 支持基础色纹理，并兼容只有常量颜色的旧模型。
+- [ ] Inspector 展示当前模型的 Mesh、材质与纹理统计。
+
+验收：同一模型至少两个材质可正确显示；UV 朝向、纹理路径、缺失纹理和无纹理回退均有固定测试资产。
+
+### 阶段 5：颜色空间与渲染质量
+
+- [ ] 建立线性空间计算和 sRGB 输入/输出约定，移除含义不清的重复 Gamma 处理。
+- [ ] 为离屏 RenderTarget 增加可配置 MSAA 与 Resolve。
+- [ ] 增加法线贴图所需的切线空间，并处理缺失/退化 UV。
+- [ ] 增加截图导出，作为视觉回归验证基础。
+
+验收：纯色、基础色纹理和法线贴图样例颜色正确；1x/4x MSAA 可切换且窗口缩放无错误。
+
+### 阶段 6：加载体验、诊断与性能
+
+- [ ] 增加文件选择器和拖放加载。
+- [ ] 将导入错误按文件、节点、Mesh、材质和纹理分层显示。
+- [ ] 增加 CPU/GPU 帧时间、Draw Call、三角形和纹理内存统计。
+- [ ] 为 CPU 资产导入增加自动化测试，为 GPU 路径保留真实上下文冒烟测试。
+
+验收：错误资产不会破坏当前场景；大 DAE 加载期间有明确状态；性能数据可在 UI 中查看。
+
+### 阶段 7：PBR 与多 Pass
+
+- [ ] 实现 glTF 金属度/粗糙度 PBR 材质。
+- [ ] 增加环境贴图、IBL、阴影映射和天空盒。
+- [ ] 在出现第二个真实渲染 Pass 后再引入轻量 Pass 编排。
+- [ ] 增加 Tone Mapping、Bloom 等可切换后处理。
+
+验收：使用标准 PBR 测试模型完成材质、IBL、阴影和后处理的对照截图。
+
+## 7. 当前格式决策
+
+- OBJ：继续支持，适合几何调试和最小回归资产；不再作为材质与场景能力的主设计目标。
+- DAE：为了兼容仓库现有 Dandelion 资产，在阶段 3 纳入支持范围。
+- glTF 2.0/GLB：作为后续纹理、材质和 PBR 的主要交换格式。
+- FBX：暂不列入近期验收；只有出现明确资产需求时再开启。

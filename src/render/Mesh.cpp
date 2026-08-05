@@ -6,7 +6,16 @@
 #include <glad/gl.h>
 
 Mesh::Mesh(const MeshData& data)
-    : vertexCount_(data.vertices.size()), indexCount_(data.indices.size()) {
+    : vertexCount_(data.vertices.size()), indexCount_(data.indices.size()), submeshes_(data.submeshes) {
+    if (submeshes_.empty() && indexCount_ > 0U) {
+        submeshes_.push_back(SubmeshData{
+            data.name,
+            0U,
+            static_cast<std::uint32_t>(indexCount_),
+            -1
+        });
+    }
+
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
     glGenBuffers(1, &ebo_);
@@ -47,6 +56,24 @@ Mesh::Mesh(const MeshData& data)
         static_cast<GLsizei>(sizeof(Vertex)),
         reinterpret_cast<void*>(offsetof(Vertex, normal))
     );
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(
+        2,
+        2,
+        GL_FLOAT,
+        GL_FALSE,
+        static_cast<GLsizei>(sizeof(Vertex)),
+        reinterpret_cast<void*>(offsetof(Vertex, texCoord0))
+    );
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(
+        3,
+        4,
+        GL_FLOAT,
+        GL_FALSE,
+        static_cast<GLsizei>(sizeof(Vertex)),
+        reinterpret_cast<void*>(offsetof(Vertex, tangent))
+    );
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -66,6 +93,14 @@ Mesh::~Mesh() {
 
 void Mesh::draw() const {
     glBindVertexArray(vao_);
-    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indexCount_), GL_UNSIGNED_INT, nullptr);
+    for (const auto& submesh : submeshes_) {
+        const auto byteOffset = static_cast<std::uintptr_t>(submesh.firstIndex) * sizeof(std::uint32_t);
+        glDrawElements(
+            GL_TRIANGLES,
+            static_cast<GLsizei>(submesh.indexCount),
+            GL_UNSIGNED_INT,
+            reinterpret_cast<const void*>(byteOffset)
+        );
+    }
     glBindVertexArray(0);
 }

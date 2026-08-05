@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 112 112" shape-rendering="crispEdges">
+  <title>MyRenderer pixel raster triangle icon</title>
+
+  <!-- Pixel-rounded dark tile. One source pixel equals 7 x 7 SVG units. -->
+  <g fill="#10151f">
+    <rect x="21" y="0" width="70" height="7"/>
+    <rect x="7" y="7" width="98" height="7"/>
+    <rect x="0" y="14" width="112" height="84"/>
+    <rect x="7" y="98" width="98" height="7"/>
+    <rect x="21" y="105" width="70" height="7"/>
+  </g>
+
+  <!-- White raster triangle edge. -->
+  <g fill="#eaf8ff">
+    <rect x="56" y="21" width="7" height="7"/>
+    <rect x="49" y="28" width="7" height="7"/>
+    <rect x="63" y="28" width="7" height="7"/>
+    <rect x="42" y="35" width="7" height="14"/>
+    <rect x="70" y="35" width="7" height="14"/>
+    <rect x="35" y="49" width="7" height="14"/>
+    <rect x="77" y="49" width="7" height="14"/>
+    <rect x="28" y="63" width="7" height="14"/>
+    <rect x="84" y="63" width="7" height="14"/>
+    <rect x="21" y="77" width="7" height="7"/>
+    <rect x="91" y="77" width="7" height="7"/>
+    <rect x="21" y="84" width="77" height="7"/>
+  </g>
+
+  <!-- Two color faces and a highlighted raster seam. -->
+  <g fill="#45d5e8">
+    <rect x="56" y="28" width="7" height="7"/>
+    <rect x="49" y="35" width="7" height="14"/>
+    <rect x="42" y="49" width="14" height="14"/>
+    <rect x="35" y="63" width="21" height="14"/>
+    <rect x="28" y="77" width="28" height="7"/>
+  </g>
+  <g fill="#3b82f6">
+    <rect x="63" y="35" width="7" height="14"/>
+    <rect x="63" y="49" width="14" height="14"/>
+    <rect x="63" y="63" width="21" height="14"/>
+    <rect x="63" y="77" width="28" height="7"/>
+  </g>
+  <rect x="56" y="35" width="7" height="49" fill="#a7f3d0"/>
+</svg>

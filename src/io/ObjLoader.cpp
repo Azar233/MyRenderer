@@ -1,10 +1,12 @@
 #include "io/ObjLoader.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -16,23 +18,37 @@ namespace {
 struct VertexKey {
     int position{-1};
     int normal{-1};
+    int texCoord{-1};
     std::uint64_t split{0};
 
     bool operator==(const VertexKey& other) const {
-        return position == other.position && normal == other.normal && split == other.split;
+        return position == other.position
+            && normal == other.normal
+            && texCoord == other.texCoord
+            && split == other.split;
     }
 };
 
+void hashCombine(std::size_t& result, std::size_t value) {
+    result ^= value + 0x9e3779b9U + (result << 6U) + (result >> 2U);
+}
+
 struct VertexKeyHash {
     std::size_t operator()(const VertexKey& key) const {
-        const auto a = static_cast<std::uint32_t>(key.position);
-        const auto b = static_cast<std::uint32_t>(key.normal);
-        std::size_t result = static_cast<std::size_t>(a) * 0x9e3779b1U;
-        result ^= static_cast<std::size_t>(b) + 0x9e3779b9U + (result << 6U) + (result >> 2U);
-        result ^= static_cast<std::size_t>(key.split) + 0x9e3779b9U + (result << 6U) + (result >> 2U);
+        std::size_t result = static_cast<std::size_t>(static_cast<std::uint32_t>(key.position));
+        hashCombine(result, static_cast<std::size_t>(static_cast<std::uint32_t>(key.normal)));
+        hashCombine(result, static_cast<std::size_t>(static_cast<std::uint32_t>(key.texCoord)));
+        hashCombine(result, static_cast<std::size_t>(key.split));
         return result;
     }
 };
+
+std::string lowercase(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return value;
+}
 
 glm::vec3 readVec3(const std::vector<tinyobj::real_t>& values, int index, const char* label) {
     const std::size_t base = static_cast<std::size_t>(index) * 3U;
@@ -43,6 +59,17 @@ glm::vec3 readVec3(const std::vector<tinyobj::real_t>& values, int index, const 
         static_cast<float>(values[base]),
         static_cast<float>(values[base + 1U]),
         static_cast<float>(values[base + 2U])
+    };
+}
+
+glm::vec2 readVec2(const std::vector<tinyobj::real_t>& values, int index, const char* label) {
+    const std::size_t base = static_cast<std::size_t>(index) * 2U;
+    if (index < 0 || base + 1U >= values.size()) {
+        throw std::runtime_error(std::string("OBJ contains an invalid ") + label + " index");
+    }
+    return {
+        static_cast<float>(values[base]),
+        static_cast<float>(values[base + 1U])
     };
 }
 
@@ -63,9 +90,22 @@ bool requestsFlatShading(const std::filesystem::path& path) {
     return false;
 }
 
+std::filesystem::path resolveTexturePath(
+    const std::filesystem::path& baseDirectory,
+    const std::string& textureName
+) {
+    return textureName.empty()
+        ? std::filesystem::path{}
+        : (baseDirectory / std::filesystem::path(textureName)).lexically_normal();
+}
+
 } // namespace
 
-ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
+bool ObjLoader::supports(const std::filesystem::path& path) const {
+    return lowercase(path.extension().string()) == ".obj";
+}
+
+ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
     if (!std::filesystem::exists(path)) {
         throw std::runtime_error("Model file does not exist: " + path.string());
     }
@@ -74,7 +114,8 @@ ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
     std::string diagnostics;
-    const std::string baseDirectory = path.parent_path().string() + "/";
+    const std::filesystem::path baseDirectory = path.parent_path();
+    const std::string tinyObjBaseDirectory = baseDirectory.string() + "/";
 
     const bool loaded = tinyobj::LoadObj(
         &attributes,
@@ -82,7 +123,7 @@ ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
         &materials,
         &diagnostics,
         path.string().c_str(),
-        baseDirectory.c_str(),
+        tinyObjBaseDirectory.c_str(),
         true
     );
     if (!loaded) {
@@ -92,9 +133,31 @@ ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
         throw std::runtime_error("OBJ does not contain renderable mesh data");
     }
 
-    ObjLoadResult result;
+    ModelImportResult result;
     result.warnings = diagnostics;
-    auto& output = result.mesh;
+    result.model.name = path.stem().string();
+    result.model.sourcePath = std::filesystem::absolute(path).lexically_normal();
+    result.model.rootNode.name = result.model.name;
+
+    for (const auto& sourceMaterial : materials) {
+        MaterialData material;
+        material.name = sourceMaterial.name.empty() ? "Material" : sourceMaterial.name;
+        material.baseColorFactor = glm::vec4(
+            static_cast<float>(sourceMaterial.diffuse[0]),
+            static_cast<float>(sourceMaterial.diffuse[1]),
+            static_cast<float>(sourceMaterial.diffuse[2]),
+            static_cast<float>(sourceMaterial.dissolve)
+        );
+        material.baseColorTexture = resolveTexturePath(baseDirectory, sourceMaterial.diffuse_texname);
+        material.normalTexture = resolveTexturePath(
+            baseDirectory,
+            sourceMaterial.normal_texname.empty() ? sourceMaterial.bump_texname : sourceMaterial.normal_texname
+        );
+        result.model.materials.push_back(std::move(material));
+    }
+
+    MeshData output;
+    output.name = result.model.name;
     std::unordered_map<VertexKey, std::uint32_t, VertexKeyHash> uniqueVertices;
     bool normalsComplete = true;
     const bool flatShading = requestsFlatShading(path);
@@ -102,7 +165,7 @@ ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
 
     auto appendVertex = [&](const tinyobj::index_t& index) -> std::uint32_t {
         const std::uint64_t split = flatShading && index.normal_index < 0 ? ++cornerSequence : 0U;
-        const VertexKey key{index.vertex_index, index.normal_index, split};
+        const VertexKey key{index.vertex_index, index.normal_index, index.texcoord_index, split};
         const auto found = uniqueVertices.find(key);
         if (found != uniqueVertices.end()) {
             return found->second;
@@ -123,6 +186,9 @@ ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
             normalsComplete = false;
             vertex.normal = glm::vec3(0.0f);
         }
+        if (index.texcoord_index >= 0) {
+            vertex.texCoord0 = readVec2(attributes.texcoords, index.texcoord_index, "texture coordinate");
+        }
 
         output.boundsMin = glm::min(output.boundsMin, vertex.position);
         output.boundsMax = glm::max(output.boundsMax, vertex.position);
@@ -132,12 +198,48 @@ ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
         return newIndex;
     };
 
-    for (const auto& shape : shapes) {
+    for (std::size_t shapeIndex = 0; shapeIndex < shapes.size(); ++shapeIndex) {
+        const auto& shape = shapes[shapeIndex];
+        const std::string shapeName = shape.name.empty()
+            ? "Shape " + std::to_string(shapeIndex)
+            : shape.name;
         std::size_t offset = 0;
-        for (const unsigned char faceVertexCount : shape.mesh.num_face_vertices) {
+        std::size_t firstIndex = output.indices.size();
+        int currentMaterial = -1;
+        bool hasActiveSubmesh = false;
+        std::size_t submeshSequence = 0;
+
+        auto closeSubmesh = [&]() {
+            const std::size_t indexCount = output.indices.size() - firstIndex;
+            if (!hasActiveSubmesh || indexCount == 0U) {
+                return;
+            }
+            output.submeshes.push_back(SubmeshData{
+                shapeName + " " + std::to_string(submeshSequence++),
+                static_cast<std::uint32_t>(firstIndex),
+                static_cast<std::uint32_t>(indexCount),
+                currentMaterial
+            });
+        };
+
+        for (std::size_t faceIndex = 0; faceIndex < shape.mesh.num_face_vertices.size(); ++faceIndex) {
+            const unsigned char faceVertexCount = shape.mesh.num_face_vertices[faceIndex];
             if (faceVertexCount < 3U) {
                 offset += faceVertexCount;
                 continue;
+            }
+
+            const int faceMaterial = faceIndex < shape.mesh.material_ids.size()
+                ? shape.mesh.material_ids[faceIndex]
+                : -1;
+            if (!hasActiveSubmesh) {
+                currentMaterial = faceMaterial;
+                firstIndex = output.indices.size();
+                hasActiveSubmesh = true;
+            } else if (faceMaterial != currentMaterial) {
+                closeSubmesh();
+                currentMaterial = faceMaterial;
+                firstIndex = output.indices.size();
             }
 
             std::vector<std::uint32_t> face;
@@ -155,6 +257,7 @@ ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
             }
             offset += faceVertexCount;
         }
+        closeSubmesh();
     }
 
     if (output.indices.empty()) {
@@ -192,5 +295,9 @@ ObjLoadResult ObjLoader::load(const std::filesystem::path& path) {
         }
     }
 
+    result.model.boundsMin = output.boundsMin;
+    result.model.boundsMax = output.boundsMax;
+    result.model.meshes.push_back(std::move(output));
+    result.model.rootNode.meshIndices.push_back(0U);
     return result;
 }

@@ -12,15 +12,17 @@
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 #include <glm/ext/matrix_transform.hpp>
-#include <glm/geometric.hpp>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
+#include "app/AppIcon.h"
+#include "io/AssimpImporter.h"
+#include "io/ModelImporter.h"
 #include "io/ObjLoader.h"
-#include "render/Mesh.h"
-#include "render/RenderTarget.h"
-#include "render/Shader.h"
+#include "render/GpuModel.h"
+#include "render/OpenGlDebug.h"
+#include "render/Renderer.h"
 
 namespace {
 
@@ -50,6 +52,7 @@ int Application::run(const std::filesystem::path& initialModel) {
     initializeWindow();
     initializeGui();
     initializeRenderer();
+    initializeImporters();
     discoverModels();
 
     std::filesystem::path modelToLoad = initialModel;
@@ -62,7 +65,7 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (!modelToLoad.empty()) {
         loadModel(modelToLoad);
     } else {
-        statusMessage_ = "No OBJ model was found in assets/models";
+        statusMessage_ = "No supported model was found in assets/models";
     }
 
     int smokeTestFrames = std::getenv("MYRENDERER_SMOKE_TEST") == nullptr ? -1 : 5;
@@ -76,7 +79,7 @@ int Application::run(const std::filesystem::path& initialModel) {
         const double currentTime = glfwGetTime();
         const float deltaTime = static_cast<float>(std::min(currentTime - previousFrameTime_, 0.1));
         previousFrameTime_ = currentTime;
-        if (settings_.autoRotate) {
+        if (autoRotate_) {
             modelRotationDegrees_.y = std::fmod(modelRotationDegrees_.y + 25.0f * deltaTime, 360.0f);
         }
 
@@ -143,14 +146,17 @@ void Application::initializeWindow() {
         glfwTerminate();
         throw std::runtime_error("Failed to create an OpenGL 3.3 window");
     }
+    setMyRendererWindowIcon(window_);
     glfwSetWindowSizeLimits(window_, 960, 600, GLFW_DONT_CARE, GLFW_DONT_CARE);
     glfwMakeContextCurrent(window_);
-    glfwSwapInterval(settings_.vsync ? 1 : 0);
+    glfwSwapInterval(vsync_ ? 1 : 0);
 
     const int version = gladLoadGL(reinterpret_cast<GLADloadfunc>(glfwGetProcAddress));
     if (version == 0) {
         throw std::runtime_error("Failed to load OpenGL functions through GLAD");
     }
+
+    initializeOpenGlDebugOutput();
 
     gpuDescription_ = std::string(glString(GL_RENDERER)) + " | OpenGL " + glString(GL_VERSION);
     std::cout << "GPU: " << glString(GL_RENDERER) << '\n'
@@ -198,11 +204,15 @@ void Application::initializeGui() {
 }
 
 void Application::initializeRenderer() {
-    shader_ = std::make_unique<Shader>(
+    renderer_ = std::make_unique<Renderer>(
         sourceRoot_ / "shaders" / "basic.vert",
         sourceRoot_ / "shaders" / "basic.frag"
     );
-    renderTarget_ = std::make_unique<RenderTarget>();
+}
+
+void Application::initializeImporters() {
+    importers_.push_back(std::make_unique<ObjLoader>());
+    importers_.push_back(std::make_unique<AssimpImporter>());
 }
 
 void Application::shutdown() {
@@ -213,9 +223,8 @@ void Application::shutdown() {
 
     if (window_ != nullptr) {
         glfwMakeContextCurrent(window_);
-        mesh_.reset();
-        shader_.reset();
-        renderTarget_.reset();
+        model_.reset();
+        renderer_.reset();
     }
     if (guiInitialized_) {
         ImGui_ImplOpenGL3_Shutdown();
@@ -235,7 +244,7 @@ void Application::drawMainMenu() {
         return;
     }
     if (ImGui::BeginMenu("File")) {
-        if (ImGui::BeginMenu("Open bundled OBJ")) {
+        if (ImGui::BeginMenu("Open bundled model")) {
             for (const auto& path : availableModels_) {
                 if (ImGui::MenuItem(path.filename().string().c_str())) {
                     loadModel(path);
@@ -256,9 +265,9 @@ void Application::drawMainMenu() {
         if (ImGui::MenuItem("Reset camera", "F")) {
             camera_.reset();
         }
-        ImGui::MenuItem("Wireframe", nullptr, &settings_.wireframe);
-        ImGui::MenuItem("Back-face culling", nullptr, &settings_.cullBackFaces);
-        ImGui::MenuItem("Auto rotate", nullptr, &settings_.autoRotate);
+        ImGui::MenuItem("Wireframe", nullptr, &rendererSettings_.wireframe);
+        ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
+        ImGui::MenuItem("Auto rotate", nullptr, &autoRotate_);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help")) {
@@ -288,10 +297,12 @@ void Application::drawScenePanel() {
     }
 
     ImGui::SeparatorText("Current mesh");
-    if (mesh_) {
+    if (model_) {
         const std::string currentMeshLabel = currentModelPath_.filename().string() + "##CurrentMesh";
         ImGui::TreeNodeEx(currentMeshLabel.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_DefaultOpen);
         ImGui::TreePop();
+        ImGui::TextDisabled("Meshes: %zu", loadedMeshCount_);
+        ImGui::TextDisabled("Submeshes: %zu", loadedSubmeshCount_);
         ImGui::TextDisabled("Vertices: %zu", loadedVertexCount_);
         ImGui::TextDisabled("Triangles: %zu", loadedTriangleCount_);
     } else {
@@ -299,7 +310,7 @@ void Application::drawScenePanel() {
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText("OBJ assets");
+    ImGui::SeparatorText("Model assets");
     for (const auto& path : availableModels_) {
         const bool selected = !currentModelPath_.empty() && path.filename() == currentModelPath_.filename();
         const std::string assetLabel = path.filename().string() + "##Asset_" + path.string();
@@ -308,18 +319,18 @@ void Application::drawScenePanel() {
         }
     }
     if (availableModels_.empty()) {
-        ImGui::TextDisabled("No .obj files found");
+        ImGui::TextDisabled("No supported model files found");
     }
     if (unsupportedModelCount_ > 0) {
         ImGui::Spacing();
-        ImGui::TextDisabled("%zu non-OBJ model(s) hidden in MVP", unsupportedModelCount_);
+        ImGui::TextDisabled("%zu model(s) await a format importer", unsupportedModelCount_);
     }
 
     ImGui::Spacing();
     ImGui::SeparatorText("Open path");
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputText("##ModelPath", modelPathBuffer_.data(), modelPathBuffer_.size());
-    if (ImGui::Button("Load OBJ", ImVec2(-1.0f, 0.0f))) {
+    if (ImGui::Button("Load model", ImVec2(-1.0f, 0.0f))) {
         loadModel(modelPathBuffer_.data());
     }
 
@@ -353,28 +364,28 @@ void Application::drawInspectorPanel() {
             ImGui::SeparatorText("Transform");
             ImGui::DragFloat3("Rotation", &modelRotationDegrees_.x, 0.25f, -360.0f, 360.0f, "%.1f deg");
             ImGui::SliderFloat("Scale", &modelScale_, 0.1f, 4.0f, "%.2f");
-            ImGui::Checkbox("Auto rotate", &settings_.autoRotate);
+            ImGui::Checkbox("Auto rotate", &autoRotate_);
             if (ImGui::Button("Reset transform", ImVec2(-1.0f, 0.0f))) {
                 resetObjectTransform();
             }
 
             ImGui::SeparatorText("Material");
-            ImGui::ColorEdit3("Base color", &settings_.baseColor.x);
-            ImGui::SliderFloat("Ambient", &settings_.ambientStrength, 0.0f, 1.0f);
-            ImGui::SliderFloat("Diffuse", &settings_.diffuseStrength, 0.0f, 2.0f);
-            ImGui::SliderFloat("Specular", &settings_.specularStrength, 0.0f, 2.0f);
-            ImGui::SliderFloat("Shininess", &settings_.shininess, 1.0f, 256.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+            ImGui::ColorEdit3("Base color", &rendererSettings_.baseColor.x);
+            ImGui::SliderFloat("Ambient", &rendererSettings_.ambientStrength, 0.0f, 1.0f);
+            ImGui::SliderFloat("Diffuse", &rendererSettings_.diffuseStrength, 0.0f, 2.0f);
+            ImGui::SliderFloat("Specular", &rendererSettings_.specularStrength, 0.0f, 2.0f);
+            ImGui::SliderFloat("Shininess", &rendererSettings_.shininess, 1.0f, 256.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
             ImGui::EndTabItem();
         }
 
         if (ImGui::BeginTabItem("Renderer")) {
             ImGui::SeparatorText("Rasterization");
-            ImGui::Checkbox("Wireframe", &settings_.wireframe);
-            ImGui::Checkbox("Back-face culling", &settings_.cullBackFaces);
-            ImGui::ColorEdit3("Background", &settings_.backgroundColor.x);
+            ImGui::Checkbox("Wireframe", &rendererSettings_.wireframe);
+            ImGui::Checkbox("Back-face culling", &rendererSettings_.cullBackFaces);
+            ImGui::ColorEdit3("Background", &rendererSettings_.backgroundColor.x);
 
             ImGui::SeparatorText("Directional light");
-            ImGui::DragFloat3("Direction", &settings_.lightDirection.x, 0.01f, -1.0f, 1.0f, "%.2f");
+            ImGui::DragFloat3("Direction", &rendererSettings_.lightDirection.x, 0.01f, -1.0f, 1.0f, "%.2f");
 
             ImGui::SeparatorText("Camera");
             float fieldOfView = camera_.fieldOfView();
@@ -386,8 +397,8 @@ void Application::drawInspectorPanel() {
             }
 
             ImGui::SeparatorText("Runtime");
-            if (ImGui::Checkbox("VSync", &settings_.vsync)) {
-                glfwSwapInterval(settings_.vsync ? 1 : 0);
+            if (ImGui::Checkbox("VSync", &vsync_)) {
+                glfwSwapInterval(vsync_ ? 1 : 0);
             }
             ImGui::TextWrapped("%s", gpuDescription_.c_str());
             ImGui::EndTabItem();
@@ -423,11 +434,20 @@ void Application::drawViewportPanel() {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const int width = std::max(static_cast<int>(available.x), 1);
     const int height = std::max(static_cast<int>(available.y), 1);
-    renderTarget_->resize(width, height);
-    renderScene(width, height);
+
+    const glm::mat4 normalization =
+        glm::scale(glm::mat4(1.0f), glm::vec3(modelNormalizationScale_))
+        * glm::translate(glm::mat4(1.0f), -modelCenter_);
+    glm::mat4 modelMatrix(1.0f);
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.z), glm::vec3(0.0f, 0.0f, 1.0f));
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.y), glm::vec3(0.0f, 1.0f, 0.0f));
+    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.x), glm::vec3(1.0f, 0.0f, 0.0f));
+    modelMatrix = glm::scale(modelMatrix, glm::vec3(modelScale_));
+    modelMatrix *= normalization;
+    renderer_->render(model_.get(), camera_, modelMatrix, rendererSettings_, width, height);
 
     ImGui::Image(
-        static_cast<ImTextureID>(static_cast<std::uintptr_t>(renderTarget_->colorTexture())),
+        static_cast<ImTextureID>(static_cast<std::uintptr_t>(renderer_->colorTexture())),
         ImVec2(static_cast<float>(width), static_cast<float>(height)),
         ImVec2(0.0f, 1.0f),
         ImVec2(1.0f, 0.0f)
@@ -459,69 +479,12 @@ void Application::drawAboutPopup() {
         ImGui::Text("MyRenderer 0.1.0");
         ImGui::Separator();
         ImGui::Text("C++17 / OpenGL 3.3 / GPU rasterization");
-        ImGui::TextWrapped("A compact OBJ renderer extracted from the rendering concepts of the Dandelion graphics lab.");
+        ImGui::TextWrapped("A compact GPU renderer with a format-independent model pipeline.");
         if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
-}
-
-void Application::renderScene(int width, int height) {
-    renderTarget_->bind();
-    glViewport(0, 0, width, height);
-    glEnable(GL_DEPTH_TEST);
-    glDepthMask(GL_TRUE);
-    glClearColor(
-        settings_.backgroundColor.r,
-        settings_.backgroundColor.g,
-        settings_.backgroundColor.b,
-        1.0f
-    );
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    if (mesh_) {
-        if (settings_.cullBackFaces) {
-            glEnable(GL_CULL_FACE);
-            glCullFace(GL_BACK);
-            glFrontFace(GL_CCW);
-        } else {
-            glDisable(GL_CULL_FACE);
-        }
-        glPolygonMode(GL_FRONT_AND_BACK, settings_.wireframe ? GL_LINE : GL_FILL);
-
-        const glm::mat4 normalization =
-            glm::scale(glm::mat4(1.0f), glm::vec3(modelNormalizationScale_))
-            * glm::translate(glm::mat4(1.0f), -modelCenter_);
-        glm::mat4 model(1.0f);
-        model = glm::rotate(model, glm::radians(modelRotationDegrees_.z), glm::vec3(0.0f, 0.0f, 1.0f));
-        model = glm::rotate(model, glm::radians(modelRotationDegrees_.y), glm::vec3(0.0f, 1.0f, 0.0f));
-        model = glm::rotate(model, glm::radians(modelRotationDegrees_.x), glm::vec3(1.0f, 0.0f, 0.0f));
-        model = glm::scale(model, glm::vec3(modelScale_));
-        model *= normalization;
-
-        glm::vec3 lightDirection = settings_.lightDirection;
-        if (glm::dot(lightDirection, lightDirection) < 1e-8f) {
-            lightDirection = glm::vec3(-0.45f, -0.8f, -0.35f);
-        }
-
-        shader_->use();
-        shader_->setMat4("uModel", model);
-        shader_->setMat4("uView", camera_.viewMatrix());
-        shader_->setMat4("uProjection", camera_.projectionMatrix(static_cast<float>(width) / static_cast<float>(height)));
-        shader_->setVec3("uBaseColor", settings_.baseColor);
-        shader_->setVec3("uLightDirection", glm::normalize(lightDirection));
-        shader_->setVec3("uCameraPosition", camera_.position());
-        shader_->setFloat("uAmbientStrength", settings_.ambientStrength);
-        shader_->setFloat("uDiffuseStrength", settings_.diffuseStrength);
-        shader_->setFloat("uSpecularStrength", settings_.specularStrength);
-        shader_->setFloat("uShininess", settings_.shininess);
-        mesh_->draw();
-    }
-
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    glDisable(GL_CULL_FACE);
-    RenderTarget::unbind();
 }
 
 void Application::discoverModels() {
@@ -535,11 +498,13 @@ void Application::discoverModels() {
         if (!entry.is_regular_file()) {
             continue;
         }
-        const std::string extension = lowercase(entry.path().extension().string());
-        if (extension == ".obj") {
+        if (findImporter(entry.path()) != nullptr) {
             availableModels_.push_back(entry.path());
-        } else if (extension == ".dae" || extension == ".fbx" || extension == ".gltf" || extension == ".glb") {
-            ++unsupportedModelCount_;
+        } else {
+            const std::string extension = lowercase(entry.path().extension().string());
+            if (extension == ".dae" || extension == ".fbx" || extension == ".gltf" || extension == ".glb") {
+                ++unsupportedModelCount_;
+            }
         }
     }
     std::sort(availableModels_.begin(), availableModels_.end());
@@ -548,23 +513,26 @@ void Application::discoverModels() {
 bool Application::loadModel(const std::filesystem::path& path) {
     try {
         const auto resolved = resolvePath(path);
-        if (lowercase(resolved.extension().string()) != ".obj") {
-            throw std::runtime_error("MVP currently supports .obj files only: " + resolved.string());
+        const ModelImporter* importer = findImporter(resolved);
+        if (importer == nullptr) {
+            throw std::runtime_error("No model importer supports: " + resolved.string());
         }
 
-        ObjLoadResult loaded = ObjLoader::load(resolved);
-        auto newMesh = std::make_unique<Mesh>(loaded.mesh);
-        const glm::vec3 extent = loaded.mesh.boundsMax - loaded.mesh.boundsMin;
+        ModelImportResult loaded = importer->load(resolved);
+        auto newModel = std::make_unique<GpuModel>(loaded.model);
+        const glm::vec3 extent = loaded.model.boundsMax - loaded.model.boundsMin;
         const float maximumExtent = std::max({extent.x, extent.y, extent.z});
         if (!std::isfinite(maximumExtent) || maximumExtent <= 1e-8f) {
             throw std::runtime_error("Model bounds are empty or degenerate");
         }
 
-        mesh_ = std::move(newMesh);
+        model_ = std::move(newModel);
         currentModelPath_ = resolved;
-        loadedVertexCount_ = mesh_->vertexCount();
-        loadedTriangleCount_ = mesh_->triangleCount();
-        modelCenter_ = 0.5f * (loaded.mesh.boundsMin + loaded.mesh.boundsMax);
+        loadedMeshCount_ = model_->meshCount();
+        loadedSubmeshCount_ = model_->submeshCount();
+        loadedVertexCount_ = model_->vertexCount();
+        loadedTriangleCount_ = model_->triangleCount();
+        modelCenter_ = 0.5f * (loaded.model.boundsMin + loaded.model.boundsMax);
         modelNormalizationScale_ = 1.4f / maximumExtent;
         modelWarnings_ = loaded.warnings;
         resetObjectTransform();
@@ -573,6 +541,9 @@ bool Application::loadModel(const std::filesystem::path& path) {
         const std::string pathString = currentModelPath_.string();
         std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", pathString.c_str());
         statusMessage_ = "Loaded " + currentModelPath_.filename().string() + " ("
+                       + std::to_string(loadedMeshCount_) + " mesh, "
+                       + std::to_string(loadedSubmeshCount_) + " submesh, "
+                       + std::to_string(loadedVertexCount_) + " vertices, "
                        + std::to_string(loadedTriangleCount_) + " triangles)";
         std::cout << statusMessage_ << '\n';
         return true;
@@ -581,6 +552,15 @@ bool Application::loadModel(const std::filesystem::path& path) {
         std::cerr << statusMessage_ << '\n';
         return false;
     }
+}
+
+const ModelImporter* Application::findImporter(const std::filesystem::path& path) const {
+    for (const auto& importer : importers_) {
+        if (importer->supports(path)) {
+            return importer.get();
+        }
+    }
+    return nullptr;
 }
 
 std::filesystem::path Application::resolvePath(const std::filesystem::path& path) const {
