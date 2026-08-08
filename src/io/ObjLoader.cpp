@@ -243,6 +243,9 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
             static_cast<float>(sourceMaterial.diffuse[2]),
             static_cast<float>(sourceMaterial.dissolve)
         );
+        if (sourceMaterial.dissolve < 0.999) {
+            material.alphaMode = MaterialAlphaMode::Blend;
+        }
         material.baseColorTextureIndex = appendTexture(sourceMaterial.diffuse_texname, true);
         material.normalTextureIndex = appendTexture(
             sourceMaterial.normal_texname,

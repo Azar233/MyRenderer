@@ -28,6 +28,15 @@ bool hasScope(const ModelImportResult& result, ModelDiagnosticScope scope) {
     return false;
 }
 
+const MaterialData* findMaterial(const ModelImportResult& result, const std::string& name) {
+    for (const MaterialData& material : result.model.materials) {
+        if (material.name == name) {
+            return &material;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 int main() {
@@ -64,6 +73,24 @@ int main() {
         require(hasPackedPbrTexture, "PBR fixture should import the packed metallic-roughness texture");
         require(hasRoughMaterial, "PBR roughness factor should survive glTF import");
         require(hasMetalMaterial, "PBR metallic factor should survive glTF import");
+
+        const ModelImportResult alpha = assimp.load(asset("alpha_material_test.gltf"));
+        require(alpha.model.meshes.size() == 4U, "alpha fixture should import four meshes");
+        const MaterialData* opaque = findMaterial(alpha, "OpaqueAlphaIgnored");
+        const MaterialData* masked = findMaterial(alpha, "MaskedVisible");
+        const MaterialData* blended = findMaterial(alpha, "BlendedFar");
+        const MaterialData* blendedNear = findMaterial(alpha, "BlendedNear");
+        require(opaque != nullptr, "alpha fixture should preserve its opaque material");
+        require(masked != nullptr, "alpha fixture should preserve its masked material");
+        require(blended != nullptr, "alpha fixture should preserve its blended material");
+        require(blendedNear != nullptr, "alpha fixture should preserve its second blended material");
+        require(opaque->alphaMode == MaterialAlphaMode::Opaque, "OPAQUE mode should survive glTF import");
+        require(masked->alphaMode == MaterialAlphaMode::Mask, "MASK mode should survive glTF import");
+        require(masked->alphaCutoff == 0.5f, "MASK cutoff should survive glTF import");
+        require(blended->alphaMode == MaterialAlphaMode::Blend, "BLEND mode should survive glTF import");
+        require(blended->doubleSided, "doubleSided should survive glTF import");
+        require(blended->baseColorFactor.a < 0.5f, "BLEND alpha should survive glTF import");
+        require(blendedNear->alphaMode == MaterialAlphaMode::Blend, "second BLEND mode should survive import");
 
         const ModelImportResult dae = assimp.load(asset("textured_quad.dae"));
         require(!dae.model.meshes.empty(), "DAE fixture should import a mesh");

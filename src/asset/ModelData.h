@@ -35,6 +35,12 @@ struct TextureData {
     bool srgb{false};
 };
 
+enum class MaterialAlphaMode {
+    Opaque,
+    Mask,
+    Blend
+};
+
 struct MaterialData {
     std::string name{"Default"};
     glm::vec4 baseColorFactor{1.0f};
@@ -44,6 +50,9 @@ struct MaterialData {
     std::int32_t metallicRoughnessTextureIndex{-1};
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
+    MaterialAlphaMode alphaMode{MaterialAlphaMode::Opaque};
+    float alphaCutoff{0.5f};
+    bool doubleSided{false};
 };
 
 struct SubmeshData {

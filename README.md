@@ -6,6 +6,8 @@
 
 Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行拆分；OBJ 使用独立轻量导入器，DAE 与 glTF/GLB 使用统一 Assimp 适配器，渲染层不依赖具体文件格式。
 
+项目中出现的图形学与工程概念统一记录在 [`dictionary.md`](dictionary.md)，包含通俗解释、项目用途和当前实现状态。
+
 ## 已实现
 
 - OpenGL 3.3 Core Profile 与 GLFW 窗口。
@@ -21,7 +23,8 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
 - glTF 2.0 metallic-roughness PBR（Cook-Torrance GGX）、程序化 HDR 环境贴图、近似 IBL、天空盒与方向光 PCF 阴影。
-- `Shadow map → HDR scene → Bloom + tone map` 多 Pass 管线，可切换 ACES Tone Mapping、曝光和 Bloom。
+- glTF `OPAQUE` / `MASK` / `BLEND`、Alpha Cutoff、双面材质、透明子网格后向前排序，以及独立的透明深度/混合状态。
+- `Shadow map → Opaque HDR scene → Forward transparent/refractive scene → Bloom + tone map` 多 Pass 管线；Opaque HDR Color、最终 HDR Scene Color 与可采样 Depth 相互独立，可切换 ACES Tone Mapping、曝光和 Bloom。
 - 像素风应用图标，覆盖 GLFW 标题栏、任务栏和 Windows 可执行文件资源。
 - 顶部菜单、模型列表、Scene 面板、Inspector 面板和运行状态。
 - Windows 原生模型文件选择器、窗口拖放加载与后台 CPU 资产导入；失败导入不会替换当前场景。
@@ -72,9 +75,9 @@ ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRe
 
 所有格式最终转换为相同的 `ModelData`、子网格、材质和纹理来源数据。渲染层统一解码并缓存外部或内嵌图像，基础色 Shader 将材质因子、可调 Tint 和基础色贴图相乘；没有贴图的材质使用白色纹理，无法解码或缺失的基础色贴图使用洋红棋盘并在状态区报告原因。基础色纹理使用 sRGB 内部格式，法线贴图保持线性数据；光照在线性空间完成，最终颜色仅进行一次 sRGB 编码。
 
-OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道）。高度图不会自动转换为法线贴图；当前环境贴图是内置程序化 Cubemap，IBL 为适配 OpenGL 3.3 的近似预滤波方案。透明混合、骨骼动画和 FBX 尚未启用。
+OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道），并支持基础 Alpha Mode 与双面材质。Alpha Blending 只完成颜色合成，玻璃 Transmission、折射和色散仍在 Glass 路线中。高度图不会自动转换为法线贴图；当前环境贴图是内置程序化 Cubemap，IBL 为适配 OpenGL 3.3 的近似预滤波方案。骨骼动画和 FBX 尚未启用。
 
-固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）和 `pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）。`uv_quadrants.ppm` 的四象限颜色用于检查 UV 方向，`normal_test.ppm` 用于检查切线空间法线扰动。
+固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）和 `alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）。`uv_quadrants.ppm` 的四象限颜色用于检查 UV 方向，`normal_test.ppm` 用于检查切线空间法线扰动。
 
 ## 自动测试
 
@@ -116,7 +119,7 @@ src/render/GpuModel.*    一个模型所拥有的 GPU Mesh 集合与统计
 src/render/Mesh.*        VAO/VBO/EBO、顶点布局与子网格 Draw Call
 src/render/OpenGlDebug.* Debug 构建的 OpenGL 驱动诊断
 src/render/PostProcessor.* HDR Bloom、ACES Tone Mapping 与最终 sRGB 输出
-src/render/RenderTarget.*HDR/MSAA 场景与最终 LDR 离屏 Framebuffer
+src/render/RenderTarget.*Opaque/HDR/MSAA 场景、可采样深度与最终 LDR 离屏 Framebuffer
 src/render/Renderer.*    渲染状态、轻量 Pass 编排、相机参数与离屏绘制
 src/render/ShadowMap.*   方向光深度贴图
 src/render/Shader.*      GLSL 编译、链接与 uniform

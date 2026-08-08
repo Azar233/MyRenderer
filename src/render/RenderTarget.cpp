@@ -114,7 +114,7 @@ void RenderTarget::resize(int width, int height, int samples) {
     int maximumSamples = 1;
     glGetIntegerv(GL_MAX_SAMPLES, &maximumSamples);
     samples = std::clamp(samples, 1, std::max(maximumSamples, 1));
-    if (resolveFramebuffer_ != 0U && width == width_ && height == height_ && samples == samples_) {
+    if (opaqueFramebuffer_ != 0U && width == width_ && height == height_ && samples == samples_) {
         return;
     }
 
@@ -123,8 +123,45 @@ void RenderTarget::resize(int width, int height, int samples) {
     height_ = height;
     samples_ = samples;
 
-    glGenFramebuffers(1, &resolveFramebuffer_);
-    glBindFramebuffer(GL_FRAMEBUFFER, resolveFramebuffer_);
+    glGenFramebuffers(1, &opaqueFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, opaqueFramebuffer_);
+    glGenTextures(1, &opaqueColorTexture_);
+    glBindTexture(GL_TEXTURE_2D, opaqueColorTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width_, height_, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, opaqueColorTexture_, 0);
+
+    glGenTextures(1, &sceneDepthTexture_);
+    glBindTexture(GL_TEXTURE_2D, sceneDepthTexture_);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_DEPTH24_STENCIL8,
+        width_,
+        height_,
+        0,
+        GL_DEPTH_STENCIL,
+        GL_UNSIGNED_INT_24_8,
+        nullptr
+    );
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_DEPTH_STENCIL_ATTACHMENT,
+        GL_TEXTURE_2D,
+        sceneDepthTexture_,
+        0
+    );
+    requireComplete("opaque resolve");
+
+    glGenFramebuffers(1, &sceneFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
     glGenTextures(1, &hdrColorTexture_);
     glBindTexture(GL_TEXTURE_2D, hdrColorTexture_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width_, height_, 0, GL_RGBA, GL_FLOAT, nullptr);
@@ -133,26 +170,34 @@ void RenderTarget::resize(int width, int height, int samples) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hdrColorTexture_, 0);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_DEPTH_STENCIL_ATTACHMENT,
+        GL_TEXTURE_2D,
+        sceneDepthTexture_,
+        0
+    );
+    requireComplete("refractive HDR scene");
 
     if (samples_ > 1) {
-        requireComplete("resolve");
         glGenFramebuffers(1, &multisampleFramebuffer_);
         glBindFramebuffer(GL_FRAMEBUFFER, multisampleFramebuffer_);
         glGenRenderbuffers(1, &multisampleColor_);
         glBindRenderbuffer(GL_RENDERBUFFER, multisampleColor_);
         glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples_, GL_RGBA16F, width_, height_);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, multisampleColor_);
-    }
 
-    glGenRenderbuffers(1, &depthStencil_);
-    glBindRenderbuffer(GL_RENDERBUFFER, depthStencil_);
-    if (samples_ > 1) {
+        glGenRenderbuffers(1, &multisampleDepthStencil_);
+        glBindRenderbuffer(GL_RENDERBUFFER, multisampleDepthStencil_);
         glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples_, GL_DEPTH24_STENCIL8, width_, height_);
-    } else {
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width_, height_);
+        glFramebufferRenderbuffer(
+            GL_FRAMEBUFFER,
+            GL_DEPTH_STENCIL_ATTACHMENT,
+            GL_RENDERBUFFER,
+            multisampleDepthStencil_
+        );
+        requireComplete("multisample opaque scene");
     }
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depthStencil_);
-    requireComplete(samples_ > 1 ? "multisample viewport" : "viewport");
 
     glGenFramebuffers(1, &finalFramebuffer_);
     glBindFramebuffer(GL_FRAMEBUFFER, finalFramebuffer_);
@@ -171,19 +216,48 @@ void RenderTarget::resize(int width, int height, int samples) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void RenderTarget::bindScene() const {
+void RenderTarget::bindOpaqueScene() const {
     glBindFramebuffer(
         GL_FRAMEBUFFER,
-        samples_ > 1 ? multisampleFramebuffer_ : resolveFramebuffer_
+        samples_ > 1 ? multisampleFramebuffer_ : opaqueFramebuffer_
     );
 }
 
-void RenderTarget::resolveScene() const {
+void RenderTarget::resolveOpaqueScene() const {
     if (samples_ > 1) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampleFramebuffer_);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolveFramebuffer_);
-        glBlitFramebuffer(0, 0, width_, height_, 0, 0, width_, height_, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, opaqueFramebuffer_);
+        glBlitFramebuffer(
+            0,
+            0,
+            width_,
+            height_,
+            0,
+            0,
+            width_,
+            height_,
+            GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
+            GL_NEAREST
+        );
     }
+}
+
+void RenderTarget::bindRefractiveScene() const {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, opaqueFramebuffer_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneFramebuffer_);
+    glBlitFramebuffer(
+        0,
+        0,
+        width_,
+        height_,
+        0,
+        0,
+        width_,
+        height_,
+        GL_COLOR_BUFFER_BIT,
+        GL_NEAREST
+    );
+    glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
 }
 
 void RenderTarget::bindFinal() const {
@@ -195,7 +269,7 @@ void RenderTarget::unbind() const {
 }
 
 bool RenderTarget::savePng(const std::filesystem::path& path, std::string& error) const {
-    if (resolveFramebuffer_ == 0U || width_ <= 0 || height_ <= 0) {
+    if (opaqueFramebuffer_ == 0U || width_ <= 0 || height_ <= 0) {
         error = "Viewport has not been rendered yet";
         return false;
     }
@@ -211,20 +285,26 @@ bool RenderTarget::savePng(const std::filesystem::path& path, std::string& error
 }
 
 void RenderTarget::destroy() {
-    if (depthStencil_ != 0U) glDeleteRenderbuffers(1, &depthStencil_);
+    if (multisampleDepthStencil_ != 0U) glDeleteRenderbuffers(1, &multisampleDepthStencil_);
     if (multisampleColor_ != 0U) glDeleteRenderbuffers(1, &multisampleColor_);
     if (finalColorTexture_ != 0U) glDeleteTextures(1, &finalColorTexture_);
+    if (sceneDepthTexture_ != 0U) glDeleteTextures(1, &sceneDepthTexture_);
     if (hdrColorTexture_ != 0U) glDeleteTextures(1, &hdrColorTexture_);
+    if (opaqueColorTexture_ != 0U) glDeleteTextures(1, &opaqueColorTexture_);
     if (finalFramebuffer_ != 0U) glDeleteFramebuffers(1, &finalFramebuffer_);
+    if (sceneFramebuffer_ != 0U) glDeleteFramebuffers(1, &sceneFramebuffer_);
     if (multisampleFramebuffer_ != 0U) glDeleteFramebuffers(1, &multisampleFramebuffer_);
-    if (resolveFramebuffer_ != 0U) glDeleteFramebuffers(1, &resolveFramebuffer_);
-    depthStencil_ = 0U;
+    if (opaqueFramebuffer_ != 0U) glDeleteFramebuffers(1, &opaqueFramebuffer_);
+    multisampleDepthStencil_ = 0U;
     multisampleColor_ = 0U;
     finalColorTexture_ = 0U;
+    sceneDepthTexture_ = 0U;
     hdrColorTexture_ = 0U;
+    opaqueColorTexture_ = 0U;
     finalFramebuffer_ = 0U;
+    sceneFramebuffer_ = 0U;
     multisampleFramebuffer_ = 0U;
-    resolveFramebuffer_ = 0U;
+    opaqueFramebuffer_ = 0U;
     width_ = 0;
     height_ = 0;
     samples_ = 1;

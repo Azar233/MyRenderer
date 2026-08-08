@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <assimp/Importer.hpp>
+#include <assimp/GltfMaterial.h>
 #include <assimp/material.h>
 #include <assimp/matrix3x3.h>
 #include <assimp/postprocess.h>
@@ -402,6 +403,21 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
         }
         source.Get(AI_MATKEY_METALLIC_FACTOR, material.metallicFactor);
         source.Get(AI_MATKEY_ROUGHNESS_FACTOR, material.roughnessFactor);
+        aiString alphaMode;
+        if (source.Get(AI_MATKEY_GLTF_ALPHAMODE, alphaMode) == AI_SUCCESS) {
+            const std::string mode = lowercase(alphaMode.C_Str());
+            if (mode == "mask") {
+                material.alphaMode = MaterialAlphaMode::Mask;
+            } else if (mode == "blend") {
+                material.alphaMode = MaterialAlphaMode::Blend;
+            }
+        }
+        source.Get(AI_MATKEY_GLTF_ALPHACUTOFF, material.alphaCutoff);
+        material.alphaCutoff = std::max(material.alphaCutoff, 0.0f);
+        int doubleSided = 0;
+        if (source.Get(AI_MATKEY_TWOSIDED, doubleSided) == AI_SUCCESS) {
+            material.doubleSided = doubleSided != 0;
+        }
         material.baseColorTextureIndex = materialTexture(
             source,
             aiTextureType_BASE_COLOR,

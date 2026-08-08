@@ -6,7 +6,7 @@ in vec2 vTexCoord0;
 in vec4 vWorldTangent;
 in vec4 vShadowPosition;
 
-uniform vec3 uBaseColor;
+uniform vec4 uBaseColor;
 uniform sampler2D uBaseColorTexture;
 uniform sampler2D uNormalTexture;
 uniform sampler2D uMetallicRoughnessTexture;
@@ -28,6 +28,9 @@ uniform float uMetallicFactor;
 uniform float uRoughnessFactor;
 uniform float uEnvironmentIntensity;
 uniform float uEnvironmentMaxMip;
+uniform int uAlphaMode;
+uniform float uAlphaCutoff;
+uniform bool uDoubleSided;
 
 out vec4 fragmentColor;
 
@@ -70,6 +73,9 @@ float shadowVisibility(vec3 normal, vec3 lightDirection) {
 
 void main() {
     vec3 normal = normalize(vWorldNormal);
+    if (uDoubleSided && !gl_FrontFacing) {
+        normal = -normal;
+    }
     if (uNormalMappingEnabled && uHasNormalTexture && abs(vWorldTangent.w) > 0.5) {
         vec3 tangent = normalize(vWorldTangent.xyz - normal * dot(normal, vWorldTangent.xyz));
         vec3 bitangent = normalize(cross(normal, tangent)) * vWorldTangent.w;
@@ -77,7 +83,12 @@ void main() {
         normal = normalize(mat3(tangent, bitangent, normal) * tangentNormal);
     }
 
-    vec3 albedo = uBaseColor * texture(uBaseColorTexture, vTexCoord0).rgb;
+    vec4 baseColorSample = uBaseColor * texture(uBaseColorTexture, vTexCoord0);
+    if (uAlphaMode == 1 && baseColorSample.a < uAlphaCutoff) {
+        discard;
+    }
+    float outputAlpha = uAlphaMode == 2 ? baseColorSample.a : 1.0;
+    vec3 albedo = baseColorSample.rgb;
     vec2 materialSample = uHasMetallicRoughnessTexture
         ? texture(uMetallicRoughnessTexture, vTexCoord0).gb
         : vec2(1.0);
@@ -97,7 +108,7 @@ void main() {
         fragmentColor = vec4(
             uAmbientStrength * albedo
             + visibility * (uDiffuseStrength * nDotL * albedo + uSpecularStrength * specular),
-            1.0
+            outputAlpha
         );
         return;
     }
@@ -123,5 +134,5 @@ void main() {
         ambient = ((vec3(1.0) - environmentFresnel) * (1.0 - metallic) * albedo * diffuseEnvironment
             + specularEnvironment * environmentFresnel) * uEnvironmentIntensity;
     }
-    fragmentColor = vec4(ambient + visibility * direct, 1.0);
+    fragmentColor = vec4(ambient + visibility * direct, outputAlpha);
 }

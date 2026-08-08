@@ -118,17 +118,17 @@ void Renderer::render(
             shadowShader_->setMat4("uModel", modelMatrix);
             shadowShader_->setMat4("uLightViewProjection", lightViewProjection);
             model->drawDepth();
-            drawCallCount_ += model->submeshCount();
+            drawCallCount_ += model->opaqueSubmeshCount();
             glCullFace(GL_BACK);
         });
     }
-    sequence.add("HDR scene", [&] {
-        renderTarget_->bindScene();
+    sequence.add("Opaque HDR scene", [&] {
+        renderTarget_->bindOpaqueScene();
         glViewport(0, 0, width, height);
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_TRUE);
         glClearColor(settings.backgroundColor.r, settings.backgroundColor.g, settings.backgroundColor.b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         if (settings.skyboxEnabled) {
             glDisable(GL_DEPTH_TEST);
             environmentMap_->draw(glm::inverse(projection * view), camera.position(), settings.environmentIntensity);
@@ -148,13 +148,6 @@ void Renderer::render(
         }
 
         if (model != nullptr) {
-        if (settings.cullBackFaces) {
-            glEnable(GL_CULL_FACE);
-            glCullFace(GL_BACK);
-            glFrontFace(GL_CCW);
-        } else {
-            glDisable(GL_CULL_FACE);
-        }
         glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
 
         shader_->use();
@@ -178,13 +171,45 @@ void Renderer::render(
         shader_->setInt("uShadowMap", 4);
         environmentMap_->bind(3U);
         shadowMap_->bindTexture(4U);
-        model->draw(*shader_, settings.baseColor);
-        drawCallCount_ += model->submeshCount();
+        model->drawOpaque(*shader_, settings.baseColor, settings.cullBackFaces);
+        drawCallCount_ += model->opaqueSubmeshCount();
         }
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glDisable(GL_CULL_FACE);
-        renderTarget_->resolveScene();
+        renderTarget_->resolveOpaqueScene();
+    });
+    sequence.add("Forward transparent / refractive scene", [&] {
+        // Copy the opaque HDR result into a distinct output attachment. Future
+        // transmissive materials can sample opaqueColorTexture/sceneDepthTexture
+        // while drawing here without reading from the texture being written.
+        renderTarget_->bindRefractiveScene();
+        glViewport(0, 0, width, height);
+        if (model != nullptr && model->transparentSubmeshCount() > 0U) {
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glEnable(GL_BLEND);
+            glBlendFuncSeparate(
+                GL_SRC_ALPHA,
+                GL_ONE_MINUS_SRC_ALPHA,
+                GL_ONE,
+                GL_ONE_MINUS_SRC_ALPHA
+            );
+            glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
+            shader_->use();
+            model->drawTransparent(
+                *shader_,
+                settings.baseColor,
+                modelMatrix,
+                camera.position(),
+                settings.cullBackFaces
+            );
+            drawCallCount_ += model->transparentSubmeshCount();
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glDisable(GL_BLEND);
+            glDepthMask(GL_TRUE);
+            glDisable(GL_CULL_FACE);
+        }
     });
     sequence.add(settings.bloom ? "Bloom + tone map" : "Tone map", [&] {
         postProcessor_->process(*renderTarget_, PostProcessSettings{

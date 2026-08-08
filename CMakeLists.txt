@@ -194,6 +194,11 @@ add_custom_target(gpu-smoke
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/material_regression.obj
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/alpha_material_test.gltf
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=1
             MYRENDERER_RECOVERY_TEST=${CMAKE_CURRENT_SOURCE_DIR}/assets/models/does_not_exist.obj
             $<TARGET_FILE:MyRenderer>

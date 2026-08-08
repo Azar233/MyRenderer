@@ -90,6 +90,7 @@ private:
     float modelScale_{1.0f};
     std::size_t loadedMeshCount_{0};
     std::size_t loadedSubmeshCount_{0};
+    std::size_t loadedTransparentSubmeshCount_{0};
     std::size_t loadedVertexCount_{0};
     std::size_t loadedTriangleCount_{0};
     std::size_t loadedMaterialCount_{0};

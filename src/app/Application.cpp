@@ -499,6 +499,7 @@ void Application::drawInspectorPanel() {
             if (model_) {
                 ImGui::Text("Meshes: %zu", loadedMeshCount_);
                 ImGui::Text("Submeshes / draw calls: %zu", loadedSubmeshCount_);
+                ImGui::Text("Transparent submeshes: %zu", loadedTransparentSubmeshCount_);
                 ImGui::Text("Materials: %zu", loadedMaterialCount_);
                 ImGui::Text("Textures: %zu", loadedTextureCount_);
                 ImGui::Text("Decoded textures: %zu", loadedDecodedTextureCount_);
@@ -943,6 +944,7 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
     currentModelPath_ = path;
     loadedMeshCount_ = model_->meshCount();
     loadedSubmeshCount_ = model_->submeshCount();
+    loadedTransparentSubmeshCount_ = model_->transparentSubmeshCount();
     loadedVertexCount_ = model_->vertexCount();
     loadedTriangleCount_ = model_->triangleCount();
     loadedMaterialCount_ = model_->materialCount();
@@ -960,6 +962,7 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
     statusMessage_ = "Loaded " + currentModelPath_.filename().string() + " ("
                    + std::to_string(loadedMeshCount_) + " mesh, "
                    + std::to_string(loadedSubmeshCount_) + " submesh, "
+                   + std::to_string(loadedTransparentSubmeshCount_) + " transparent, "
                    + std::to_string(loadedVertexCount_) + " vertices, "
                    + std::to_string(loadedTriangleCount_) + " triangles, "
                    + std::to_string(loadedMaterialCount_) + " materials, "
