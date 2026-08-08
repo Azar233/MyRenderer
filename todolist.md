@@ -318,6 +318,7 @@ cmake --build build --config Debug
 - [ ] 不再把节点全局变换永久烘焙进顶点；保留 glTF Scene / Node 层级和实例关系，同一 Mesh 被多个 Node 引用时只上传一份 GPU 几何。
 - [ ] 将当前“程序化 Cubemap + 近似 IBL”升级为标准 Split-Sum IBL：HDR equirectangular 导入、Diffuse Irradiance、Prefiltered Specular Cubemap、BRDF LUT；提供近似版与标准版对照截图。
 - [ ] 改进方向光阴影：根据相机/场景 Bounds 拟合 Light Frustum，加入可调 Bias、Peter-panning / Acne 调试视图；随后再实现 3～4 级 CSM，不先堆更软的滤波。
+- [ ] 在 Light Frustum、Texel Snapping 与 Bias 稳定后增加可切换 PCSS：Blocker Search、Penumbra 估算、Poisson Disk 可变半径过滤，并保留 Hard / PCF 作为性能和画质对照；记录不同采样数的 GPU 时间。
 - [ ] 增加渲染调试视图：Albedo、World Normal、Roughness、Metallic、AO、Emissive、Depth、Shadow Cascade、Overdraw；每个视图在 Inspector 中可直接切换。
 
 #### 测试、性能与交付
@@ -352,17 +353,19 @@ Shadow / Depth
 - [x] 将现有 HDR Scene 拆成 Opaque Pass 与 Forward Refractive Pass，后者位于 Bloom / Tone Mapping 之前。
 - [x] 使用独立 Opaque Color 输入与 HDR Scene 输出，避免折射 Pass 同时采样和写入同一纹理形成 Framebuffer Feedback。
 - [x] 增加透明/折射渲染队列、后向前排序，以及独立的 Depth Test、Depth Write、Blend 状态。
-- [ ] 场景支持同时放置水晶主体、接收焦散的地面和辅助展示物体。
+- [x] 场景支持同时放置水晶主体、接收焦散的地面和辅助展示物体。
 
-> Glass-0 进度（2026-08-08）：`RenderTarget` 已拆分 Opaque HDR Color、最终 HDR Scene Color 和可采样 `GL_DEPTH24_STENCIL8`；1x 直接写入纹理附件，4x MSAA 同时 Resolve Color/Depth/Stencil。`Renderer` 当前按 `Opaque HDR scene → Forward transparent/refractive scene → Bloom/Tone map` 执行；已接入 glTF OPAQUE/MASK/BLEND、Alpha Cutoff、双面法线、透明子网格后向前排序、Depth Test 开启/Depth Write 关闭和标准 Over 混合。新增 `alpha_material_test.gltf` 覆盖两个重叠 BLEND 子网格；MinGW 构建、CTest、1x/4x 真实 OpenGL smoke 与截图验证通过。下一项为多对象场景与真实接收地面。
+> Glass-0 完成（2026-08-08）：`RenderTarget` 已拆分 Opaque HDR Color、最终 HDR Scene Color 和可采样 `GL_DEPTH24_STENCIL8`；1x 直接写入纹理附件，4x MSAA 同时 Resolve Color/Depth/Stencil。`Renderer` 按 `Opaque HDR scene → Forward transparent/refractive scene → Bloom/Tone map` 执行，并通过多个 `RenderItem` 同时提交主体、程序化阴影接收地面和可选对照实例。glTF OPAQUE/MASK/BLEND、Alpha Cutoff、双面法线、全场景透明 Draw List 后向前稳定排序、Depth Test 开启/Depth Write 关闭和标准 Over 混合均已接入。`alpha_material_test.gltf` 与 `MYRENDERER_SCENE_DEMO=1` 覆盖跨对象透明排序；MinGW 构建、2 项 CTest、4x MSAA 真实 OpenGL smoke 与截图验证通过。下一阶段进入 Glass-1：Dielectric Transmission、Fresnel、IOR 与屏幕空间折射。
 
 #### Glass-1：玻璃反射与折射
 
-- [ ] 增加 Dielectric Transmission 材质路径，支持 IOR、Transmission、Roughness 和 Fresnel。
-- [ ] 使用 Snell 定律计算折射方向并处理 Total Internal Reflection。
-- [ ] 实现屏幕空间折射：根据法线、IOR 和厚度采样 Opaque Scene Color / Depth；屏幕外或追踪失败时回退到 Prefiltered Environment Cubemap。
-- [ ] 为粗糙玻璃生成 Opaque Scene Color Mip，按 Roughness 采样模糊背景或预过滤环境。
-- [ ] 增加 Reflection、Refraction、IOR 与 Refracted UV 调试视图。
+- [x] 增加 Dielectric Transmission 材质路径，支持 IOR、Transmission、Roughness 和 Fresnel。
+- [x] 使用 Snell 定律计算折射方向并处理 Total Internal Reflection。
+- [x] 实现屏幕空间折射：根据法线、IOR 和厚度代理采样 Opaque Scene Color / Depth；屏幕外或追踪失败时回退到 Prefiltered Environment Cubemap。
+- [x] 为粗糙玻璃生成 Opaque Scene Color Mip，按 Roughness 采样模糊背景或预过滤环境。
+- [x] 增加 Reflection、Refraction、IOR 与 Refracted UV 调试视图。
+
+> Glass-1 完成（2026-08-08）：已通过 Assimp 接入 `KHR_materials_transmission` 与 `KHR_materials_ior`，并保持光学透射和 `alphaMode` 覆盖率语义相互独立。Transmissive OPAQUE 材质进入 Refractive Queue；Shader 使用 IOR 计算介质 F0、Schlick Fresnel、Snell 折射和 Total Internal Reflection。屏幕空间折射沿折射方向执行最多 32 步 Opaque Depth Ray March，Refraction Scale 作为 Glass-2 真实厚度完成前的最大追踪距离代理；命中后按 Roughness 选择 Opaque HDR Mip，越界、遮挡失败或全反射时回退到预过滤环境 Cubemap。Refractive FBO 使用独立 Depth/Stencil Renderbuffer，避免 Depth Feedback。Inspector 提供 Transmission、Scale、Steps 和 Final/Reflection/Refraction/IOR/Refracted UV 视图。`glass_material_test.gltf` 同时覆盖光滑/粗糙玻璃、两个 IOR 和背景物体；2 项 CTest、完整 GPU smoke 与 4x MSAA Final/Debug 截图通过。下一阶段进入 Glass-2：真实 Thickness、Beer-Lambert 体积吸收和 RGB 光谱色散。
 
 #### Glass-2：厚度、体积吸收与光谱色散
 

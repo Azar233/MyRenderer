@@ -27,6 +27,7 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
     int samples() const { return samples_; }
+    int opaqueColorMaximumMipLevel() const { return opaqueColorMipLevels_ - 1; }
 
 private:
     unsigned int opaqueFramebuffer_{0};
@@ -35,6 +36,7 @@ private:
     unsigned int multisampleFramebuffer_{0};
     unsigned int multisampleColor_{0};
     unsigned int multisampleDepthStencil_{0};
+    unsigned int refractiveDepthStencil_{0};
     unsigned int opaqueColorTexture_{0};
     unsigned int hdrColorTexture_{0};
     unsigned int sceneDepthTexture_{0};
@@ -42,4 +44,5 @@ private:
     int width_{0};
     int height_{0};
     int samples_{1};
+    int opaqueColorMipLevels_{1};
 };

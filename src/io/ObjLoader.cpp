@@ -257,6 +257,9 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
         if (sourceMaterial.roughness > 0.0) {
             material.roughnessFactor = std::clamp(static_cast<float>(sourceMaterial.roughness), 0.04f, 1.0f);
         }
+        if (sourceMaterial.ior >= 1.0) {
+            material.indexOfRefraction = static_cast<float>(sourceMaterial.ior);
+        }
         result.model.materials.push_back(std::move(material));
     }
 

@@ -110,6 +110,7 @@ add_executable(MyRenderer
     src/render/PostProcessor.cpp
     src/render/RenderTarget.cpp
     src/render/Renderer.cpp
+    src/render/SceneDrawList.cpp
     src/render/Shader.cpp
     src/render/ShadowMap.cpp
     src/render/Texture2D.cpp
@@ -184,6 +185,19 @@ if(BUILD_TESTING)
         target_compile_options(MyRendererAssetTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME asset-import COMMAND MyRendererAssetTests)
+
+    add_executable(MyRendererSceneTests
+        tests/SceneDrawListTests.cpp
+        src/render/SceneDrawList.cpp
+    )
+    target_include_directories(MyRendererSceneTests PRIVATE src)
+    target_link_libraries(MyRendererSceneTests PRIVATE glm::glm)
+    if(MSVC)
+        target_compile_options(MyRendererSceneTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererSceneTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME scene-draw-list COMMAND MyRendererSceneTests)
 endif()
 
 add_custom_target(gpu-smoke
@@ -195,8 +209,14 @@ add_custom_target(gpu-smoke
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=4
+            MYRENDERER_SCENE_DEMO=1
             $<TARGET_FILE:MyRenderer>
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/alpha_material_test.gltf
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/glass_material_test.gltf
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=1

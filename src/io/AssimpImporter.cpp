@@ -403,6 +403,12 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
         }
         source.Get(AI_MATKEY_METALLIC_FACTOR, material.metallicFactor);
         source.Get(AI_MATKEY_ROUGHNESS_FACTOR, material.roughnessFactor);
+        source.Get(AI_MATKEY_TRANSMISSION_FACTOR, material.transmissionFactor);
+        source.Get(AI_MATKEY_REFRACTI, material.indexOfRefraction);
+        material.transmissionFactor = std::clamp(material.transmissionFactor, 0.0f, 1.0f);
+        if (material.indexOfRefraction < 1.0f) {
+            material.indexOfRefraction = 1.5f;
+        }
         aiString alphaMode;
         if (source.Get(AI_MATKEY_GLTF_ALPHAMODE, alphaMode) == AI_SUCCESS) {
             const std::string mode = lowercase(alphaMode.C_Str());

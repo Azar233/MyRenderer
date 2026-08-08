@@ -6,6 +6,7 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/vec4.hpp>
 
 #include "render/Camera.h"
 #include "render/DebugGrid.h"
@@ -14,6 +15,7 @@
 #include "render/PostProcessor.h"
 #include "render/RenderPassSequence.h"
 #include "render/RenderTarget.h"
+#include "render/SceneDrawList.h"
 #include "render/Shader.h"
 #include "render/ShadowMap.h"
 #include "render/Texture2D.h"
@@ -50,9 +52,8 @@ Renderer::~Renderer() {
 }
 
 void Renderer::render(
-    const GpuModel* model,
+    const std::vector<RenderItem>& renderItems,
     const Camera& camera,
-    const glm::mat4& modelMatrix,
     const RendererSettings& settings,
     int width,
     int height
@@ -97,16 +98,83 @@ void Renderer::render(
         lightDirection = glm::vec3(-0.45f, -0.8f, -0.35f);
     }
     lightDirection = glm::normalize(lightDirection);
-    const glm::vec3 modelCenter = glm::vec3(modelMatrix[3]);
+    glm::vec3 sceneCenter(0.0f);
+    bool hasVisibleItems = false;
+    bool hasShadowCasters = false;
+    for (const RenderItem& item : renderItems) {
+        if (!item.visible || item.model == nullptr) {
+            continue;
+        }
+        if (!hasVisibleItems) {
+            sceneCenter = glm::vec3(item.modelMatrix[3]);
+            hasVisibleItems = true;
+        }
+        hasShadowCasters |= item.castsShadow && item.model->opaqueSubmeshCount() > 0U;
+    }
     glm::vec3 lightUp(0.0f, 1.0f, 0.0f);
     if (std::abs(glm::dot(lightDirection, lightUp)) > 0.96f) lightUp = glm::vec3(0.0f, 0.0f, 1.0f);
-    const glm::mat4 lightView = glm::lookAt(modelCenter - lightDirection * 6.0f, modelCenter, lightUp);
+    const glm::mat4 lightView = glm::lookAt(sceneCenter - lightDirection * 6.0f, sceneCenter, lightUp);
     const glm::mat4 lightProjection = glm::ortho(-4.0f, 4.0f, -4.0f, 4.0f, 0.1f, 16.0f);
     const glm::mat4 lightViewProjection = lightProjection * lightView;
 
+    std::vector<TransparentSortEntry> transparentDraws;
+    for (std::size_t itemIndex = 0; itemIndex < renderItems.size(); ++itemIndex) {
+        const RenderItem& item = renderItems[itemIndex];
+        if (!item.visible || item.model == nullptr) {
+            continue;
+        }
+        for (std::size_t submeshIndex = 0;
+             submeshIndex < item.model->transparentSubmeshCount();
+             ++submeshIndex) {
+            const glm::vec3 worldCenter = glm::vec3(
+                item.modelMatrix
+                * glm::vec4(item.model->transparentSubmeshCenter(submeshIndex), 1.0f)
+            );
+            transparentDraws.push_back(TransparentSortEntry{
+                itemIndex,
+                submeshIndex,
+                worldCenter
+            });
+        }
+    }
+    sortTransparentBackToFront(transparentDraws, camera.position());
+
+    const auto bindSceneShader = [&] {
+        shader_->use();
+        shader_->setMat4("uView", view);
+        shader_->setMat4("uProjection", projection);
+        shader_->setMat4("uLightViewProjection", lightViewProjection);
+        shader_->setVec3("uLightDirection", lightDirection);
+        shader_->setVec3("uCameraPosition", camera.position());
+        shader_->setFloat("uAmbientStrength", settings.ambientStrength);
+        shader_->setFloat("uDiffuseStrength", settings.diffuseStrength);
+        shader_->setFloat("uSpecularStrength", settings.specularStrength);
+        shader_->setFloat("uShininess", settings.shininess);
+        shader_->setBool("uNormalMappingEnabled", settings.normalMapping);
+        shader_->setBool("uPbrEnabled", settings.pbrEnabled);
+        shader_->setBool("uIblEnabled", settings.iblEnabled);
+        shader_->setBool("uShadowsEnabled", settings.shadowsEnabled);
+        shader_->setBool("uTransmissionEnabled", settings.transmissionEnabled);
+        shader_->setFloat("uRefractionScale", settings.refractionScale);
+        shader_->setInt("uRefractionSteps", settings.refractionSteps);
+        shader_->setInt("uGlassDebugView", static_cast<int>(settings.glassDebugView));
+        shader_->setFloat(
+            "uOpaqueColorMaxMip",
+            static_cast<float>(renderTarget_->opaqueColorMaximumMipLevel())
+        );
+        shader_->setFloat("uEnvironmentIntensity", settings.environmentIntensity);
+        shader_->setFloat("uEnvironmentMaxMip", static_cast<float>(environmentMap_->maximumMipLevel()));
+        shader_->setInt("uEnvironmentMap", 3);
+        shader_->setInt("uShadowMap", 4);
+        shader_->setInt("uOpaqueColorTexture", 5);
+        shader_->setInt("uSceneDepthTexture", 6);
+        environmentMap_->bind(3U);
+        shadowMap_->bindTexture(4U);
+    };
+
     drawCallCount_ = 0U;
     RenderPassSequence sequence;
-    if (settings.shadowsEnabled && model != nullptr) {
+    if (settings.shadowsEnabled && hasShadowCasters) {
         sequence.add("Shadow map", [&] {
             shadowMap_->bindForWriting();
             glViewport(0, 0, shadowMap_->resolution(), shadowMap_->resolution());
@@ -115,15 +183,25 @@ void Renderer::render(
             glCullFace(GL_FRONT);
             glClear(GL_DEPTH_BUFFER_BIT);
             shadowShader_->use();
-            shadowShader_->setMat4("uModel", modelMatrix);
             shadowShader_->setMat4("uLightViewProjection", lightViewProjection);
-            model->drawDepth();
-            drawCallCount_ += model->opaqueSubmeshCount();
+            for (const RenderItem& item : renderItems) {
+                if (!item.visible || !item.castsShadow || item.model == nullptr) {
+                    continue;
+                }
+                shadowShader_->setMat4("uModel", item.modelMatrix);
+                item.model->drawDepth();
+                drawCallCount_ += item.model->opaqueSubmeshCount();
+            }
             glCullFace(GL_BACK);
+            glDisable(GL_CULL_FACE);
         });
     }
     sequence.add("Opaque HDR scene", [&] {
         renderTarget_->bindOpaqueScene();
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, 0);
         glViewport(0, 0, width, height);
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_TRUE);
@@ -147,32 +225,17 @@ void Renderer::render(
         glDepthMask(GL_TRUE);
         }
 
-        if (model != nullptr) {
-        glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
-
-        shader_->use();
-        shader_->setMat4("uModel", modelMatrix);
-        shader_->setMat4("uView", view);
-        shader_->setMat4("uProjection", projection);
-        shader_->setMat4("uLightViewProjection", lightViewProjection);
-        shader_->setVec3("uLightDirection", lightDirection);
-        shader_->setVec3("uCameraPosition", camera.position());
-        shader_->setFloat("uAmbientStrength", settings.ambientStrength);
-        shader_->setFloat("uDiffuseStrength", settings.diffuseStrength);
-        shader_->setFloat("uSpecularStrength", settings.specularStrength);
-        shader_->setFloat("uShininess", settings.shininess);
-        shader_->setBool("uNormalMappingEnabled", settings.normalMapping);
-        shader_->setBool("uPbrEnabled", settings.pbrEnabled);
-        shader_->setBool("uIblEnabled", settings.iblEnabled);
-        shader_->setBool("uShadowsEnabled", settings.shadowsEnabled);
-        shader_->setFloat("uEnvironmentIntensity", settings.environmentIntensity);
-        shader_->setFloat("uEnvironmentMaxMip", static_cast<float>(environmentMap_->maximumMipLevel()));
-        shader_->setInt("uEnvironmentMap", 3);
-        shader_->setInt("uShadowMap", 4);
-        environmentMap_->bind(3U);
-        shadowMap_->bindTexture(4U);
-        model->drawOpaque(*shader_, settings.baseColor, settings.cullBackFaces);
-        drawCallCount_ += model->opaqueSubmeshCount();
+        if (hasVisibleItems) {
+            glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
+            bindSceneShader();
+            for (const RenderItem& item : renderItems) {
+                if (!item.visible || item.model == nullptr) {
+                    continue;
+                }
+                shader_->setMat4("uModel", item.modelMatrix);
+                item.model->drawOpaque(*shader_, item.tint, settings.cullBackFaces);
+                drawCallCount_ += item.model->opaqueSubmeshCount();
+            }
         }
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -185,7 +248,11 @@ void Renderer::render(
         // while drawing here without reading from the texture being written.
         renderTarget_->bindRefractiveScene();
         glViewport(0, 0, width, height);
-        if (model != nullptr && model->transparentSubmeshCount() > 0U) {
+        if (!transparentDraws.empty()) {
+            glActiveTexture(GL_TEXTURE5);
+            glBindTexture(GL_TEXTURE_2D, renderTarget_->opaqueColorTexture());
+            glActiveTexture(GL_TEXTURE6);
+            glBindTexture(GL_TEXTURE_2D, renderTarget_->sceneDepthTexture());
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
             glEnable(GL_BLEND);
@@ -196,19 +263,26 @@ void Renderer::render(
                 GL_ONE_MINUS_SRC_ALPHA
             );
             glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
-            shader_->use();
-            model->drawTransparent(
-                *shader_,
-                settings.baseColor,
-                modelMatrix,
-                camera.position(),
-                settings.cullBackFaces
-            );
-            drawCallCount_ += model->transparentSubmeshCount();
+            bindSceneShader();
+            for (const TransparentSortEntry& draw : transparentDraws) {
+                const RenderItem& item = renderItems[draw.renderItemIndex];
+                shader_->setMat4("uModel", item.modelMatrix);
+                item.model->drawTransparentSubmesh(
+                    *shader_,
+                    item.tint,
+                    draw.transparentSubmeshIndex,
+                    settings.cullBackFaces
+                );
+                ++drawCallCount_;
+            }
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             glDisable(GL_BLEND);
             glDepthMask(GL_TRUE);
             glDisable(GL_CULL_FACE);
+            glActiveTexture(GL_TEXTURE6);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glActiveTexture(GL_TEXTURE5);
+            glBindTexture(GL_TEXTURE_2D, 0);
         }
     });
     sequence.add(settings.bloom ? "Bloom + tone map" : "Tone map", [&] {

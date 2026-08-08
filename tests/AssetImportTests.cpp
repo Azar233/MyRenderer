@@ -92,6 +92,27 @@ int main() {
         require(blended->baseColorFactor.a < 0.5f, "BLEND alpha should survive glTF import");
         require(blendedNear->alphaMode == MaterialAlphaMode::Blend, "second BLEND mode should survive import");
 
+        const ModelImportResult glass = assimp.load(asset("glass_material_test.gltf"));
+        const MaterialData* dielectricGlass = findMaterial(glass, "DielectricGlass");
+        require(dielectricGlass != nullptr, "glass fixture should preserve its material");
+        require(
+            dielectricGlass->alphaMode == MaterialAlphaMode::Opaque,
+            "optical transmission should remain independent from alpha coverage"
+        );
+        require(
+            dielectricGlass->transmissionFactor > 0.9f,
+            "KHR_materials_transmission factor should survive import"
+        );
+        require(
+            dielectricGlass->indexOfRefraction > 1.5f
+                && dielectricGlass->indexOfRefraction < 1.53f,
+            "KHR_materials_ior should survive import"
+        );
+        const MaterialData* roughGlass = findMaterial(glass, "RoughDielectricGlass");
+        require(roughGlass != nullptr, "glass fixture should preserve its rough material");
+        require(roughGlass->roughnessFactor > 0.5f, "rough glass should preserve roughness");
+        require(roughGlass->transmissionFactor > 0.8f, "rough glass should preserve transmission");
+
         const ModelImportResult dae = assimp.load(asset("textured_quad.dae"));
         require(!dae.model.meshes.empty(), "DAE fixture should import a mesh");
         require(!dae.model.textures.empty(), "DAE fixture should import its external texture reference");

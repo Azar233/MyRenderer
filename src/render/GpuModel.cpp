@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 #include <glad/gl.h>
 #include <glm/geometric.hpp>
@@ -61,6 +62,8 @@ GpuModel::GpuModel(
         material.baseColorFactor = materialData.baseColorFactor;
         material.metallicFactor = std::clamp(materialData.metallicFactor, 0.0f, 1.0f);
         material.roughnessFactor = std::clamp(materialData.roughnessFactor, 0.04f, 1.0f);
+        material.transmissionFactor = std::clamp(materialData.transmissionFactor, 0.0f, 1.0f);
+        material.indexOfRefraction = std::max(materialData.indexOfRefraction, 1.0f);
         material.alphaMode = materialData.alphaMode;
         material.alphaCutoff = std::max(materialData.alphaCutoff, 0.0f);
         material.doubleSided = materialData.doubleSided;
@@ -104,7 +107,8 @@ GpuModel::GpuModel(
             const std::int32_t materialIndex = mesh.submeshMaterialIndex(submeshIndex);
             const bool isBlended = materialIndex >= 0
                 && static_cast<std::size_t>(materialIndex) < materials_.size()
-                && materials_[static_cast<std::size_t>(materialIndex)].alphaMode == MaterialAlphaMode::Blend;
+                && (materials_[static_cast<std::size_t>(materialIndex)].alphaMode == MaterialAlphaMode::Blend
+                    || materials_[static_cast<std::size_t>(materialIndex)].transmissionFactor > 0.0f);
             DrawCommand command{
                 meshIndex,
                 submeshIndex,
@@ -149,6 +153,8 @@ const GpuModel::GpuMaterial* GpuModel::bindMaterial(
     );
     shader.setFloat("uMetallicFactor", material == nullptr ? 0.0f : material->metallicFactor);
     shader.setFloat("uRoughnessFactor", material == nullptr ? 1.0f : material->roughnessFactor);
+    shader.setFloat("uTransmissionFactor", material == nullptr ? 0.0f : material->transmissionFactor);
+    shader.setFloat("uIndexOfRefraction", material == nullptr ? 1.5f : material->indexOfRefraction);
     shader.setInt(
         "uAlphaMode",
         material == nullptr ? 0 : static_cast<int>(material->alphaMode)
@@ -177,32 +183,27 @@ void GpuModel::drawOpaque(const Shader& shader, const glm::vec3& tint, bool cull
     }
 }
 
-void GpuModel::drawTransparent(
+void GpuModel::drawTransparentSubmesh(
     const Shader& shader,
     const glm::vec3& tint,
-    const glm::mat4& modelMatrix,
-    const glm::vec3& cameraPosition,
+    std::size_t transparentSubmeshIndex,
     bool cullBackFaces
 ) const {
-    std::vector<const DrawCommand*> sorted;
-    sorted.reserve(transparentDrawCommands_.size());
-    for (const DrawCommand& command : transparentDrawCommands_) {
-        sorted.push_back(&command);
+    if (transparentSubmeshIndex >= transparentDrawCommands_.size()) {
+        throw std::out_of_range("Transparent submesh index is out of range");
     }
-    std::sort(sorted.begin(), sorted.end(), [&](const DrawCommand* left, const DrawCommand* right) {
-        const glm::vec3 leftCenter = glm::vec3(modelMatrix * glm::vec4(left->localCenter, 1.0f));
-        const glm::vec3 rightCenter = glm::vec3(modelMatrix * glm::vec4(right->localCenter, 1.0f));
-        const glm::vec3 leftDelta = leftCenter - cameraPosition;
-        const glm::vec3 rightDelta = rightCenter - cameraPosition;
-        return glm::dot(leftDelta, leftDelta) > glm::dot(rightDelta, rightDelta);
-    });
-
+    const DrawCommand& command = transparentDrawCommands_[transparentSubmeshIndex];
     const glm::vec3 linearTint = srgbToLinear(tint);
-    for (const DrawCommand* command : sorted) {
-        const GpuMaterial* material = bindMaterial(shader, linearTint, command->materialIndex);
-        applyCullState(material, cullBackFaces);
-        meshes_[command->meshIndex]->drawSubmesh(command->submeshIndex);
+    const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
+    applyCullState(material, cullBackFaces);
+    meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
+}
+
+const glm::vec3& GpuModel::transparentSubmeshCenter(std::size_t transparentSubmeshIndex) const {
+    if (transparentSubmeshIndex >= transparentDrawCommands_.size()) {
+        throw std::out_of_range("Transparent submesh index is out of range");
     }
+    return transparentDrawCommands_[transparentSubmeshIndex].localCenter;
 }
 
 void GpuModel::drawDepth() const {

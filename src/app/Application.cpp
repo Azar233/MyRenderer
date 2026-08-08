@@ -61,6 +61,37 @@ const char* diagnosticSeverityName(ModelDiagnosticSeverity severity) {
     return "Unknown";
 }
 
+ModelData makeGroundPlaneData() {
+    constexpr float halfExtent = 4.0f;
+    MeshData mesh;
+    mesh.name = "Ground receiver";
+    mesh.vertices = {
+        Vertex{glm::vec3(-halfExtent, 0.0f, -halfExtent), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 0.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)},
+        Vertex{glm::vec3( halfExtent, 0.0f, -halfExtent), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(4.0f, 0.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)},
+        Vertex{glm::vec3( halfExtent, 0.0f,  halfExtent), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(4.0f, 4.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)},
+        Vertex{glm::vec3(-halfExtent, 0.0f,  halfExtent), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 4.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)}
+    };
+    mesh.indices = {0U, 2U, 1U, 0U, 3U, 2U};
+    mesh.submeshes.push_back(SubmeshData{"Ground receiver", 0U, 6U, 0});
+    mesh.boundsMin = glm::vec3(-halfExtent, 0.0f, -halfExtent);
+    mesh.boundsMax = glm::vec3(halfExtent, 0.0f, halfExtent);
+
+    MaterialData material;
+    material.name = "Ground matte";
+    material.roughnessFactor = 0.82f;
+    material.metallicFactor = 0.0f;
+
+    ModelData model;
+    model.name = "Procedural ground receiver";
+    model.meshes.push_back(std::move(mesh));
+    model.materials.push_back(std::move(material));
+    model.rootNode.name = "Ground root";
+    model.rootNode.meshIndices.push_back(0U);
+    model.boundsMin = glm::vec3(-halfExtent, 0.0f, -halfExtent);
+    model.boundsMax = glm::vec3(halfExtent, 0.0f, halfExtent);
+    return model;
+}
+
 } // namespace
 
 Application::Application()
@@ -84,6 +115,19 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_IBL")) rendererSettings_.iblEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_SHADOWS")) rendererSettings_.shadowsEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_BLOOM")) rendererSettings_.bloom = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_TRANSMISSION")) rendererSettings_.transmissionEnabled = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_REFRACTION_SCALE")) {
+        rendererSettings_.refractionScale = std::clamp(std::strtof(value, nullptr), 0.0f, 0.8f);
+    }
+    if (const char* value = std::getenv("MYRENDERER_REFRACTION_STEPS")) {
+        rendererSettings_.refractionSteps = std::clamp(std::atoi(value), 4, 32);
+    }
+    if (const char* value = std::getenv("MYRENDERER_GLASS_DEBUG")) {
+        rendererSettings_.glassDebugView = static_cast<GlassDebugView>(
+            std::clamp(std::atoi(value), 0, 4)
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_SCENE_DEMO")) showComparisonObject_ = std::atoi(value) != 0;
 
     std::filesystem::path modelToLoad = initialModel;
     if (modelToLoad.empty()) {
@@ -272,6 +316,12 @@ void Application::initializeRenderer() {
         sourceRoot_ / "shaders" / "debug_lines.vert",
         sourceRoot_ / "shaders" / "debug_lines.frag"
     );
+    std::vector<TextureUploadWarning> warnings;
+    groundModel_ = std::make_unique<GpuModel>(
+        makeGroundPlaneData(),
+        renderer_->textureCache(),
+        warnings
+    );
 }
 
 void Application::initializeImporters() {
@@ -297,6 +347,7 @@ void Application::shutdown() {
     if (window_ != nullptr) {
         glfwMakeContextCurrent(window_);
         model_.reset();
+        groundModel_.reset();
         renderer_.reset();
     }
     if (guiInitialized_) {
@@ -359,6 +410,8 @@ void Application::drawMainMenu() {
         ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
         ImGui::Separator();
         ImGui::MenuItem("Ground grid", nullptr, &rendererSettings_.showGrid);
+        ImGui::MenuItem("Ground plane", nullptr, &showGroundPlane_);
+        ImGui::MenuItem("Comparison object", nullptr, &showComparisonObject_);
         ImGui::MenuItem("XYZ axes", nullptr, &rendererSettings_.showAxes);
         ImGui::MenuItem("Auto rotate", nullptr, &autoRotate_);
         ImGui::EndMenu();
@@ -389,7 +442,7 @@ void Application::drawScenePanel() {
         return;
     }
 
-    ImGui::SeparatorText("Current mesh");
+    ImGui::SeparatorText("Scene objects");
     if (model_) {
         const std::string currentMeshLabel = currentModelPath_.filename().string() + "##CurrentMesh";
         ImGui::TreeNodeEx(currentMeshLabel.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_DefaultOpen);
@@ -398,6 +451,14 @@ void Application::drawScenePanel() {
         ImGui::TextDisabled("Submeshes: %zu", loadedSubmeshCount_);
         ImGui::TextDisabled("Vertices: %zu", loadedVertexCount_);
         ImGui::TextDisabled("Triangles: %zu", loadedTriangleCount_);
+        if (showGroundPlane_) {
+            ImGui::TreeNodeEx("Ground receiver", ImGuiTreeNodeFlags_Leaf);
+            ImGui::TreePop();
+        }
+        if (showComparisonObject_) {
+            ImGui::TreeNodeEx("Comparison instance", ImGuiTreeNodeFlags_Leaf);
+            ImGui::TreePop();
+        }
     } else {
         ImGui::TextDisabled("No model loaded");
     }
@@ -488,6 +549,12 @@ void Application::drawInspectorPanel() {
                 camera_.reset(modelPosition_);
             }
 
+            ImGui::SeparatorText("Stage");
+            ImGui::Checkbox("Ground receiver", &showGroundPlane_);
+            ImGui::ColorEdit3("Ground color", &groundColor_.x);
+            ImGui::DragFloat("Ground offset", &groundOffset_, 0.01f, -3.0f, 0.0f, "%.2f");
+            ImGui::Checkbox("Comparison object", &showComparisonObject_);
+
             ImGui::SeparatorText("Material");
             ImGui::ColorEdit3("Base color tint", &rendererSettings_.baseColor.x);
             ImGui::SliderFloat("Ambient", &rendererSettings_.ambientStrength, 0.0f, 1.0f);
@@ -520,6 +587,26 @@ void Application::drawInspectorPanel() {
             ImGui::Checkbox("Image-based lighting", &rendererSettings_.iblEnabled);
             ImGui::Checkbox("Skybox", &rendererSettings_.skyboxEnabled);
             ImGui::Checkbox("Shadow mapping", &rendererSettings_.shadowsEnabled);
+            ImGui::Checkbox("Dielectric transmission", &rendererSettings_.transmissionEnabled);
+            ImGui::SliderFloat(
+                "Refraction scale",
+                &rendererSettings_.refractionScale,
+                0.0f,
+                0.8f,
+                "%.3f"
+            );
+            ImGui::SliderInt("Refraction steps", &rendererSettings_.refractionSteps, 4, 32);
+            int glassDebugView = static_cast<int>(rendererSettings_.glassDebugView);
+            const char* glassDebugViews[] = {
+                "Final",
+                "Reflection",
+                "Refraction",
+                "IOR",
+                "Refracted UV"
+            };
+            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 5)) {
+                rendererSettings_.glassDebugView = static_cast<GlassDebugView>(glassDebugView);
+            }
             ImGui::SliderFloat("Environment", &rendererSettings_.environmentIntensity, 0.0f, 2.0f, "%.2f");
             ImGui::TextDisabled("Shadow map: %d x %d", renderer_->shadowResolution(), renderer_->shadowResolution());
 
@@ -620,6 +707,8 @@ void Application::drawViewportPanel() {
     ImGui::SameLine();
     ImGui::Checkbox("Grid", &rendererSettings_.showGrid);
     ImGui::SameLine();
+    ImGui::Checkbox("Ground", &showGroundPlane_);
+    ImGui::SameLine();
     ImGui::Checkbox("Axes", &rendererSettings_.showAxes);
     ImGui::SameLine();
     ImGui::TextDisabled("RMB orbit | MMB pan | Wheel zoom");
@@ -638,7 +727,51 @@ void Application::drawViewportPanel() {
     modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.x), glm::vec3(1.0f, 0.0f, 0.0f));
     modelMatrix = glm::scale(modelMatrix, glm::vec3(modelScale_));
     modelMatrix *= normalization;
-    renderer_->render(model_.get(), camera_, modelMatrix, rendererSettings_, width, height);
+
+    std::vector<RenderItem> renderItems;
+    if (model_ != nullptr) {
+        renderItems.push_back(RenderItem{
+            model_.get(),
+            modelMatrix,
+            rendererSettings_.baseColor,
+            true,
+            true
+        });
+        if (showComparisonObject_) {
+            glm::mat4 comparisonMatrix = glm::translate(
+                glm::mat4(1.0f),
+                modelPosition_ + glm::vec3(0.95f, 0.0f, 0.35f)
+            );
+            comparisonMatrix = glm::rotate(
+                comparisonMatrix,
+                glm::radians(-28.0f),
+                glm::vec3(0.0f, 1.0f, 0.0f)
+            );
+            comparisonMatrix = glm::scale(comparisonMatrix, glm::vec3(modelScale_ * 0.50f));
+            comparisonMatrix *= normalization;
+            renderItems.push_back(RenderItem{
+                model_.get(),
+                comparisonMatrix,
+                glm::vec3(0.72f, 0.82f, 1.0f),
+                true,
+                true
+            });
+        }
+    }
+    if (showGroundPlane_ && groundModel_ != nullptr) {
+        const glm::mat4 groundMatrix = glm::translate(
+            glm::mat4(1.0f),
+            glm::vec3(modelPosition_.x, modelPosition_.y + groundOffset_ * modelScale_, modelPosition_.z)
+        );
+        renderItems.push_back(RenderItem{
+            groundModel_.get(),
+            groundMatrix,
+            groundColor_,
+            true,
+            false
+        });
+    }
+    renderer_->render(renderItems, camera_, rendererSettings_, width, height);
 
     if (!pendingScreenshotPath_.empty() && model_ != nullptr && !pendingModelImport_.has_value()) {
         std::string screenshotError;

@@ -50,6 +50,8 @@ struct MaterialData {
     std::int32_t metallicRoughnessTextureIndex{-1};
     float metallicFactor{0.0f};
     float roughnessFactor{1.0f};
+    float transmissionFactor{0.0f};
+    float indexOfRefraction{1.5f};
     MaterialAlphaMode alphaMode{MaterialAlphaMode::Opaque};
     float alphaCutoff{0.5f};
     bool doubleSided{false};

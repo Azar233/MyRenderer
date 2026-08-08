@@ -1,0 +1,73 @@
+{
+  "asset": {"version": "2.0", "generator": "MyRenderer Glass-1 regression fixture"},
+  "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_ior"],
+  "scene": 0,
+  "scenes": [{"nodes": [0, 1, 2, 3]}],
+  "nodes": [
+    {"name": "TransmissionCrystal", "mesh": 0, "translation": [0.0, 0.08, 0.45]},
+    {"name": "WarmBackground", "mesh": 1, "translation": [-0.52, -0.08, -0.38], "scale": [1.05, 1.05, 1.05]},
+    {"name": "CoolBackground", "mesh": 2, "translation": [0.72, 0.10, -0.82], "scale": [0.62, 0.62, 0.62]},
+    {"name": "RoughTransmissionCrystal", "mesh": 3, "translation": [0.92, -0.08, 0.28], "scale": [0.52, 0.52, 0.52]}
+  ],
+  "meshes": [
+    {"name": "TransmissionCrystal", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 0}]},
+    {"name": "WarmBackground", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 1}]},
+    {"name": "CoolBackground", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 2}]},
+    {"name": "RoughTransmissionCrystal", "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 3}]}
+  ],
+  "materials": [{
+    "name": "DielectricGlass",
+    "alphaMode": "OPAQUE",
+    "doubleSided": true,
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.82, 0.94, 1.0, 1.0],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.08
+    },
+    "extensions": {
+      "KHR_materials_transmission": {"transmissionFactor": 0.94},
+      "KHR_materials_ior": {"ior": 1.52}
+    }
+  }, {
+    "name": "WarmOpaque",
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.95, 0.18, 0.04, 1.0],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.42
+    }
+  }, {
+    "name": "CoolOpaque",
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.05, 0.30, 0.95, 1.0],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.30
+    }
+  }, {
+    "name": "RoughDielectricGlass",
+    "alphaMode": "OPAQUE",
+    "doubleSided": true,
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [1.0, 0.78, 0.48, 1.0],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.58
+    },
+    "extensions": {
+      "KHR_materials_transmission": {"transmissionFactor": 0.88},
+      "KHR_materials_ior": {"ior": 1.33}
+    }
+  }],
+  "buffers": [{
+    "byteLength": 192,
+    "uri": "data:application/octet-stream;base64,AAAAAAAAgD8AAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAvwAAAAAAAAAAAAAAAAAAAAAAAIC/AAAAAAAAgL8AAAAAAAAAAAAAgD8AAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AACAvwAAAAAAAAAAAAAAAAAAAAAAAIC/AAAAAAAAgL8AAAAAAAABAAIAAAACAAMAAAADAAQAAAAEAAEABQACAAEABQADAAIABQAEAAMABQABAAQA"
+  }],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 72, "target": 34962},
+    {"buffer": 0, "byteOffset": 72, "byteLength": 72, "target": 34962},
+    {"buffer": 0, "byteOffset": 144, "byteLength": 48, "target": 34963}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 6, "type": "VEC3", "min": [-1, -1, -1], "max": [1, 1, 1]},
+    {"bufferView": 1, "componentType": 5126, "count": 6, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5123, "count": 24, "type": "SCALAR"}
+  ]
+}

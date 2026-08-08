@@ -122,14 +122,19 @@ void RenderTarget::resize(int width, int height, int samples) {
     width_ = width;
     height_ = height;
     samples_ = samples;
+    opaqueColorMipLevels_ = 1;
+    for (int mipSize = std::max(width_, height_); mipSize > 1; mipSize /= 2) {
+        ++opaqueColorMipLevels_;
+    }
 
     glGenFramebuffers(1, &opaqueFramebuffer_);
     glBindFramebuffer(GL_FRAMEBUFFER, opaqueFramebuffer_);
     glGenTextures(1, &opaqueColorTexture_);
     glBindTexture(GL_TEXTURE_2D, opaqueColorTexture_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width_, height_, 0, GL_RGBA, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, opaqueColorMipLevels_ - 1);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, opaqueColorTexture_, 0);
@@ -170,12 +175,14 @@ void RenderTarget::resize(int width, int height, int samples) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hdrColorTexture_, 0);
-    glFramebufferTexture2D(
+    glGenRenderbuffers(1, &refractiveDepthStencil_);
+    glBindRenderbuffer(GL_RENDERBUFFER, refractiveDepthStencil_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width_, height_);
+    glFramebufferRenderbuffer(
         GL_FRAMEBUFFER,
         GL_DEPTH_STENCIL_ATTACHMENT,
-        GL_TEXTURE_2D,
-        sceneDepthTexture_,
-        0
+        GL_RENDERBUFFER,
+        refractiveDepthStencil_
     );
     requireComplete("refractive HDR scene");
 
@@ -240,6 +247,9 @@ void RenderTarget::resolveOpaqueScene() const {
             GL_NEAREST
         );
     }
+    glBindTexture(GL_TEXTURE_2D, opaqueColorTexture_);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void RenderTarget::bindRefractiveScene() const {
@@ -254,7 +264,7 @@ void RenderTarget::bindRefractiveScene() const {
         0,
         width_,
         height_,
-        GL_COLOR_BUFFER_BIT,
+        GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
         GL_NEAREST
     );
     glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
@@ -285,6 +295,7 @@ bool RenderTarget::savePng(const std::filesystem::path& path, std::string& error
 }
 
 void RenderTarget::destroy() {
+    if (refractiveDepthStencil_ != 0U) glDeleteRenderbuffers(1, &refractiveDepthStencil_);
     if (multisampleDepthStencil_ != 0U) glDeleteRenderbuffers(1, &multisampleDepthStencil_);
     if (multisampleColor_ != 0U) glDeleteRenderbuffers(1, &multisampleColor_);
     if (finalColorTexture_ != 0U) glDeleteTextures(1, &finalColorTexture_);
@@ -297,6 +308,7 @@ void RenderTarget::destroy() {
     if (opaqueFramebuffer_ != 0U) glDeleteFramebuffers(1, &opaqueFramebuffer_);
     multisampleDepthStencil_ = 0U;
     multisampleColor_ = 0U;
+    refractiveDepthStencil_ = 0U;
     finalColorTexture_ = 0U;
     sceneDepthTexture_ = 0U;
     hdrColorTexture_ = 0U;
@@ -308,4 +320,5 @@ void RenderTarget::destroy() {
     width_ = 0;
     height_ = 0;
     samples_ = 1;
+    opaqueColorMipLevels_ = 1;
 }

@@ -30,14 +30,14 @@ public:
     GpuModel& operator=(const GpuModel&) = delete;
 
     void drawOpaque(const Shader& shader, const glm::vec3& tint, bool cullBackFaces) const;
-    void drawTransparent(
+    void drawTransparentSubmesh(
         const Shader& shader,
         const glm::vec3& tint,
-        const glm::mat4& modelMatrix,
-        const glm::vec3& cameraPosition,
+        std::size_t transparentSubmeshIndex,
         bool cullBackFaces
     ) const;
     void drawDepth() const;
+    const glm::vec3& transparentSubmeshCenter(std::size_t transparentSubmeshIndex) const;
 
     std::size_t meshCount() const { return meshes_.size(); }
     std::size_t submeshCount() const { return submeshCount_; }
@@ -61,6 +61,8 @@ private:
         bool hasMetallicRoughnessTexture{false};
         float metallicFactor{0.0f};
         float roughnessFactor{1.0f};
+        float transmissionFactor{0.0f};
+        float indexOfRefraction{1.5f};
         MaterialAlphaMode alphaMode{MaterialAlphaMode::Opaque};
         float alphaCutoff{0.5f};
         bool doubleSided{false};

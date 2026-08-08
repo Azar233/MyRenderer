@@ -74,7 +74,7 @@
 | Sampleable Depth（可采样深度） | 深度不只用于遮挡，还能像纹理一样被后续 Shader 读取。 | Glass-0 已建立 `GL_DEPTH24_STENCIL8` 深度纹理。 | 已实现 |
 | Opaque Color Texture | 只包含不透明场景的 HDR 颜色，是玻璃折射看到的背景。 | Glass-0 已与最终 HDR 输出分离。 | 已实现 |
 | Scene Color Texture | 包含不透明场景以及后续玻璃等效果的最终 HDR 场景颜色。 | 后处理从它提取 Bloom 并执行 Tone Mapping。 | 已实现 |
-| Framebuffer Feedback | 一个 Pass 同时读取和写入同一纹理，会产生未定义或不可预测结果。 | Glass-0 使用独立 Opaque 输入与 HDR Scene 输出避免该问题。 | 已解决 |
+| Framebuffer Feedback | 一个 Pass 同时读取和写入同一纹理，会产生未定义或不可预测结果。 | 折射 Pass 使用独立 Opaque/HDR Color，并把深度测试复制到 Renderbuffer；可采样 Opaque Depth 不再同时作为当前附件。 | 已解决 |
 | Renderbuffer | 只能作为渲染附件、通常不能直接在 Shader 里采样的存储对象。 | MSAA Color 和 MSAA Depth/Stencil 当前使用 Renderbuffer。 | 已实现 |
 
 ## 4. 模型、网格与资产导入
@@ -83,6 +83,9 @@
 | --- | --- | --- | --- |
 | Mesh（网格） | 由顶点和三角形组成的几何对象。 | `MeshData` 保存 CPU 数据，`Mesh` 保存 VAO/VBO/EBO。 | 已实现 |
 | Submesh（子网格） | 同一 Mesh 中使用不同材质或索引区间的一部分。 | 每个 Submesh 对应材质编号和一个 Draw Call。 | 已实现 |
+| Render Item（渲染项） | 把一个 GPU 模型、世界变换、颜色和显隐/阴影标记组合成一次场景提交。 | `Renderer` 每帧接收多个 `RenderItem`，因此主体、地面和辅助实例可以共用同一套 Pass。 | 已实现 |
+| Scene Draw List（场景绘制列表） | 渲染前整理出的待绘制命令集合，便于统一分类和排序。 | BLEND 子网格从所有可见 Render Item 汇总后再做全场景排序。 | 已实现 |
+| Shadow Receiver（阴影接收器） | 会显示其他物体投影的表面，不一定需要自己投射阴影。 | 程序化地面参与 PBR 主 Pass、采样 Shadow Map，但设置为不写入阴影图。 | 已实现 |
 | Vertex（顶点） | 构成三角形的点及其附加属性。 | 当前包含位置、法线、UV0 和带手性的切线。 | 已实现 |
 | Index（索引） | 指向顶点数组的编号，用于复用顶点组成三角形。 | 由 OBJ/Assimp 导入并上传 EBO。 | 已实现 |
 | Triangulation（三角化） | 把四边形或多边形拆成 GPU 易处理的三角形。 | tinyobjloader 与 Assimp 导入时执行。 | 已实现 |
@@ -108,7 +111,7 @@
 | --- | --- | --- | --- |
 | Texture Sampling（纹理采样） | Shader 根据 UV 从纹理读取颜色或数据。 | 基础色、法线、金属度/粗糙度、阴影等都通过采样获得。 | 已实现 |
 | Sampler | 定义纹理过滤与超出 UV 范围时如何重复/截断的规则。 | 当前 OpenGL Texture 有固定参数；完整 glTF Sampler 语义待补。 | 部分实现 |
-| Mip / Mipmap | 同一纹理的多级缩小版本，远处或模糊采样时减少闪烁并提高缓存效率。 | 环境 Cubemap 使用 Mip 表示不同粗糙度；普通材质 Mip 管线仍可加强。 | 部分实现 |
+| Mip / Mipmap | 同一纹理的多级缩小版本，远处或模糊采样时减少闪烁并提高缓存效率。 | 环境 Cubemap 与 Opaque HDR Color 都有完整 Mip；粗糙玻璃按 Roughness 选择更模糊层级。 | 已实现 |
 | sRGB | 面向显示和图片存储的非线性颜色编码。 | 基础色纹理以 sRGB 格式上传并由 GPU 解码。 | 已实现 |
 | Linear Color Space（线性颜色空间） | 数值与真实光能近似成正比，适合光照和混合计算。 | 材质与灯光在线性空间计算。 | 已实现 |
 | Gamma Correction（Gamma 校正） | 在线性计算与显示编码之间进行转换。 | 最终输出只执行一次 Linear-to-sRGB，避免重复 Gamma。 | 已实现 |
@@ -144,6 +147,9 @@
 | Shadow Map（阴影贴图） | 从光源视角记录最近深度，再判断相机看到的点是否被遮挡。 | 当前为方向光生成 2048² 深度纹理。 | 已实现 |
 | Light Space（光源空间） | 以光源作为“相机”的坐标空间。 | 顶点转换到 Light View-Projection 后查询 Shadow Map。 | 已实现 |
 | PCF | 对阴影贴图周围多个深度样本求平均，使边缘不那么硬。 | 当前使用 3×3 PCF。 | 已实现 |
+| PCSS | 先估算遮挡物距离，再按估算出的半影宽度改变过滤范围，实现接触处锐利、远处柔和的阴影。 | 已加入后续阴影路线；需先稳定 Light Frustum、Texel Snapping 和 Bias。 | 计划 |
+| Blocker Search（遮挡物搜索） | 在 Shadow Map 邻域里找出真正比接收面更靠近光源的深度样本。 | PCSS 的第一阶段，将用于估算平均遮挡深度。 | 计划 |
+| Penumbra（半影） | 阴影边缘只有部分光源可见的过渡区域。 | PCSS 将根据接收面与遮挡物距离动态估算其宽度。 | 计划 |
 | Shadow Acne（阴影痤疮） | 精度误差造成表面出现条纹或自阴影噪点。 | 当前通过 Bias 和阴影 Pass 剔除策略减轻。 | 部分实现 |
 | Peter Panning | 阴影 Bias 过大导致阴影看起来与物体分离。 | 后续阴影调试视图需要同时平衡它与 Acne。 | 计划 |
 | CSM（Cascaded Shadow Maps） | 按相机距离分多级阴影范围，让近处保持更高精度。 | P0 阴影质量路线。 | 计划 |
@@ -166,16 +172,19 @@
 
 | 术语 | 通俗解释 | 在 MyRenderer 中的作用 | 状态 |
 | --- | --- | --- | --- |
-| Opaque（不透明） | 光不能穿过，通常输出颜色并写入深度。 | 当前所有正式材质都按不透明处理。 | 已实现 |
+| Opaque（不透明） | 光不能穿过，通常输出颜色并写入深度。 | glTF `OPAQUE` 与 `MASK` 材质进入不透明队列。 | 已实现 |
 | Alpha Blending（透明混合） | 根据 Alpha 把前景颜色与已画背景做比例混合。 | 已支持 glTF `BLEND` 的标准 Over 合成；它本身不会产生折射。 | 已实现 |
-| Transparent Sorting（透明排序） | 通常按从远到近绘制透明表面，减少混合顺序错误。 | 当前对单个模型内的 BLEND 子网格按中心距离排序；多对象全局排序将在场景层补齐。 | 部分实现 |
-| Transmission（透射） | 光穿过材质继续传播，是玻璃区别于普通半透明贴纸的核心。 | Glass-1 计划加入 Dielectric Transmission。 | 计划 |
-| Refraction（折射） | 光进入不同介质时改变传播方向，使玻璃后的背景发生扭曲。 | 已具备独立 Opaque Color/Depth 输入和 Refractive Pass 边界，Shader 尚未实现。 | 基础已就绪 |
+| Transparent Sorting（透明排序） | 通常按从远到近绘制透明表面，减少混合顺序错误。 | 当前汇总所有可见 Render Item 的 BLEND 子网格，并按世界空间中心距离稳定地从远到近排序。 | 已实现 |
+| Transmission（透射） | 光穿过材质继续传播，是玻璃区别于普通半透明贴纸的核心。 | 已导入 `KHR_materials_transmission`，并在 Refractive Pass 混合透射背景与介质反射。 | 基础已实现 |
+| Refraction（折射） | 光进入不同介质时改变传播方向，使玻璃后的背景发生扭曲。 | Glass Shader 已按法线和 IOR 计算折射方向，并采样 Opaque Scene。 | 第一版已实现 |
 | Refractive Pass（折射 Pass） | 在不透明场景完成后，专门绘制透明、玻璃、水晶等材质的阶段。 | 当前已绘制 Alpha Blend 子网格并建立独立 HDR 输出；真实折射 Shader 尚未实现。 | 基础已就绪 |
-| Screen-space Refraction（屏幕空间折射） | 利用当前画面的颜色与深度近似追踪折射，只能看到屏幕中已经存在的内容。 | Glass-1 计划；离屏或被遮挡信息需要环境图回退。 | 计划 |
-| IOR（折射率） | 表示光在介质中传播速度差异的参数，决定折射弯曲和基础反射比例。 | Glass-1 将作为水晶材质核心参数。 | 计划 |
-| Snell's Law（斯涅尔定律） | 根据两种介质折射率和入射角计算折射方向。 | Glass-1 的折射方向计算基础。 | 计划 |
-| Total Internal Reflection（全反射） | 从高折射率介质向外传播且角度过斜时，光不再透出而完全反射。 | 对水晶内部边缘高亮很重要。 | 计划 |
+| Screen-space Refraction（屏幕空间折射） | 利用当前画面的颜色与深度近似追踪折射，只能看到屏幕中已经存在的内容。 | 第一版按折射方向偏移世界位置并采样 Opaque Color/Depth；越界或深度不匹配时回退环境图。 | 基础已实现 |
+| Screen-space Ray March（屏幕空间步进） | 沿一条三维射线分多步投影到屏幕，并与画面深度比较来寻找交点。 | 折射最多使用 32 步；Refraction Scale 控制最大距离，Steps 控制精度和成本。 | 已实现 |
+| Rough Refraction（粗糙折射） | 表面微小方向越杂乱，透过它看到的背景越模糊。 | 使用 Roughness 选择 Opaque HDR Mip；环境回退选择预过滤 Cubemap Mip。 | 已实现 |
+| Refracted UV | 折射射线最终在 Opaque Scene Color 上采样的二维坐标。 | Glass Debug View 用 RG 显示 UV，蓝色表示命中，洋红表示回退。 | 已实现 |
+| IOR（折射率） | 表示光在介质中传播速度差异的参数，决定折射弯曲和基础反射比例。 | 已支持 `KHR_materials_ior`；默认 1.5，并用于 Fresnel F0 与 Snell 折射。 | 已实现 |
+| Snell's Law（斯涅尔定律） | 根据两种介质折射率和入射角计算折射方向。 | Glass Shader 通过 GLSL `refract` 按空气/介质两侧 IOR 比计算。 | 已实现 |
+| Total Internal Reflection（全反射） | 从高折射率介质向外传播且角度过斜时，光不再透出而完全反射。 | `refract` 无有效方向时回退到环境反射。 | 已实现 |
 | Thickness（厚度） | 光在物体内部实际走过的距离，影响位移和吸收强度。 | Glass-2 计划支持参数、贴图和前后深度估算。 | 计划 |
 | Beer-Lambert Law | 光在介质中传播越远，被吸收越多；不同颜色可以有不同吸收。 | 用于让玻璃呈现真实体积颜色。 | 计划 |
 | Attenuation（衰减/吸收） | 光穿过介质后亮度和颜色逐渐减少。 | Glass Material 将提供 Color 和 Distance 参数。 | 计划 |
@@ -204,7 +213,7 @@
 | Regression Test（回归测试） | 验证新改动没有破坏此前正常功能。 | 资产导入 CTest 已实现；视觉回归仍在计划中。 | 部分实现 |
 | Visual Regression（视觉回归） | 固定场景输出图片并与基准图比较，发现渲染结果变化。 | 计划使用误差阈值和差异热图。 | 计划 |
 | SSIM | 比逐像素相等更关注结构相似度的图像比较指标。 | 计划用于容忍不同 GPU 的微小浮点差异。 | 计划 |
-| Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | 当前有网格/轴线；完整材质与 Glass 调试视图待实现。 | 部分实现 |
+| Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 已支持 Reflection、Refraction、IOR、Refracted UV；完整 GBuffer/材质视图仍在 P0 路线。 | 部分实现 |
 | Overdraw | 同一像素在一帧内被重复绘制多次，透明与粒子常导致高 Overdraw。 | TA/性能调试视图计划覆盖。 | 计划 |
 | GPU Memory / VRAM | GPU 用于纹理、Buffer 和 RenderTarget 的显存。 | 当前统计纹理估算值；完整 RenderTarget/Buffer 预算待补。 | 部分实现 |
 

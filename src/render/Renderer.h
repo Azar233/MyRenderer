@@ -20,6 +20,14 @@ class Shader;
 class ShadowMap;
 class TextureCache;
 
+enum class GlassDebugView {
+    Final = 0,
+    Reflection = 1,
+    Refraction = 2,
+    IndexOfRefraction = 3,
+    RefractedUv = 4
+};
+
 struct RendererSettings {
     glm::vec3 backgroundColor{0.055f, 0.065f, 0.085f};
     glm::vec3 baseColor{1.0f};
@@ -37,13 +45,25 @@ struct RendererSettings {
     bool pbrEnabled{true};
     bool iblEnabled{true};
     bool shadowsEnabled{true};
+    bool transmissionEnabled{true};
     bool skyboxEnabled{true};
     bool toneMapping{true};
     bool bloom{true};
     float environmentIntensity{0.55f};
+    float refractionScale{0.18f};
+    int refractionSteps{12};
+    GlassDebugView glassDebugView{GlassDebugView::Final};
     float exposure{1.0f};
     float bloomThreshold{1.0f};
     float bloomIntensity{0.12f};
+};
+
+struct RenderItem {
+    const GpuModel* model{nullptr};
+    glm::mat4 modelMatrix{1.0f};
+    glm::vec3 tint{1.0f};
+    bool visible{true};
+    bool castsShadow{true};
 };
 
 class Renderer {
@@ -60,9 +80,8 @@ public:
     Renderer& operator=(const Renderer&) = delete;
 
     void render(
-        const GpuModel* model,
+        const std::vector<RenderItem>& renderItems,
         const Camera& camera,
-        const glm::mat4& modelMatrix,
         const RendererSettings& settings,
         int width,
         int height

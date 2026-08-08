@@ -12,12 +12,17 @@ uniform sampler2D uNormalTexture;
 uniform sampler2D uMetallicRoughnessTexture;
 uniform samplerCube uEnvironmentMap;
 uniform sampler2D uShadowMap;
+uniform sampler2D uOpaqueColorTexture;
+uniform sampler2D uSceneDepthTexture;
+uniform mat4 uView;
+uniform mat4 uProjection;
 uniform bool uHasNormalTexture;
 uniform bool uHasMetallicRoughnessTexture;
 uniform bool uNormalMappingEnabled;
 uniform bool uPbrEnabled;
 uniform bool uIblEnabled;
 uniform bool uShadowsEnabled;
+uniform bool uTransmissionEnabled;
 uniform vec3 uLightDirection;
 uniform vec3 uCameraPosition;
 uniform float uAmbientStrength;
@@ -28,6 +33,12 @@ uniform float uMetallicFactor;
 uniform float uRoughnessFactor;
 uniform float uEnvironmentIntensity;
 uniform float uEnvironmentMaxMip;
+uniform float uTransmissionFactor;
+uniform float uIndexOfRefraction;
+uniform float uRefractionScale;
+uniform float uOpaqueColorMaxMip;
+uniform int uRefractionSteps;
+uniform int uGlassDebugView;
 uniform int uAlphaMode;
 uniform float uAlphaCutoff;
 uniform bool uDoubleSided;
@@ -69,6 +80,84 @@ float shadowVisibility(vec3 normal, vec3 lightDirection) {
         }
     }
     return visible / 9.0;
+}
+
+vec3 sampleTransmittedRadiance(
+    vec3 normal,
+    vec3 viewDirection,
+    float ior,
+    float roughness,
+    out bool totalInternalReflection,
+    out bool screenSpaceHit,
+    out vec2 refractedUv
+) {
+    screenSpaceHit = false;
+    refractedUv = vec2(-1.0);
+    vec3 incident = -viewDirection;
+    vec3 geometricNormal = normalize(vWorldNormal);
+    bool entering = dot(incident, geometricNormal) < 0.0;
+    vec3 refractionNormal = dot(incident, normal) < 0.0 ? normal : -normal;
+    float eta = entering ? 1.0 / ior : ior;
+    vec3 refractedDirection = refract(incident, refractionNormal, eta);
+    totalInternalReflection = dot(refractedDirection, refractedDirection) < 0.000001;
+    if (totalInternalReflection) {
+        vec3 reflectedDirection = reflect(incident, refractionNormal);
+        return textureLod(
+            uEnvironmentMap,
+            reflectedDirection,
+            roughness * uEnvironmentMaxMip
+        ).rgb * uEnvironmentIntensity;
+    }
+
+    int stepCount = clamp(uRefractionSteps, 4, 32);
+    vec2 lastValidUv = vec2(-1.0);
+    for (int stepIndex = 1; stepIndex <= 32; ++stepIndex) {
+        if (stepIndex > stepCount) break;
+        float rayProgress = float(stepIndex) / float(stepCount);
+        vec3 samplePosition = vWorldPosition
+            + refractedDirection * uRefractionScale * rayProgress;
+        vec4 refractedClip = uProjection * uView * vec4(samplePosition, 1.0);
+        if (refractedClip.w <= 0.0) break;
+
+        vec2 candidateUv = refractedClip.xy / refractedClip.w * 0.5 + 0.5;
+        bool insideScreen = all(greaterThanEqual(candidateUv, vec2(0.0)))
+            && all(lessThanEqual(candidateUv, vec2(1.0)));
+        if (!insideScreen) break;
+
+        float opaqueDepth = texture(uSceneDepthTexture, candidateUv).r;
+        float rayDepth = refractedClip.z / refractedClip.w * 0.5 + 0.5;
+        bool isBehindGlass = opaqueDepth > gl_FragCoord.z + 0.0001;
+        if (isBehindGlass) {
+            lastValidUv = candidateUv;
+            bool crossedOpaqueSurface = opaqueDepth < 0.99999
+                && rayDepth >= opaqueDepth - 0.0015;
+            if (crossedOpaqueSurface) {
+                screenSpaceHit = true;
+                refractedUv = candidateUv;
+                return textureLod(
+                    uOpaqueColorTexture,
+                    candidateUv,
+                    roughness * uOpaqueColorMaxMip
+                ).rgb;
+            }
+        }
+    }
+
+    if (lastValidUv.x >= 0.0) {
+        screenSpaceHit = true;
+        refractedUv = lastValidUv;
+        return textureLod(
+            uOpaqueColorTexture,
+            lastValidUv,
+            roughness * uOpaqueColorMaxMip
+        ).rgb;
+    }
+
+    return textureLod(
+        uEnvironmentMap,
+        refractedDirection,
+        roughness * uEnvironmentMaxMip
+    ).rgb * uEnvironmentIntensity;
 }
 
 void main() {
@@ -113,7 +202,9 @@ void main() {
         return;
     }
 
-    vec3 f0 = mix(vec3(0.04), albedo, metallic);
+    float ior = max(uIndexOfRefraction, 1.0);
+    float dielectricF0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    vec3 f0 = mix(vec3(dielectricF0), albedo, metallic);
     float distribution = distributionGGX(normal, halfDirection, roughness);
     float geometry = geometrySchlickGGX(nDotV, roughness)
         * geometrySchlickGGX(max(dot(normal, lightDirection), 0.0), roughness);
@@ -121,9 +212,11 @@ void main() {
     vec3 specular = distribution * geometry * fresnel
         / max(4.0 * nDotV * max(nDotL, 0.001), 0.001);
     vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
-    vec3 direct = (diffuseWeight * albedo / PI + specular) * nDotL * uDiffuseStrength;
+    vec3 directDiffuse = diffuseWeight * albedo / PI * nDotL * uDiffuseStrength;
+    vec3 directSpecular = specular * nDotL * uDiffuseStrength;
 
-    vec3 ambient = uAmbientStrength * albedo;
+    vec3 ambientDiffuse = uAmbientStrength * albedo;
+    vec3 ambientSpecular = vec3(0.0);
     if (uIblEnabled) {
         vec3 reflection = reflect(-viewDirection, normal);
         vec3 diffuseEnvironment = textureLod(uEnvironmentMap, normal, uEnvironmentMaxMip).rgb;
@@ -131,8 +224,67 @@ void main() {
             uEnvironmentMap, reflection, roughness * uEnvironmentMaxMip
         ).rgb;
         vec3 environmentFresnel = fresnelSchlick(nDotV, f0);
-        ambient = ((vec3(1.0) - environmentFresnel) * (1.0 - metallic) * albedo * diffuseEnvironment
-            + specularEnvironment * environmentFresnel) * uEnvironmentIntensity;
+        ambientDiffuse = (vec3(1.0) - environmentFresnel)
+            * (1.0 - metallic)
+            * albedo
+            * diffuseEnvironment
+            * uEnvironmentIntensity;
+        ambientSpecular = specularEnvironment * environmentFresnel * uEnvironmentIntensity;
     }
-    fragmentColor = vec4(ambient + visibility * direct, outputAlpha);
+
+    vec3 diffuseLighting = ambientDiffuse + visibility * directDiffuse;
+    vec3 specularLighting = ambientSpecular + visibility * directSpecular;
+    float transmission = uTransmissionEnabled
+        ? clamp(uTransmissionFactor * (1.0 - metallic), 0.0, 1.0)
+        : 0.0;
+    if (transmission > 0.0) {
+        bool totalInternalReflection = false;
+        bool screenSpaceHit = false;
+        vec2 refractedUv = vec2(-1.0);
+        vec3 transmittedRadiance = sampleTransmittedRadiance(
+            normal,
+            viewDirection,
+            ior,
+            roughness,
+            totalInternalReflection,
+            screenSpaceHit,
+            refractedUv
+        );
+        vec3 viewFresnel = totalInternalReflection
+            ? vec3(1.0)
+            : fresnelSchlick(nDotV, f0);
+        vec3 transmittedLighting = transmittedRadiance * albedo * (vec3(1.0) - viewFresnel);
+        if (uGlassDebugView == 1) {
+            fragmentColor = vec4(specularLighting, 1.0);
+            return;
+        }
+        if (uGlassDebugView == 2) {
+            fragmentColor = vec4(transmittedRadiance * albedo, 1.0);
+            return;
+        }
+        if (uGlassDebugView == 3) {
+            float normalizedIor = clamp((ior - 1.0) / 1.5, 0.0, 1.0);
+            vec3 iorColor = vec3(
+                normalizedIor,
+                1.0 - abs(normalizedIor * 2.0 - 1.0),
+                1.0 - normalizedIor
+            );
+            fragmentColor = vec4(iorColor, 1.0);
+            return;
+        }
+        if (uGlassDebugView == 4) {
+            fragmentColor = vec4(
+                screenSpaceHit ? vec3(refractedUv, 1.0) : vec3(1.0, 0.0, 1.0),
+                1.0
+            );
+            return;
+        }
+        fragmentColor = vec4(
+            specularLighting + mix(diffuseLighting, transmittedLighting, transmission),
+            1.0
+        );
+        return;
+    }
+
+    fragmentColor = vec4(diffuseLighting + specularLighting, outputAlpha);
 }

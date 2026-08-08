@@ -61,6 +61,7 @@ private:
 
     std::unique_ptr<Renderer> renderer_;
     std::unique_ptr<GpuModel> model_;
+    std::unique_ptr<GpuModel> groundModel_;
     std::vector<std::unique_ptr<ModelImporter>> importers_;
     Camera camera_;
     RendererSettings rendererSettings_;
@@ -88,6 +89,8 @@ private:
     glm::vec3 modelRotationDegrees_{0.0f};
     float modelNormalizationScale_{1.0f};
     float modelScale_{1.0f};
+    glm::vec3 groundColor_{0.58f, 0.60f, 0.64f};
+    float groundOffset_{-0.72f};
     std::size_t loadedMeshCount_{0};
     std::size_t loadedSubmeshCount_{0};
     std::size_t loadedTransparentSubmeshCount_{0};
@@ -107,6 +110,8 @@ private:
     bool showAbout_{false};
     bool showImGuiDemo_{false};
     bool autoRotate_{false};
+    bool showGroundPlane_{true};
+    bool showComparisonObject_{false};
     bool vsync_{true};
     bool lastLoadFailed_{false};
     double previousFrameTime_{0.0};
