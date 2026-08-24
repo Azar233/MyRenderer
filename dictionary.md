@@ -246,6 +246,7 @@
 | Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 已支持 Reflection、Refraction、IOR、Refracted UV、Thickness、Transmittance 与 RGB Dispersion；完整 GBuffer/材质视图仍在 P0 路线。 | 部分实现 |
 | Overlay Pass（叠加 Pass） | 在主体画面之后再绘制一层辅助内容，通常用于轮廓、Gizmo、调试线或 HUD。 | Optical Path Debug 在 Glass 之后、Tone Mapping 之前写入同一个 HDR Scene。 | 已实现 |
 | Camera Lock（镜头锁定） | 暂时禁止鼠标改变相机，避免录屏或回归截图因误操作改变机位。 | Prism-4 默认锁定 Hero Camera，取消勾选后恢复 Orbit 操作。 | 已实现 |
+| State Snapshot / Restore（状态快照 / 恢复） | 进入临时模式前保存一份设置，退出时原样还原，避免该模式的开关和参数污染后续场景。 | Prism Preset 保存通用 Renderer/Scene 状态；成功加载其他模型时恢复，并自动移除光束与光路 Overlay。 | 已实现 |
 | Hero Shot（主视觉镜头） | 专门为展示效果设计、参数固定且可重复恢复的代表性构图。 | Prism Demo 可一键恢复固定目标、方位、距离与 FOV。 | 已实现 |
 | Overdraw | 同一像素在一帧内被重复绘制多次，透明与粒子常导致高 Overdraw。 | TA/性能调试视图计划覆盖。 | 计划 |
 | GPU Memory / VRAM | GPU 用于纹理、Buffer 和 RenderTarget 的显存。 | Prism-5 统计 RenderTarget、Bloom、MSAA、Shadow、Cubemap、Beam、几何与纹理的可解释估算；不含驱动内部开销。 | 已实现（估算） |

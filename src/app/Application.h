@@ -56,6 +56,7 @@ private:
     std::filesystem::path nextScreenshotPath() const;
     void resetObjectTransform();
     void activatePrismDemoPreset(bool loadFixture);
+    void deactivatePrismDemoPreset();
     void updatePrismDemoOptics();
     void applyPrismOpticalPreset(PrismOpticalPreset preset);
     void restorePrismHeroShot();
@@ -93,6 +94,14 @@ private:
     };
     std::optional<PendingModelImport> pendingModelImport_;
     std::optional<std::filesystem::path> droppedModelPath_;
+
+    struct PrismDemoPreviousState {
+        RendererSettings rendererSettings;
+        bool autoRotate{false};
+        bool showGroundPlane{true};
+        bool showComparisonObject{false};
+    };
+    std::optional<PrismDemoPreviousState> prismDemoPreviousState_;
 
     glm::vec3 modelCenter_{0.0f};
     glm::vec3 modelPosition_{0.0f};

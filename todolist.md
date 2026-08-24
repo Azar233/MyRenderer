@@ -443,6 +443,8 @@ Shadow / Depth
 
 > Prism-4 完成（2026-08-24）：新增无 OpenGL 依赖的 `PrismDemo` 参数/求解层，Inspector 的入射角、中心 IOR、色散/Abbe、7/15/21/31 采样、连续/七色模式与 White Point 修改后会立即重算同一份光谱数据；Beam Width / Intensity / Edge Softness / Bloom Contribution 继续作为实时绘制参数。Crown Glass、Water-like、Diamond-like 与 Exaggerated Cover 四个 Preset 只保存参数并复用同一套 Shader；中心 IOR 同时覆盖玻璃 Shader，避免可见玻璃与 CPU 光路使用不同介质。新增独立 `Optical path debug` HDR Overlay Pass，用彩色世界空间线、界面交点、入射/出射法线和 TIR 橙色标记显示路径，Inspector 表格逐波长列出 Entry / Exit / Total Transmittance。Prism 模式支持锁定镜头、暂停旋转和一键恢复 Hero Shot，并提供环境变量用于自动截图。3 项 CTest、完整 GPU smoke 与 4x MSAA 成果图均通过；`docs/images/prism4_exaggerated_cover.png` 和 `prism4_optical_debug.png` 保存本阶段结果。下一阶段进入 Prism-5，重点是视觉回归矩阵、1080p 性能数据、On/Off 证据和作品集素材。
 
+- [x] Prism Preset 生命周期收尾：成功加载非棱镜模型时自动退出 Prism 模式，关闭光束与光路 Overlay，并恢复进入 Preset 前保存的通用 Renderer/Scene 状态；导入失败时继续保留当前棱镜场景。
+
 ##### Prism-5：验收与作品集证据
 
 - [x] 视觉验收：Dispersion=0 时出射束保持白色或完全重合；开启后红到紫顺序稳定，旋转光束/棱镜时出射方向连续变化，没有屏幕空间粘连。

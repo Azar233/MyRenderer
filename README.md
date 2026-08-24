@@ -67,7 +67,7 @@ cmake --build build-mingw --parallel
 - Scene 面板：查看主体、地面接收器与可选对照实例，切换 `assets/models` 中的 OBJ、DAE、glTF/GLB，使用原生文件选择器，输入其他模型路径，或把模型文件拖入窗口。CPU 导入期间会显示文件大小、耗时和活动进度，当前场景保持可用。
 - Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
 - Inspector / Renderer：切换 PBR、IBL、天空盒、阴影、Transmission、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整折射距离/步数、体积厚度倍率、RGB 色散、Glass Debug View、环境强度、曝光、Bloom、背景色、灯光与 FOV，并查看活动 Pass 和运行统计。网格和轴线也可从 View 菜单或视口工具栏快速切换。
-- View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。
+- View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
 - 渲染视口：鼠标右键拖动旋转相机，中键拖动平移，滚轮缩放；工具栏或 File 菜单可将当前解析后画面保存为 PNG。
 - `Esc`：退出程序。
 

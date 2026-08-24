@@ -1421,9 +1421,10 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
     modelNormalizationScale_ = 1.4f / maximumExtent;
     resetObjectTransform();
     const bool loadedPrismFixture = lowercase(path.filename().string()) == "prism_spectrum.gltf";
-    if (prismDemoEnabled_ || loadedPrismFixture) {
+    if (loadedPrismFixture) {
         activatePrismDemoPreset(false);
     } else {
+        deactivatePrismDemoPreset();
         camera_.reset();
     }
 
@@ -1515,6 +1516,14 @@ void Application::resetObjectTransform() {
 }
 
 void Application::activatePrismDemoPreset(bool loadFixture) {
+    if (!prismDemoPreviousState_.has_value()) {
+        prismDemoPreviousState_.emplace(PrismDemoPreviousState{
+            rendererSettings_,
+            autoRotate_,
+            showGroundPlane_,
+            showComparisonObject_
+        });
+    }
     prismDemoEnabled_ = true;
     prismCameraLocked_ = true;
     prismOpticalPreset_ = PrismOpticalPreset::CrownGlass;
@@ -1641,6 +1650,33 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     if (loadFixture) {
         loadModel(sourceRoot_ / "assets" / "models" / "prism_spectrum.gltf");
     }
+}
+
+void Application::deactivatePrismDemoPreset() {
+    if (!prismDemoEnabled_ && !prismDemoPreviousState_.has_value()) {
+        return;
+    }
+
+    prismDemoEnabled_ = false;
+    prismCameraLocked_ = false;
+    if (prismDemoPreviousState_.has_value()) {
+        rendererSettings_ = std::move(prismDemoPreviousState_->rendererSettings);
+        autoRotate_ = prismDemoPreviousState_->autoRotate;
+        showGroundPlane_ = prismDemoPreviousState_->showGroundPlane;
+        showComparisonObject_ = prismDemoPreviousState_->showComparisonObject;
+        prismDemoPreviousState_.reset();
+    } else {
+        rendererSettings_.indexOfRefractionOverride = 0.0f;
+        rendererSettings_.dispersionStrength = 0.0f;
+    }
+
+    // Prism-only overlays must never leak into a regular model, including from
+    // a previously customized or legacy state snapshot.
+    rendererSettings_.showPrismIncidentBeam = false;
+    rendererSettings_.showPrismOpticalPathDebug = false;
+    rendererSettings_.prismOpticalPathValid = false;
+    rendererSettings_.prismTotalInternalReflection = false;
+    rendererSettings_.prismSpectrum.samples.clear();
 }
 
 void Application::updatePrismDemoOptics() {
