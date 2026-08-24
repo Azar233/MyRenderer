@@ -224,14 +224,11 @@ void Renderer::render(
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         debugGrid_->draw(view, projection, settings.showGrid, settings.showAxes);
         if (settings.showPrismIncidentBeam && settings.prismOpticalPathValid) {
-            debugGrid_->drawPrismPath(
+            debugGrid_->drawPrismSpectrum(
                 view,
                 projection,
-                settings.prismBeamSource,
-                settings.prismEntryPoint,
-                settings.prismExitPoint,
-                settings.prismBeamOutputEnd,
-                settings.prismTotalInternalReflection
+                settings.prismSpectrum,
+                settings.prismBeamOutputLength
             );
         }
         drawCallCount_ += (settings.showGrid ? 1U : 0U)

@@ -65,6 +65,7 @@ GpuModel::GpuModel(
         material.roughnessFactor = std::clamp(materialData.roughnessFactor, 0.04f, 1.0f);
         material.transmissionFactor = std::clamp(materialData.transmissionFactor, 0.0f, 1.0f);
         material.indexOfRefraction = std::max(materialData.indexOfRefraction, 1.0f);
+        material.dispersion = std::max(materialData.dispersion, 0.0f);
         material.thicknessFactor = std::max(materialData.thicknessFactor, 0.0f);
         material.attenuationColor = glm::clamp(
             materialData.attenuationColor,
@@ -165,6 +166,7 @@ const GpuModel::GpuMaterial* GpuModel::bindMaterial(
     shader.setFloat("uRoughnessFactor", material == nullptr ? 1.0f : material->roughnessFactor);
     shader.setFloat("uTransmissionFactor", material == nullptr ? 0.0f : material->transmissionFactor);
     shader.setFloat("uIndexOfRefraction", material == nullptr ? 1.5f : material->indexOfRefraction);
+    shader.setFloat("uMaterialDispersion", material == nullptr ? 0.0f : material->dispersion);
     shader.setFloat("uThicknessFactor", material == nullptr ? 0.0f : material->thicknessFactor);
     shader.setVec3(
         "uAttenuationColor",

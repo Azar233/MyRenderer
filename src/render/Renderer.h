@@ -10,6 +10,8 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
+#include "optics/PrismOptics.h"
+
 class Camera;
 class DebugGrid;
 class EnvironmentMap;
@@ -64,10 +66,8 @@ struct RendererSettings {
     float exposure{1.0f};
     float bloomThreshold{1.0f};
     float bloomIntensity{0.12f};
-    glm::vec3 prismBeamSource{-2.4f, -0.15f, 0.0f};
-    glm::vec3 prismEntryPoint{-0.39f, 0.12f, 0.0f};
-    glm::vec3 prismExitPoint{0.39f, 0.12f, 0.0f};
-    glm::vec3 prismBeamOutputEnd{2.4f, 0.15f, 0.0f};
+    SpectralBeamData prismSpectrum;
+    float prismBeamOutputLength{2.4f};
 };
 
 struct RenderItem {

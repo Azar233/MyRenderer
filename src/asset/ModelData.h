@@ -52,6 +52,8 @@ struct MaterialData {
     float roughnessFactor{1.0f};
     float transmissionFactor{0.0f};
     float indexOfRefraction{1.5f};
+    // KHR_materials_dispersion. Zero disables wavelength-dependent IOR.
+    float dispersion{0.0f};
     // KHR_materials_volume. A zero thickness keeps the material thin-walled.
     float thicknessFactor{0.0f};
     glm::vec3 attenuationColor{1.0f};

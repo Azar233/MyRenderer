@@ -70,6 +70,7 @@ private:
     std::filesystem::path sourceRoot_;
     std::filesystem::path currentModelPath_;
     std::filesystem::path pendingScreenshotPath_;
+    int pendingScreenshotWarmupFrames_{0};
     std::vector<std::filesystem::path> availableModels_;
     std::array<char, 1024> modelPathBuffer_{};
     std::string statusMessage_{"Ready"};

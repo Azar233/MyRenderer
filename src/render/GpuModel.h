@@ -64,6 +64,7 @@ private:
         float roughnessFactor{1.0f};
         float transmissionFactor{0.0f};
         float indexOfRefraction{1.5f};
+        float dispersion{0.0f};
         float thicknessFactor{0.0f};
         glm::vec3 attenuationColor{1.0f};
         float attenuationDistance{std::numeric_limits<float>::infinity()};

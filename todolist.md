@@ -372,12 +372,12 @@ Shadow / Depth
 - [x] 接入 `KHR_materials_volume` 的均匀 Thickness、Attenuation Color 与 Attenuation Distance。
 - [ ] 支持 Thickness Texture，并通过前/后表面深度 Pass 估算闭合模型的真实几何厚度；替换当前按均匀厚度和折射角估算的路径长度。
 - [x] 使用 Beer-Lambert Law 实现体积吸收，避免透明物体呈现为无体积的彩色塑料。
-- [~] 按 Khronos `KHR_materials_dispersion` 公式分别计算 R/G/B 折射率并执行三通道 Ray March；当前提供全局 Dispersion Override，材质级扩展导入与 Abbe Number 显示仍待补充。
+- [x] 按 Khronos `KHR_materials_dispersion` 公式分别计算 R/G/B 折射率并执行三通道 Ray March；现已支持材质级扩展导入、全局 Dispersion Override 与对应 Abbe Number 显示。
 - [x] 区分材质光谱色散与全屏 Chromatic Aberration；当前色散发生在 Glass Shader 的三条折射射线上，不使用全屏 RGB 偏移。
 - [x] 增加 Thickness、Transmittance 与 RGB Dispersion 调试视图。
 - [ ] 可选增加 Thin-film Iridescence。
 
-> Glass-2A 完成（2026-08-24）：Assimp 的 `AI_MATKEY_VOLUME_*` 已映射到格式无关 `MaterialData` 与 GPU 材质，`glass_material_test.gltf` 为两种玻璃增加不同的均匀厚度、吸收颜色与吸收距离。Shader 按折射方向和表面法线估算介质路径长度，并使用 `T(x) = attenuationColor^(x / attenuationDistance)` 计算 Beer-Lambert Transmittance；Dispersion Override 使用 Khronos 推荐的 `halfSpread = (IOR - 1) × 0.025 × dispersion`，分别追踪 R/G/B 后重组透射颜色。Inspector 与环境变量支持 Thickness Scale、Dispersion 和 8 种 Glass Debug View。MinGW 构建、2 项 CTest、完整 GPU smoke 通过，并导出 4x MSAA Final / Thickness / Transmittance / RGB Dispersion 截图。Glass-2B 将补 Thickness Texture、前后表面深度厚度和材质级 `KHR_materials_dispersion` 导入。
+> Glass-2A 完成（2026-08-24）：Assimp 的 `AI_MATKEY_VOLUME_*` 已映射到格式无关 `MaterialData` 与 GPU 材质，`glass_material_test.gltf` 为两种玻璃增加不同的均匀厚度、吸收颜色与吸收距离。Shader 按折射方向和表面法线估算介质路径长度，并使用 `T(x) = attenuationColor^(x / attenuationDistance)` 计算 Beer-Lambert Transmittance；Dispersion Override 使用 Khronos 推荐的 `halfSpread = (IOR - 1) × 0.025 × dispersion`，分别追踪 R/G/B 后重组透射颜色。Inspector 与环境变量支持 Thickness Scale、Dispersion 和 8 种 Glass Debug View。MinGW 构建、2 项 CTest、完整 GPU smoke 通过，并导出 4x MSAA Final / Thickness / Transmittance / RGB Dispersion 截图。Prism-2 随后补齐了材质级 `KHR_materials_dispersion` 导入与 Abbe Number 显示；Glass-2B 仍需 Thickness Texture 和前后表面深度厚度。
 
 #### Prism Spectrum Demo：棱镜光谱分光专项
 
@@ -416,11 +416,13 @@ Shadow / Depth
 
 ##### Prism-2：连续光谱与材质参数
 
-- [ ] 接入材质级 `KHR_materials_dispersion`；按规范使用 `dispersion = 20 / AbbeNumber`，UI 同时显示 Dispersion 与换算后的 Abbe Number。
-- [ ] 使用 Cauchy's Equation 从中心 IOR 和 Abbe Number 计算 380～700 nm 的波长相关 IOR；默认 21 个样本，提供 7 / 15 / 21 / 31 四档质量。
-- [ ] 使用可追溯的 CIE 1931 Color Matching Functions 或明确记录的近似函数把波长转换到线性 sRGB；在 HDR 线性空间累积，Tone Mapping 前不做 sRGB 编码。
-- [ ] 对光谱样本做能量归一化，并把两次 Fresnel 透射和 Beer-Lambert 吸收计入每条波长的强度，避免采样数越高画面越亮。
-- [ ] 提供 `Continuous Spectrum` 与 `Seven-band Art Direction` 两种模式：前者用于算法展示，后者用于接近参考图的清晰彩虹条带。
+- [x] 接入材质级 `KHR_materials_dispersion`；按规范使用 `dispersion = 20 / AbbeNumber`，Inspector 对非零 Override 同时显示换算后的 Abbe Number。
+- [x] 使用 Cauchy's Equation 从中心 IOR 和 Abbe Number 计算 380～700 nm 的波长相关 IOR；默认 21 个样本，提供 7 / 15 / 21 / 31 四档质量。
+- [x] 使用 Wyman、Sloan、Shirley 的 CIE 1931 解析近似把波长转换到线性 sRGB；在 HDR 线性空间输出，Tone Mapping 前不做 sRGB 编码。
+- [x] 对光谱样本做能量归一化，并把两次 Fresnel 透射和波长相关 Beer-Lambert 吸收计入每条波长的强度，避免采样数越高画面越亮。
+- [x] 提供 `Continuous Spectrum` 与 `Seven-band Art Direction` 两种模式：前者用于算法展示，后者用于接近参考图的清晰彩虹条带。
+
+> Prism-2 完成（2026-08-24）：`PrismOptics` 现按 `KHR_materials_dispersion` 的 `Vd = 20 / dispersion` 与两项 Cauchy 公式，为 380～700 nm 的 7/15/21/31 档样本分别计算 IOR 和双界面光路；CIE XYZ 使用 Wyman / Sloan / Shirley 解析近似并转换为线性 sRGB。每条样本把两次 Fresnel 与 Beer-Lambert 衰减相乘，再把光谱总能量归一到 1。新增窄范围 glTF/GLB JSON 适配器补齐 Assimp 6.0 尚未公开的材质扩展，Prism 资产的 `dispersion=0.33` 已经贯通 CPU 材质、GPU Uniform 与 Shader；全局 Override 为 0 时使用材质值。动态调试线现可显示 21 样本连续光谱或七色模式，`docs/images/prism2_*.png` 保存同机位结果。CPU 测试覆盖材质导入、波长颜色、红/紫 IOR 顺序、角分离、零色散重合、Beer-Lambert 正值与能量归一化。下一阶段 Prism-3 将把这些数学光路升级为相机朝向的柔边 HDR Ribbon，而不再依赖 OpenGL 线宽。
 
 ##### Prism-3：可见光束渲染
 
@@ -443,7 +445,7 @@ Shadow / Depth
 - [ ] 建立固定相机视觉回归，覆盖 No Prism、No Dispersion、7-band、Continuous、TIR 与 1x/4x MSAA。
 - [ ] 在 1920×1080、4x MSAA 下分别记录 7/15/21/31 波长的 CPU 更新耗时、GPU Beam Pass 时间、Draw Call 和显存；若新增 Beam Pass 超过 2 ms，先分析 Fill-rate/Bloom/几何开销再优化。
 - [ ] 输出同机位的 `White Beam → Prism → Spectrum` 分阶段图、调试光路图和最终 Hero Shot；录制 15～30 秒参数变化片段作为 Demo Reel 的一个章节。
-- [ ] 在 `docs/prism-spectrum.md` 记录公式、坐标约定、Pass 顺序、物理近似、失败案例、性能数据，以及 [Khronos KHR_materials_dispersion](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_dispersion) 的参数映射。
+- [~] `docs/prism-spectrum.md` 已记录 Prism-2 公式、数据流、物理近似、运行参数与 Khronos 映射；Prism-5 继续补完整 Pass 顺序、失败案例和性能数据。
 
 Prism Demo 验收：出射光谱必须由世界空间入射光经过两个棱镜界面求解得到，而不是固定在屏幕上的彩虹贴图；关闭色散时各波长光路重合，改变 IOR / Abbe / 入射角时结果符合预期；最终画面同时提供“物理连续光谱”和“七色美术模式”作为图形程序与 TA 两种叙事证据。
 

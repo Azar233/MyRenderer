@@ -7,6 +7,8 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
+#include "optics/PrismOptics.h"
+
 class Shader;
 
 class DebugGrid {
@@ -26,14 +28,11 @@ public:
         bool showGrid,
         bool showAxes
     ) const;
-    void drawPrismPath(
+    void drawPrismSpectrum(
         const glm::mat4& view,
         const glm::mat4& projection,
-        const glm::vec3& source,
-        const glm::vec3& entry,
-        const glm::vec3& exit,
-        const glm::vec3& outputEnd,
-        bool totalInternalReflection
+        const SpectralBeamData& spectrum,
+        float outputLength
     ) const;
 
 private:

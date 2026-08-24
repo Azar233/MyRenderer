@@ -5,6 +5,7 @@
 
 #include <glm/geometric.hpp>
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 
 #include "optics/PrismOptics.h"
 
@@ -91,6 +92,93 @@ int main() {
             }
         }
         require(foundTotalInternalReflection, "high-IOR angle sweep should exercise total internal reflection");
+
+        const float redIor = prismIorAtWavelength(1.52f, 0.33f, 650.0f);
+        const float violetIor = prismIorAtWavelength(1.52f, 0.33f, 420.0f);
+        require(violetIor > redIor, "violet light should use a higher refractive index than red light");
+        require(
+            std::abs(prismIorAtWavelength(1.52f, 0.0f, 420.0f) - 1.52f) < 1.0e-6f,
+            "zero dispersion should keep a wavelength-independent IOR"
+        );
+
+        const glm::vec3 red = wavelengthToLinearSrgb(650.0f);
+        const glm::vec3 green = wavelengthToLinearSrgb(540.0f);
+        const glm::vec3 blue = wavelengthToLinearSrgb(450.0f);
+        require(red.r > red.g && red.r > red.b, "650 nm should map to a red-dominant linear color");
+        require(green.g > green.r && green.g > green.b, "540 nm should map to a green-dominant linear color");
+        require(blue.b > blue.r && blue.b > blue.g, "450 nm should map to a blue-dominant linear color");
+
+        const SpectralBeamData continuous = tracePrismSpectrum(
+            triangle,
+            heroRay,
+            1.52f,
+            0.33f,
+            21,
+            PrismSpectrumMode::Continuous,
+            8.0f,
+            glm::vec3(0.88f, 0.96f, 1.0f)
+        );
+        require(continuous.samples.size() == 21U, "continuous mode should preserve the 21-sample quality tier");
+        float normalizedEnergy = 0.0f;
+        for (const PrismSpectralSample& sample : continuous.samples) {
+            require(sample.path.valid, "every hero spectrum sample should cross the prism");
+            require(sample.transmittance > 0.0f, "Fresnel and Beer-Lambert transmission should stay positive");
+            normalizedEnergy += sample.normalizedEnergy;
+        }
+        require(std::abs(normalizedEnergy - 1.0f) < 1.0e-5f, "spectral energy should normalize to one");
+        require(
+            continuous.samples.front().indexOfRefraction
+                > continuous.samples.back().indexOfRefraction,
+            "continuous samples should preserve violet-to-red IOR ordering"
+        );
+        require(
+            angularDifference(
+                continuous.samples.front().path.exitDirection,
+                continuous.samples.back().path.exitDirection
+            ) > 1.0e-3f,
+            "continuous spectrum endpoints should separate spatially"
+        );
+
+        const SpectralBeamData sevenBand = tracePrismSpectrum(
+            triangle,
+            heroRay,
+            1.52f,
+            0.33f,
+            31,
+            PrismSpectrumMode::SevenBand
+        );
+        require(sevenBand.samples.size() == 7U, "art-directed mode should emit exactly seven bands");
+
+        for (const int qualityTier : {7, 15, 21, 31}) {
+            const SpectralBeamData qualitySpectrum = tracePrismSpectrum(
+                triangle,
+                heroRay,
+                1.52f,
+                0.33f,
+                qualityTier,
+                PrismSpectrumMode::Continuous
+            );
+            require(
+                qualitySpectrum.samples.size() == static_cast<std::size_t>(qualityTier),
+                "continuous spectrum should preserve every documented quality tier"
+            );
+        }
+
+        const SpectralBeamData nondispersive = tracePrismSpectrum(
+            triangle,
+            heroRay,
+            1.52f,
+            0.0f,
+            15,
+            PrismSpectrumMode::Continuous
+        );
+        require(
+            angularDifference(
+                nondispersive.samples.front().path.exitDirection,
+                nondispersive.samples.back().path.exitDirection
+            ) < 1.0e-4f,
+            "zero dispersion should collapse all outgoing wavelengths onto one path"
+        );
 
         std::cout << "Prism optics tests passed\n";
         return 0;

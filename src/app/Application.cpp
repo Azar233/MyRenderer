@@ -160,6 +160,9 @@ int Application::run(const std::filesystem::path& initialModel) {
 
     if (const char* screenshotPath = std::getenv("MYRENDERER_SCREENSHOT")) {
         pendingScreenshotPath_ = std::filesystem::absolute(screenshotPath).lexically_normal();
+        // Let newly uploaded materials and driver-specialized shader state settle
+        // before recording an automated visual baseline.
+        pendingScreenshotWarmupFrames_ = 2;
     }
     const char* recoveryModelValue = std::getenv("MYRENDERER_RECOVERY_TEST");
     const std::filesystem::path recoveryModel = recoveryModelValue == nullptr
@@ -633,6 +636,14 @@ void Application::drawInspectorPanel() {
                 2.5f,
                 "%.2f"
             );
+            if (rendererSettings_.dispersionStrength > 0.0f) {
+                ImGui::TextDisabled(
+                    "Abbe number: %.2f",
+                    20.0f / rendererSettings_.dispersionStrength
+                );
+            } else {
+                ImGui::TextDisabled("Abbe number: material-driven");
+            }
             ImGui::Checkbox(
                 "Prism incident beam guide",
                 &rendererSettings_.showPrismIncidentBeam
@@ -826,7 +837,11 @@ void Application::drawViewportPanel() {
     }
     renderer_->render(renderItems, camera_, rendererSettings_, width, height);
 
-    if (!pendingScreenshotPath_.empty() && model_ != nullptr && !pendingModelImport_.has_value()) {
+    if (!pendingScreenshotPath_.empty() && model_ != nullptr && !pendingModelImport_.has_value()
+        && pendingScreenshotWarmupFrames_ > 0) {
+        --pendingScreenshotWarmupFrames_;
+    } else if (!pendingScreenshotPath_.empty() && model_ != nullptr
+        && !pendingModelImport_.has_value()) {
         std::string screenshotError;
         if (renderer_->saveScreenshot(pendingScreenshotPath_, screenshotError)) {
             statusMessage_ = "Saved screenshot (MSAA "
@@ -1256,7 +1271,8 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     rendererSettings_.refractionScale = 0.28f;
     rendererSettings_.refractionSteps = 20;
     rendererSettings_.volumeThicknessScale = 1.0f;
-    rendererSettings_.dispersionStrength = 0.33f;
+    // The prism fixture owns KHR_materials_dispersion; zero means no global override.
+    rendererSettings_.dispersionStrength = 0.0f;
     rendererSettings_.glassDebugView = GlassDebugView::Final;
     rendererSettings_.exposure = 1.20f;
     rendererSettings_.bloomThreshold = 0.75f;
@@ -1271,21 +1287,40 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
         glm::vec2(-2.4f, -0.15f),
         glm::normalize(glm::vec2(-0.39f, 0.12f) - glm::vec2(-2.4f, -0.15f))
     };
-    const PrismOpticalPath opticalPath = traceTriangularPrism(
+    int spectralSampleCount = 21;
+    if (const char* value = std::getenv("MYRENDERER_PRISM_SAMPLES")) {
+        static constexpr std::array<int, 4> qualityTiers{7, 15, 21, 31};
+        const int requestedSamples = std::atoi(value);
+        spectralSampleCount = *std::min_element(
+            qualityTiers.begin(),
+            qualityTiers.end(),
+            [requestedSamples](int left, int right) {
+                return std::abs(left - requestedSamples) < std::abs(right - requestedSamples);
+            }
+        );
+    }
+    PrismSpectrumMode spectrumMode = PrismSpectrumMode::Continuous;
+    if (const char* value = std::getenv("MYRENDERER_PRISM_SPECTRUM_MODE")) {
+        const std::string requestedMode = lowercase(value);
+        if (requestedMode == "7" || requestedMode == "seven" || requestedMode == "seven-band") {
+            spectrumMode = PrismSpectrumMode::SevenBand;
+        }
+    }
+    rendererSettings_.prismSpectrum = tracePrismSpectrum(
         prismCrossSection,
         incidentRay,
-        1.52f
+        1.52f,
+        0.33f,
+        spectralSampleCount,
+        spectrumMode,
+        8.0f,
+        glm::vec3(0.88f, 0.96f, 1.0f)
     );
-    rendererSettings_.prismOpticalPathValid = opticalPath.valid;
-    rendererSettings_.prismTotalInternalReflection = opticalPath.totalInternalReflection;
-    rendererSettings_.prismBeamSource = glm::vec3(incidentRay.origin, 0.0f);
-    if (opticalPath.valid) {
-        rendererSettings_.prismEntryPoint = glm::vec3(opticalPath.entryPoint, 0.0f);
-        rendererSettings_.prismExitPoint = glm::vec3(opticalPath.exitPoint, 0.0f);
-        rendererSettings_.prismBeamOutputEnd = glm::vec3(
-            opticalPath.exitPoint + opticalPath.exitDirection * 2.4f,
-            0.0f
-        );
+    rendererSettings_.prismOpticalPathValid = false;
+    rendererSettings_.prismTotalInternalReflection = false;
+    for (const PrismSpectralSample& sample : rendererSettings_.prismSpectrum.samples) {
+        rendererSettings_.prismOpticalPathValid |= sample.path.valid;
+        rendererSettings_.prismTotalInternalReflection |= sample.path.totalInternalReflection;
     }
     camera_.setOrbitPose(glm::vec3(0.0f), 0.0f, 0.0f, 4.8f, 35.0f);
 

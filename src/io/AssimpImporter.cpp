@@ -1,4 +1,5 @@
 #include "io/AssimpImporter.h"
+#include "io/GltfMaterialExtensions.h"
 
 #include <algorithm>
 #include <cctype>
@@ -390,10 +391,14 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
     const std::filesystem::path sourceDirectory = result.model.sourcePath.parent_path();
     std::unordered_map<std::string, std::int32_t> textureIndices;
 
+    const std::vector<float> materialDispersion = loadGltfMaterialDispersion(path);
     result.model.materials.reserve(scene->mNumMaterials);
     for (unsigned int materialIndex = 0; materialIndex < scene->mNumMaterials; ++materialIndex) {
         const aiMaterial& source = *scene->mMaterials[materialIndex];
         MaterialData material;
+        if (materialIndex < materialDispersion.size()) {
+            material.dispersion = materialDispersion[materialIndex];
+        }
         aiString name;
         if (source.Get(AI_MATKEY_NAME, name) == AI_SUCCESS && name.length > 0U) {
             material.name = name.C_Str();

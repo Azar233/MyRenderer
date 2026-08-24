@@ -1,5 +1,6 @@
 #include "render/DebugGrid.h"
 
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -136,12 +137,7 @@ DebugGrid::DebugGrid(
     glGenBuffers(1, &prismPathVbo_);
     glBindVertexArray(prismPathVao_);
     glBindBuffer(GL_ARRAY_BUFFER, prismPathVbo_);
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        static_cast<GLsizeiptr>(6U * sizeof(DebugVertex)),
-        nullptr,
-        GL_DYNAMIC_DRAW
-    );
+    glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(
         0,
@@ -209,40 +205,66 @@ void DebugGrid::draw(
     glBindVertexArray(0);
 }
 
-void DebugGrid::drawPrismPath(
+void DebugGrid::drawPrismSpectrum(
     const glm::mat4& view,
     const glm::mat4& projection,
-    const glm::vec3& source,
-    const glm::vec3& entry,
-    const glm::vec3& exit,
-    const glm::vec3& outputEnd,
-    bool totalInternalReflection
+    const SpectralBeamData& spectrum,
+    float outputLength
 ) const {
     std::vector<DebugVertex> vertices;
-    vertices.reserve(6U);
-    appendLine(vertices, source, entry, glm::vec4(7.0f, 7.0f, 7.0f, 1.0f));
-    appendLine(vertices, entry, exit, glm::vec4(1.2f, 2.4f, 4.2f, 1.0f));
+    vertices.reserve(2U + spectrum.samples.size() * 4U);
+
+    const PrismSpectralSample* centerSample = nullptr;
+    for (const PrismSpectralSample& sample : spectrum.samples) {
+        if (sample.path.valid && (centerSample == nullptr
+            || std::abs(sample.wavelengthNanometers - 550.0f)
+                < std::abs(centerSample->wavelengthNanometers - 550.0f))) {
+            centerSample = &sample;
+        }
+    }
+    if (centerSample == nullptr) {
+        return;
+    }
+
     appendLine(
         vertices,
-        exit,
-        outputEnd,
-        totalInternalReflection
-            ? glm::vec4(5.0f, 1.2f, 0.25f, 1.0f)
-            : glm::vec4(5.0f, 5.0f, 5.0f, 1.0f)
+        glm::vec3(spectrum.incidentRay.origin, 0.0f),
+        glm::vec3(centerSample->path.entryPoint, 0.0f),
+        glm::vec4(7.0f, 7.0f, 7.0f, 1.0f)
     );
+    const float sampleCount = static_cast<float>(spectrum.samples.size());
+    for (const PrismSpectralSample& sample : spectrum.samples) {
+        if (!sample.path.valid || sample.normalizedEnergy <= 0.0f) {
+            continue;
+        }
+        const float relativeEnergy = sample.normalizedEnergy * sampleCount;
+        const glm::vec3 spectralColor = sample.linearRgb * (1.25f + 3.75f * relativeEnergy);
+        appendLine(
+            vertices,
+            glm::vec3(sample.path.entryPoint, 0.0f),
+            glm::vec3(sample.path.exitPoint, 0.0f),
+            glm::vec4(spectralColor * 0.35f, 1.0f)
+        );
+        appendLine(
+            vertices,
+            glm::vec3(sample.path.exitPoint, 0.0f),
+            glm::vec3(sample.path.exitPoint + sample.path.exitDirection * outputLength, 0.0f),
+            glm::vec4(spectralColor, 1.0f)
+        );
+    }
 
     shader_->use();
     shader_->setMat4("uView", view);
     shader_->setMat4("uProjection", projection);
     glBindBuffer(GL_ARRAY_BUFFER, prismPathVbo_);
-    glBufferSubData(
+    glBufferData(
         GL_ARRAY_BUFFER,
-        0,
         static_cast<GLsizeiptr>(vertices.size() * sizeof(DebugVertex)),
-        vertices.data()
+        vertices.data(),
+        GL_DYNAMIC_DRAW
     );
     glBindVertexArray(prismPathVao_);
-    glLineWidth(3.0f);
+    glLineWidth(2.25f);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
     glLineWidth(1.0f);
     glBindVertexArray(0);

@@ -100,6 +100,7 @@ add_executable(MyRenderer
     src/app/Application.cpp
     src/app/FileDialog.cpp
     src/io/AssimpImporter.cpp
+    src/io/GltfMaterialExtensions.cpp
     src/io/ObjLoader.cpp
     src/optics/PrismOptics.cpp
     src/render/Camera.cpp
@@ -132,6 +133,7 @@ endif()
 target_include_directories(MyRenderer PRIVATE
     src
     ${assimp_SOURCE_DIR}/contrib/stb
+    ${assimp_SOURCE_DIR}/contrib/rapidjson/include
     ${assimp_SOURCE_DIR}/contrib/zlib
     ${assimp_BINARY_DIR}/contrib/zlib
 )
@@ -169,9 +171,13 @@ if(BUILD_TESTING)
     add_executable(MyRendererAssetTests
         tests/AssetImportTests.cpp
         src/io/AssimpImporter.cpp
+        src/io/GltfMaterialExtensions.cpp
         src/io/ObjLoader.cpp
     )
-    target_include_directories(MyRendererAssetTests PRIVATE src)
+    target_include_directories(MyRendererAssetTests PRIVATE
+        src
+        ${assimp_SOURCE_DIR}/contrib/rapidjson/include
+    )
     target_compile_definitions(MyRendererAssetTests PRIVATE
         MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
@@ -231,6 +237,12 @@ add_custom_target(gpu-smoke
             MYRENDERER_MSAA=4
             $<TARGET_FILE:MyRenderer>
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/glass_material_test.gltf
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_PRISM_DEMO=1
+            MYRENDERER_PRISM_SAMPLES=21
+            $<TARGET_FILE:MyRenderer>
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=1

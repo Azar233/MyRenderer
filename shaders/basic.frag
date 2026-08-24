@@ -41,6 +41,7 @@ uniform float uAttenuationDistance;
 uniform float uRefractionScale;
 uniform float uVolumeThicknessScale;
 uniform float uDispersionStrength;
+uniform float uMaterialDispersion;
 uniform float uOpaqueColorMaxMip;
 uniform int uRefractionSteps;
 uniform int uGlassDebugView;
@@ -266,7 +267,9 @@ void main() {
             volumePathLength
         );
         vec3 rgbPathLengths = vec3(volumePathLength);
-        float dispersion = max(uDispersionStrength, 0.0);
+        float dispersion = uDispersionStrength > 0.0
+            ? uDispersionStrength
+            : max(uMaterialDispersion, 0.0);
         if (dispersion > 0.0001 && uThicknessFactor > 0.0) {
             float halfSpread = (ior - 1.0) * 0.025 * dispersion;
             vec3 channelIors = max(

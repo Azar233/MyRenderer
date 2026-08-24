@@ -137,6 +137,10 @@ int main() {
         require(prismGlass != nullptr, "prism fixture should preserve its glass material");
         require(prismGlass->transmissionFactor > 0.95f, "prism glass should remain highly transmissive");
         require(prismGlass->thicknessFactor > 0.49f, "prism glass should preserve volume thickness");
+        require(
+            prismGlass->dispersion > 0.32f && prismGlass->dispersion < 0.34f,
+            "KHR_materials_dispersion should survive import"
+        );
 
         const ModelImportResult dae = assimp.load(asset("textured_quad.dae"));
         require(!dae.model.meshes.empty(), "DAE fixture should import a mesh");

@@ -2,7 +2,7 @@
 
 本文档记录 MyRenderer 已使用、正在实现和路线图中即将使用的图形学与工程术语。解释优先服务于理解本项目，不追求替代完整教材。
 
-最后更新：2026-08-08
+最后更新：2026-08-24
 
 ## 阅读与维护约定
 
@@ -190,15 +190,18 @@
 | Beer-Lambert Law | 光在介质中传播越远，被吸收越多；不同颜色可以有不同吸收。 | Shader 使用 `attenuationColor^(pathLength/attenuationDistance)` 计算玻璃透射率。 | 已实现 |
 | Attenuation（衰减/吸收） | 光穿过介质后亮度和颜色逐渐减少。 | glTF 材质的 Color / Distance 决定两组测试玻璃的青色和琥珀色体积。 | 已实现 |
 | Transmittance（透射率） | 光穿过一段介质后还剩下的比例，1 表示没有损失，0 表示完全吸收。 | Glass Debug View 可直接显示 Beer-Lambert 计算出的 RGB 透射率。 | 已实现 |
-| Spectral Dispersion（光谱色散） | 不同波长的折射率不同，白光经过水晶后分离成彩虹。 | 当前按 Khronos 公式计算 R/G/B 三个 IOR 并分别 Ray March；材质级扩展导入待补。 | 部分实现 |
-| Abbe Number（阿贝数） | 描述材料色散强弱的参数；数值越低通常色散越明显。 | 当前 Dispersion Override 对应 glTF 的 `20 / Abbe Number` 参数化，UI 尚未反算显示 Abbe 值。 | 部分实现 |
-| Prism Dispersion（棱镜分光） | 白光经过棱镜的入射和出射两个界面后，不同波长沿不同方向离开。 | Prism Spectrum Demo 将从世界空间入射光求解连续出射光谱。 | 计划 |
+| KHR_materials_dispersion | glTF 的材质色散扩展，用一个非负 `dispersion` 参数描述透射介质分色强度。 | glTF/GLB 适配器把扩展写入 `MaterialData`，GPU 材质默认使用它；Inspector 的非零 Override 可覆盖。 | 已实现 |
+| Spectral Dispersion（光谱色散） | 不同波长的折射率不同，白光经过水晶后分离成彩虹。 | Glass Shader 支持 R/G/B 近似；PrismOptics 进一步对 380～700 nm 的离散波长逐条求解。 | 已实现 |
+| Abbe Number（阿贝数） | 描述材料色散强弱的参数；数值越低通常色散越明显。 | 按 glTF 规范换算 `Vd = 20 / dispersion`；Inspector 会显示非零 Override 对应的 Abbe 值。 | 已实现 |
+| Prism Dispersion（棱镜分光） | 白光经过棱镜的入射和出射两个界面后，不同波长沿不同方向离开。 | Prism-2 已从世界空间入射光生成连续或七色出射光路；柔边带状光束归入 Prism-3。 | 基础已实现 |
 | Ray–Prism Intersection（射线—棱镜求交） | 计算一条有方向的光线最先撞到棱镜哪个面、撞击点在哪里。 | `PrismOptics` 先求入射面，再从内部方向求出射面。 | 已实现 |
 | Surface Normal（表面法线） | 垂直于表面的方向，用来判断光从哪一侧入射并计算折射角。 | 每个三角形截面边生成朝外法线，分别用于空气→玻璃和玻璃→空气。 | 已实现 |
 | Fresnel Transmittance（菲涅耳透射率） | 光到达介质边界后，没有被反射、继续穿过边界的能量比例。 | Prism-1 在入射/出射两个界面分别计算并相乘。 | 已实现 |
-| Cauchy's Equation（柯西方程） | 用少量材料参数近似折射率随光波长的变化。 | 计划从中心 IOR 与 Abbe Number 计算 380～700 nm 各采样点的 IOR。 | 计划 |
-| Spectral Sampling（光谱采样） | 把连续可见光拆成有限个波长样本分别计算，再合成为显示颜色。 | Prism Demo 计划提供 7/15/21/31 样本画质档位。 | 计划 |
-| CIE 1931 Color Matching Functions | 描述不同波长对人眼三刺激值贡献的标准函数。 | 计划用于把波长能量转换到线性 sRGB，避免随意指定彩虹颜色。 | 计划 |
+| Cauchy's Equation（柯西方程） | 用少量材料参数近似折射率随光波长的变化。 | `prismIorAtWavelength` 按 Khronos 公式从中心 IOR 与 Abbe Number 计算 380～700 nm 的 IOR。 | 已实现 |
+| Spectral Sampling（光谱采样） | 把连续可见光拆成有限个波长样本分别计算，再合成为显示颜色。样本越多越平滑，但 CPU/GPU 成本也越高。 | Prism-2 提供 7/15/21/31 四档，默认 21；能量归一化避免增加样本后无故变亮。 | 已实现 |
+| CIE 1931 Color Matching Functions | 描述不同波长对人眼 XYZ 三刺激值贡献的标准曲线，是把“物理波长”转换成“显示颜色”的桥梁。 | 使用 Wyman、Sloan、Shirley 的解析高斯近似，再由 XYZ 转换到线性 sRGB。 | 已实现（解析近似） |
+| Wavelength-to-RGB（波长到 RGB） | 把某个纳米波长对应的人眼颜色换成显示设备的红绿蓝数值；这不是简单手写七种颜色。 | `wavelengthToLinearSrgb` 先求 CIE XYZ，再转换并裁剪到线性 sRGB，Tone Mapping 前不做 Gamma 编码。 | 已实现 |
+| Spectral Energy Normalization（光谱能量归一化） | 把所有波长样本的权重重新缩放，使总和保持固定，避免采样数翻倍时亮度也翻倍。 | `tracePrismSpectrum` 把两界面 Fresnel 与波长相关 Beer-Lambert 衰减相乘后，将样本总权重归一到 1。 | 已实现 |
 | Emissive Ribbon（自发光带状几何） | 用朝向相机的窄带 Mesh 表现光束，并以柔边和 HDR 发光增强可见度。 | 计划绘制白色入射束、棱镜内部束与光谱出射束。 | 计划 |
 | Volumetric Scattering（体积散射） | 光被空气、雾或尘埃散射后，观察者才会从侧面看到光柱。 | Prism 第一版用 Ribbon 明确作为光路可视化；真实体积散射是可选高质量模式。 | 计划 |
 | Thin-film Iridescence（薄膜虹彩） | 薄层内部多次反射产生干涉，随角度呈现彩色表面。 | 可作为参考效果的可选表面增强，不等同于体积色散。 | 计划 |
@@ -305,6 +308,9 @@
 | 格式无关资产结构 | `src/asset/ModelData.h` |
 | OBJ 导入 | `src/io/ObjLoader.*` |
 | DAE/glTF/GLB 导入 | `src/io/AssimpImporter.*` |
+| glTF/GLB 色散扩展适配 | `src/io/GltfMaterialExtensions.*` |
+| 棱镜求交与连续光谱 | `src/optics/PrismOptics.*` |
 | UI、加载与主循环 | `src/app/Application.*` |
 | CPU 资产回归测试 | `tests/AssetImportTests.cpp` |
+| Prism 公式、数据流与近似边界 | `docs/prism-spectrum.md` |
 | 后续阶段与验收标准 | `todolist.md` |
