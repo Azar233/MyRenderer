@@ -193,6 +193,9 @@
 | Spectral Dispersion（光谱色散） | 不同波长的折射率不同，白光经过水晶后分离成彩虹。 | 当前按 Khronos 公式计算 R/G/B 三个 IOR 并分别 Ray March；材质级扩展导入待补。 | 部分实现 |
 | Abbe Number（阿贝数） | 描述材料色散强弱的参数；数值越低通常色散越明显。 | 当前 Dispersion Override 对应 glTF 的 `20 / Abbe Number` 参数化，UI 尚未反算显示 Abbe 值。 | 部分实现 |
 | Prism Dispersion（棱镜分光） | 白光经过棱镜的入射和出射两个界面后，不同波长沿不同方向离开。 | Prism Spectrum Demo 将从世界空间入射光求解连续出射光谱。 | 计划 |
+| Ray–Prism Intersection（射线—棱镜求交） | 计算一条有方向的光线最先撞到棱镜哪个面、撞击点在哪里。 | `PrismOptics` 先求入射面，再从内部方向求出射面。 | 已实现 |
+| Surface Normal（表面法线） | 垂直于表面的方向，用来判断光从哪一侧入射并计算折射角。 | 每个三角形截面边生成朝外法线，分别用于空气→玻璃和玻璃→空气。 | 已实现 |
+| Fresnel Transmittance（菲涅耳透射率） | 光到达介质边界后，没有被反射、继续穿过边界的能量比例。 | Prism-1 在入射/出射两个界面分别计算并相乘。 | 已实现 |
 | Cauchy's Equation（柯西方程） | 用少量材料参数近似折射率随光波长的变化。 | 计划从中心 IOR 与 Abbe Number 计算 380～700 nm 各采样点的 IOR。 | 计划 |
 | Spectral Sampling（光谱采样） | 把连续可见光拆成有限个波长样本分别计算，再合成为显示颜色。 | Prism Demo 计划提供 7/15/21/31 样本画质档位。 | 计划 |
 | CIE 1931 Color Matching Functions | 描述不同波长对人眼三刺激值贡献的标准函数。 | 计划用于把波长能量转换到线性 sRGB，避免随意指定彩虹颜色。 | 计划 |

@@ -13,6 +13,7 @@
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/geometric.hpp>
 #include <glm/mat3x3.hpp>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -23,6 +24,7 @@
 #include "io/AssimpImporter.h"
 #include "io/ModelImporter.h"
 #include "io/ObjLoader.h"
+#include "optics/PrismOptics.h"
 #include "render/GpuModel.h"
 #include "render/OpenGlDebug.h"
 #include "render/Renderer.h"
@@ -635,6 +637,15 @@ void Application::drawInspectorPanel() {
                 "Prism incident beam guide",
                 &rendererSettings_.showPrismIncidentBeam
             );
+            if (rendererSettings_.showPrismIncidentBeam) {
+                ImGui::TextDisabled(
+                    rendererSettings_.prismOpticalPathValid
+                        ? (rendererSettings_.prismTotalInternalReflection
+                            ? "Optical path: total internal reflection"
+                            : "Optical path: entry + internal + exit")
+                        : "Optical path: no prism intersection"
+                );
+            }
             int glassDebugView = static_cast<int>(rendererSettings_.glassDebugView);
             const char* glassDebugViews[] = {
                 "Final",
@@ -1250,6 +1261,32 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     rendererSettings_.exposure = 1.20f;
     rendererSettings_.bloomThreshold = 0.75f;
     rendererSettings_.bloomIntensity = 0.22f;
+
+    const std::array<glm::vec2, 3> prismCrossSection{
+        glm::vec2(-0.70f, -0.48125f),
+        glm::vec2(0.70f, -0.48125f),
+        glm::vec2(0.0f, 0.74375f)
+    };
+    const PrismRay2D incidentRay{
+        glm::vec2(-2.4f, -0.15f),
+        glm::normalize(glm::vec2(-0.39f, 0.12f) - glm::vec2(-2.4f, -0.15f))
+    };
+    const PrismOpticalPath opticalPath = traceTriangularPrism(
+        prismCrossSection,
+        incidentRay,
+        1.52f
+    );
+    rendererSettings_.prismOpticalPathValid = opticalPath.valid;
+    rendererSettings_.prismTotalInternalReflection = opticalPath.totalInternalReflection;
+    rendererSettings_.prismBeamSource = glm::vec3(incidentRay.origin, 0.0f);
+    if (opticalPath.valid) {
+        rendererSettings_.prismEntryPoint = glm::vec3(opticalPath.entryPoint, 0.0f);
+        rendererSettings_.prismExitPoint = glm::vec3(opticalPath.exitPoint, 0.0f);
+        rendererSettings_.prismBeamOutputEnd = glm::vec3(
+            opticalPath.exitPoint + opticalPath.exitDirection * 2.4f,
+            0.0f
+        );
+    }
     camera_.setOrbitPose(glm::vec3(0.0f), 0.0f, 0.0f, 4.8f, 35.0f);
 
     if (loadFixture) {

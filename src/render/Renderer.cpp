@@ -215,22 +215,28 @@ void Renderer::render(
             ++drawCallCount_;
             glEnable(GL_DEPTH_TEST);
         }
-        if (settings.showGrid || settings.showAxes || settings.showPrismIncidentBeam) {
+        if (settings.showGrid || settings.showAxes
+            || (settings.showPrismIncidentBeam && settings.prismOpticalPathValid)) {
         glDisable(GL_CULL_FACE);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glDepthMask(GL_FALSE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        debugGrid_->draw(
-            view,
-            projection,
-            settings.showGrid,
-            settings.showAxes,
-            settings.showPrismIncidentBeam
-        );
+        debugGrid_->draw(view, projection, settings.showGrid, settings.showAxes);
+        if (settings.showPrismIncidentBeam && settings.prismOpticalPathValid) {
+            debugGrid_->drawPrismPath(
+                view,
+                projection,
+                settings.prismBeamSource,
+                settings.prismEntryPoint,
+                settings.prismExitPoint,
+                settings.prismBeamOutputEnd,
+                settings.prismTotalInternalReflection
+            );
+        }
         drawCallCount_ += (settings.showGrid ? 1U : 0U)
             + (settings.showAxes ? 1U : 0U)
-            + (settings.showPrismIncidentBeam ? 1U : 0U);
+            + (settings.showPrismIncidentBeam && settings.prismOpticalPathValid ? 1U : 0U);
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
         }

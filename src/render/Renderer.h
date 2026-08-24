@@ -53,6 +53,8 @@ struct RendererSettings {
     bool toneMapping{true};
     bool bloom{true};
     bool showPrismIncidentBeam{false};
+    bool prismOpticalPathValid{false};
+    bool prismTotalInternalReflection{false};
     float environmentIntensity{0.55f};
     float refractionScale{0.18f};
     int refractionSteps{12};
@@ -62,6 +64,10 @@ struct RendererSettings {
     float exposure{1.0f};
     float bloomThreshold{1.0f};
     float bloomIntensity{0.12f};
+    glm::vec3 prismBeamSource{-2.4f, -0.15f, 0.0f};
+    glm::vec3 prismEntryPoint{-0.39f, 0.12f, 0.0f};
+    glm::vec3 prismExitPoint{0.39f, 0.12f, 0.0f};
+    glm::vec3 prismBeamOutputEnd{2.4f, 0.15f, 0.0f};
 };
 
 struct RenderItem {

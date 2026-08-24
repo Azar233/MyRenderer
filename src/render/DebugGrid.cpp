@@ -101,17 +101,6 @@ DebugGrid::DebugGrid(
     appendPositiveAxis(vertices, axesOrigin, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.22f, 0.48f, 1.0f, 0.95f});
     axesVertexCount_ = vertices.size() - axesFirstVertex_;
 
-    // Prism-0 baseline only: a world-space white incident beam placeholder.
-    // Prism-1 replaces the hard-coded endpoint with the optical intersection result.
-    prismBeamFirstVertex_ = vertices.size();
-    appendLine(
-        vertices,
-        glm::vec3(-2.4f, -0.15f, 0.34f),
-        glm::vec3(-0.39f, 0.12f, 0.34f),
-        glm::vec4(7.0f, 7.0f, 7.0f, 1.0f)
-    );
-    prismBeamVertexCount_ = vertices.size() - prismBeamFirstVertex_;
-
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
     glBindVertexArray(vao_);
@@ -142,9 +131,46 @@ DebugGrid::DebugGrid(
     );
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    glGenVertexArrays(1, &prismPathVao_);
+    glGenBuffers(1, &prismPathVbo_);
+    glBindVertexArray(prismPathVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, prismPathVbo_);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(6U * sizeof(DebugVertex)),
+        nullptr,
+        GL_DYNAMIC_DRAW
+    );
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(
+        0,
+        3,
+        GL_FLOAT,
+        GL_FALSE,
+        static_cast<GLsizei>(sizeof(DebugVertex)),
+        reinterpret_cast<void*>(offsetof(DebugVertex, position))
+    );
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(
+        1,
+        4,
+        GL_FLOAT,
+        GL_FALSE,
+        static_cast<GLsizei>(sizeof(DebugVertex)),
+        reinterpret_cast<void*>(offsetof(DebugVertex, color))
+    );
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 DebugGrid::~DebugGrid() {
+    if (prismPathVbo_ != 0U) {
+        glDeleteBuffers(1, &prismPathVbo_);
+    }
+    if (prismPathVao_ != 0U) {
+        glDeleteVertexArrays(1, &prismPathVao_);
+    }
     if (vbo_ != 0U) {
         glDeleteBuffers(1, &vbo_);
     }
@@ -157,10 +183,9 @@ void DebugGrid::draw(
     const glm::mat4& view,
     const glm::mat4& projection,
     bool showGrid,
-    bool showAxes,
-    bool showPrismIncidentBeam
+    bool showAxes
 ) const {
-    if (!showGrid && !showAxes && !showPrismIncidentBeam) {
+    if (!showGrid && !showAxes) {
         return;
     }
 
@@ -181,14 +206,45 @@ void DebugGrid::draw(
         );
         glLineWidth(1.0f);
     }
-    if (showPrismIncidentBeam) {
-        glLineWidth(3.0f);
-        glDrawArrays(
-            GL_LINES,
-            static_cast<GLint>(prismBeamFirstVertex_),
-            static_cast<GLsizei>(prismBeamVertexCount_)
-        );
-        glLineWidth(1.0f);
-    }
     glBindVertexArray(0);
+}
+
+void DebugGrid::drawPrismPath(
+    const glm::mat4& view,
+    const glm::mat4& projection,
+    const glm::vec3& source,
+    const glm::vec3& entry,
+    const glm::vec3& exit,
+    const glm::vec3& outputEnd,
+    bool totalInternalReflection
+) const {
+    std::vector<DebugVertex> vertices;
+    vertices.reserve(6U);
+    appendLine(vertices, source, entry, glm::vec4(7.0f, 7.0f, 7.0f, 1.0f));
+    appendLine(vertices, entry, exit, glm::vec4(1.2f, 2.4f, 4.2f, 1.0f));
+    appendLine(
+        vertices,
+        exit,
+        outputEnd,
+        totalInternalReflection
+            ? glm::vec4(5.0f, 1.2f, 0.25f, 1.0f)
+            : glm::vec4(5.0f, 5.0f, 5.0f, 1.0f)
+    );
+
+    shader_->use();
+    shader_->setMat4("uView", view);
+    shader_->setMat4("uProjection", projection);
+    glBindBuffer(GL_ARRAY_BUFFER, prismPathVbo_);
+    glBufferSubData(
+        GL_ARRAY_BUFFER,
+        0,
+        static_cast<GLsizeiptr>(vertices.size() * sizeof(DebugVertex)),
+        vertices.data()
+    );
+    glBindVertexArray(prismPathVao_);
+    glLineWidth(3.0f);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices.size()));
+    glLineWidth(1.0f);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }

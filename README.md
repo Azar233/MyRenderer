@@ -25,7 +25,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - glTF 2.0 metallic-roughness PBR（Cook-Torrance GGX）、程序化 HDR 环境贴图、近似 IBL、天空盒与方向光 PCF 阴影。
 - glTF `OPAQUE` / `MASK` / `BLEND`、Alpha Cutoff、双面材质、透明子网格后向前排序，以及独立的透明深度/混合状态。
 - glTF `KHR_materials_transmission` / `KHR_materials_ior` / `KHR_materials_volume`：IOR 驱动的 Fresnel、Snell 折射、全反射、深度 Ray March、粗糙 Opaque HDR Mip 透射、Beer-Lambert 体积吸收、环境 Cubemap 回退与八种 Glass Debug View；另提供可调 RGB 三通道色散。
-- Prism-0 光谱 Demo 基线：原创封闭三棱柱、纯黑舞台、固定正面镜头、HDR 白色入射束占位以及可重复截图 Preset；双界面光学求解与出射光谱将在 Prism-1/2 接入。
+- Prism-0/1 光谱 Demo 基线：原创封闭三棱柱、纯黑舞台、固定正面镜头，以及 CPU 双界面 Ray/Prism 求交；HDR 调试光路显示白色入射段、浅蓝内部段和单波长出射段，连续光谱将在 Prism-2 接入。
 - 多对象 `RenderItem` 场景提交、跨对象透明 Draw List 全局排序，以及可调颜色/高度并能接收 PBR 光照与阴影的程序化地面；可开启第二模型实例验证场景级排序。
 - `Shadow map → Opaque HDR scene → Forward transparent/refractive scene → Bloom + tone map` 多 Pass 管线；Opaque HDR Color、最终 HDR Scene Color 与可采样 Depth 相互独立，可切换 ACES Tone Mapping、曝光和 Bloom。
 - 像素风应用图标，覆盖 GLFW 标题栏、任务栏和 Windows 可执行文件资源。
@@ -85,7 +85,7 @@ OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化
 
 ## 自动测试
 
-纯 CPU 资产导入与场景透明排序测试不创建 OpenGL 上下文，可直接通过 CTest 运行：
+纯 CPU 资产导入、场景透明排序与棱镜光路测试不创建 OpenGL 上下文，可直接通过 CTest 运行：
 
 ```powershell
 ctest --test-dir build-mingw --output-on-failure
@@ -128,6 +128,7 @@ src/asset/ModelData.h    格式无关的顶点、材质、子网格、Mesh 与�
 src/io/ModelImporter.h   统一模型导入接口与导入结果
 src/io/AssimpImporter.*  DAE 与 glTF/GLB 静态模型导入适配
 src/io/ObjLoader.*       OBJ 导入器：统一索引、UV、法线与 AABB
+src/optics/PrismOptics.* 无 OpenGL 依赖的三棱镜求交、双界面折射、Fresnel 与 TIR
 src/render/Camera.*      轨道相机
 src/render/DebugGrid.*   世界网格、XYZ 轴线与 Debug Line GPU 绘制
 src/render/EnvironmentMap.* 程序化 HDR Cubemap、IBL 采样与天空盒
@@ -144,4 +145,5 @@ shaders/                 GPU 顶点和片元 Shader
 assets/models/           模型资源
 assets/icons/            SVG 源稿、PNG 预览和 Windows ICO
 tests/AssetImportTests.cpp 无 OpenGL 上下文的 CPU 导入回归测试
+tests/PrismOpticsTests.cpp 无 OpenGL 上下文的棱镜光路与数值稳定性测试
 ```

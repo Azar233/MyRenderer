@@ -407,10 +407,12 @@ Shadow / Depth
 
 ##### Prism-1：双界面棱镜光路求解
 
-- [ ] 新增不依赖 OpenGL 的 `PrismOptics` 模块，对入射 Ray 与三棱柱表面求最近交点、入射面法线、内部 Ray、出射交点和出射面法线。
-- [ ] 在空气 → 玻璃与玻璃 → 空气两个边界分别应用 Snell's Law；每个边界计算 Fresnel 能量，并安全处理 Total Internal Reflection。
-- [ ] 光学求解只在光束、棱镜 Transform 或材质参数变化时更新；将结果缓存为格式无关 `SpectralBeamData`，渲染层只负责上传和绘制。
-- [ ] 增加 CPU 单元测试：法线入射不偏折、Dispersion=0 时所有波长重合、色散增大时角分离单调增加、出射红光偏折小于紫光、TIR 不产生 NaN。
+- [x] 新增不依赖 OpenGL 的 `PrismOptics` 模块，对入射 Ray 与三棱柱表面求最近交点、入射面法线、内部 Ray、出射交点和出射面法线。
+- [x] 在空气 → 玻璃与玻璃 → 空气两个边界分别应用 Snell's Law；每个边界计算 Fresnel 能量，并安全处理 Total Internal Reflection。
+- [x] 光学求解只在 Prism Preset 激活或参数重新应用时更新；格式无关 `PrismOpticalPath` 缓存交点、方向、法线、TIR 与能量，渲染层只上传动态调试线。
+- [x] 增加 CPU 单元测试：法线入射不偏折、相同 IOR 路径重合、不同 IOR 产生角分离、高 IOR 角度扫描覆盖 TIR 且不产生 NaN。红/紫顺序与连续光谱能量测试归入 Prism-2。
+
+> Prism-1 完成（2026-08-24）：新增 `src/optics/PrismOptics.*`，使用二维凸三角截面完成 Ray/Segment 最近求交，自动兼容 CW/CCW 顶点顺序；两个介质边界分别计算 Snell 折射与 Schlick Fresnel Transmittance，出射失败时返回有限的 TIR 反射方向。`DebugGrid` 的硬编码入射线已替换为动态 VBO，一次绘制 Incident / Internal / Exit 三段 HDR 光路；`PrismOpticalPath` 结果由应用层计算并缓存，Renderer 不包含求交逻辑。新增独立 `prism-optics` CTest，总测试数增至 3 项；MinGW 构建、CTest、Prism 4x MSAA 光路截图与完整 GPU smoke 通过。`docs/images/prism1_optical_path.png` 记录单波长中心光路；下一阶段 Prism-2 扩展为材质级色散与连续波长采样。
 
 ##### Prism-2：连续光谱与材质参数
 

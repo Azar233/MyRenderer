@@ -5,6 +5,7 @@
 #include <memory>
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 
 class Shader;
 
@@ -23,8 +24,16 @@ public:
         const glm::mat4& view,
         const glm::mat4& projection,
         bool showGrid,
-        bool showAxes,
-        bool showPrismIncidentBeam
+        bool showAxes
+    ) const;
+    void drawPrismPath(
+        const glm::mat4& view,
+        const glm::mat4& projection,
+        const glm::vec3& source,
+        const glm::vec3& entry,
+        const glm::vec3& exit,
+        const glm::vec3& outputEnd,
+        bool totalInternalReflection
     ) const;
 
 private:
@@ -34,6 +43,6 @@ private:
     std::size_t gridVertexCount_{0};
     std::size_t axesFirstVertex_{0};
     std::size_t axesVertexCount_{0};
-    std::size_t prismBeamFirstVertex_{0};
-    std::size_t prismBeamVertexCount_{0};
+    unsigned int prismPathVao_{0};
+    unsigned int prismPathVbo_{0};
 };

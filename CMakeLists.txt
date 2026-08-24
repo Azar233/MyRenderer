@@ -101,6 +101,7 @@ add_executable(MyRenderer
     src/app/FileDialog.cpp
     src/io/AssimpImporter.cpp
     src/io/ObjLoader.cpp
+    src/optics/PrismOptics.cpp
     src/render/Camera.cpp
     src/render/DebugGrid.cpp
     src/render/EnvironmentMap.cpp
@@ -198,6 +199,19 @@ if(BUILD_TESTING)
         target_compile_options(MyRendererSceneTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME scene-draw-list COMMAND MyRendererSceneTests)
+
+    add_executable(MyRendererPrismOpticsTests
+        tests/PrismOpticsTests.cpp
+        src/optics/PrismOptics.cpp
+    )
+    target_include_directories(MyRendererPrismOpticsTests PRIVATE src)
+    target_link_libraries(MyRendererPrismOpticsTests PRIVATE glm::glm)
+    if(MSVC)
+        target_compile_options(MyRendererPrismOpticsTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererPrismOpticsTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME prism-optics COMMAND MyRendererPrismOpticsTests)
 endif()
 
 add_custom_target(gpu-smoke
