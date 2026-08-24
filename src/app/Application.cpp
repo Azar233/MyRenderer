@@ -645,10 +645,31 @@ void Application::drawInspectorPanel() {
                 ImGui::TextDisabled("Abbe number: material-driven");
             }
             ImGui::Checkbox(
-                "Prism incident beam guide",
+                "Spectral beam ribbons",
                 &rendererSettings_.showPrismIncidentBeam
             );
             if (rendererSettings_.showPrismIncidentBeam) {
+                ImGui::SliderFloat(
+                    "Beam width",
+                    &rendererSettings_.prismBeamWidth,
+                    0.005f,
+                    0.16f,
+                    "%.3f"
+                );
+                ImGui::SliderFloat(
+                    "Beam intensity",
+                    &rendererSettings_.prismBeamIntensity,
+                    0.0f,
+                    16.0f,
+                    "%.2f"
+                );
+                ImGui::SliderFloat(
+                    "Beam edge softness",
+                    &rendererSettings_.prismBeamEdgeSoftness,
+                    0.01f,
+                    1.0f,
+                    "%.2f"
+                );
                 ImGui::TextDisabled(
                     rendererSettings_.prismOpticalPathValid
                         ? (rendererSettings_.prismTotalInternalReflection
@@ -1277,6 +1298,31 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     rendererSettings_.exposure = 1.20f;
     rendererSettings_.bloomThreshold = 0.75f;
     rendererSettings_.bloomIntensity = 0.22f;
+    rendererSettings_.prismBeamOutputLength = 2.4f;
+    rendererSettings_.prismBeamWidth = 0.055f;
+    rendererSettings_.prismBeamIntensity = 5.0f;
+    rendererSettings_.prismBeamEdgeSoftness = 0.72f;
+    if (const char* value = std::getenv("MYRENDERER_PRISM_BEAM_WIDTH")) {
+        rendererSettings_.prismBeamWidth = std::clamp(
+            std::strtof(value, nullptr),
+            0.005f,
+            0.16f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_PRISM_BEAM_INTENSITY")) {
+        rendererSettings_.prismBeamIntensity = std::clamp(
+            std::strtof(value, nullptr),
+            0.0f,
+            16.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_PRISM_BEAM_SOFTNESS")) {
+        rendererSettings_.prismBeamEdgeSoftness = std::clamp(
+            std::strtof(value, nullptr),
+            0.01f,
+            1.0f
+        );
+    }
 
     const std::array<glm::vec2, 3> prismCrossSection{
         glm::vec2(-0.70f, -0.48125f),

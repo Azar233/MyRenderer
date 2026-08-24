@@ -18,6 +18,7 @@
 #include "render/SceneDrawList.h"
 #include "render/Shader.h"
 #include "render/ShadowMap.h"
+#include "render/SpectralBeamRenderer.h"
 #include "render/Texture2D.h"
 
 Renderer::Renderer(
@@ -32,6 +33,10 @@ Renderer::Renderer(
         vertexShaderPath.parent_path() / "skybox.frag"
     )),
     shadowMap_(std::make_unique<ShadowMap>()),
+    spectralBeamRenderer_(std::make_unique<SpectralBeamRenderer>(
+        vertexShaderPath.parent_path() / "spectral_beam.vert",
+        vertexShaderPath.parent_path() / "spectral_beam.frag"
+    )),
     shadowShader_(std::make_unique<Shader>(
         vertexShaderPath.parent_path() / "shadow_depth.vert",
         vertexShaderPath.parent_path() / "shadow_depth.frag"
@@ -175,6 +180,8 @@ void Renderer::render(
     };
 
     drawCallCount_ = 0U;
+    const bool spectralBeamVisible = settings.showPrismIncidentBeam
+        && settings.prismOpticalPathValid;
     RenderPassSequence sequence;
     if (settings.shadowsEnabled && hasShadowCasters) {
         sequence.add("Shadow map", [&] {
@@ -215,25 +222,15 @@ void Renderer::render(
             ++drawCallCount_;
             glEnable(GL_DEPTH_TEST);
         }
-        if (settings.showGrid || settings.showAxes
-            || (settings.showPrismIncidentBeam && settings.prismOpticalPathValid)) {
+        if (settings.showGrid || settings.showAxes) {
         glDisable(GL_CULL_FACE);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glDepthMask(GL_FALSE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         debugGrid_->draw(view, projection, settings.showGrid, settings.showAxes);
-        if (settings.showPrismIncidentBeam && settings.prismOpticalPathValid) {
-            debugGrid_->drawPrismSpectrum(
-                view,
-                projection,
-                settings.prismSpectrum,
-                settings.prismBeamOutputLength
-            );
-        }
         drawCallCount_ += (settings.showGrid ? 1U : 0U)
-            + (settings.showAxes ? 1U : 0U)
-            + (settings.showPrismIncidentBeam && settings.prismOpticalPathValid ? 1U : 0U);
+            + (settings.showAxes ? 1U : 0U);
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
         }
@@ -253,8 +250,39 @@ void Renderer::render(
 
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glDisable(GL_CULL_FACE);
-        renderTarget_->resolveOpaqueScene();
+        if (!spectralBeamVisible) {
+            renderTarget_->resolveOpaqueScene();
+        }
     });
+    if (spectralBeamVisible) {
+        sequence.add("Spectral beam HDR", [&] {
+            // The beam is composited after opaque geometry so the existing depth
+            // buffer occludes it correctly, but before glass so refraction can
+            // sample its radiance from the resolved opaque HDR texture.
+            renderTarget_->bindOpaqueScene();
+            glViewport(0, 0, width, height);
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glDisable(GL_CULL_FACE);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glEnable(GL_BLEND);
+            glBlendEquation(GL_FUNC_ADD);
+            glBlendFunc(GL_ONE, GL_ONE);
+            drawCallCount_ += spectralBeamRenderer_->draw(
+                settings.prismSpectrum,
+                camera.position(),
+                view,
+                projection,
+                settings.prismBeamOutputLength,
+                settings.prismBeamWidth,
+                settings.prismBeamIntensity,
+                settings.prismBeamEdgeSoftness
+            );
+            glDisable(GL_BLEND);
+            glDepthMask(GL_TRUE);
+            renderTarget_->resolveOpaqueScene();
+        });
+    }
     sequence.add("Forward transparent / refractive scene", [&] {
         // Copy the opaque HDR result into a distinct output attachment. Future
         // transmissive materials can sample opaqueColorTexture/sceneDepthTexture

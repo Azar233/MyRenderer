@@ -20,6 +20,7 @@ class PostProcessor;
 class RenderTarget;
 class Shader;
 class ShadowMap;
+class SpectralBeamRenderer;
 class TextureCache;
 
 enum class GlassDebugView {
@@ -68,6 +69,9 @@ struct RendererSettings {
     float bloomIntensity{0.12f};
     SpectralBeamData prismSpectrum;
     float prismBeamOutputLength{2.4f};
+    float prismBeamWidth{0.045f};
+    float prismBeamIntensity{5.0f};
+    float prismBeamEdgeSoftness{0.65f};
 };
 
 struct RenderItem {
@@ -114,6 +118,7 @@ private:
     std::unique_ptr<DebugGrid> debugGrid_;
     std::unique_ptr<EnvironmentMap> environmentMap_;
     std::unique_ptr<ShadowMap> shadowMap_;
+    std::unique_ptr<SpectralBeamRenderer> spectralBeamRenderer_;
     std::unique_ptr<Shader> shadowShader_;
     std::unique_ptr<PostProcessor> postProcessor_;
     std::unique_ptr<RenderTarget> renderTarget_;

@@ -426,11 +426,13 @@ Shadow / Depth
 
 ##### Prism-3：可见光束渲染
 
-- [ ] 新增 `SpectralBeamRenderer`，把 CPU 光路生成相机朝向的柔边 Ribbon Mesh；入射束为白色，出射束按相邻波长构建连续带状几何。
-- [ ] 使用 HDR Emissive + Additive Blend 输出光束，让高亮自然进入 Bloom；光束宽度、边缘柔度、强度和曝光可调。
-- [ ] 明确物理与美术边界：干净空气中的侧视光束本来不可见，本 Demo 的 Ribbon 是光路可视化；后续若实现 Volumetric Scattering，作为独立高质量模式而不是偷换概念。
-- [ ] 处理 Depth Test、棱镜遮挡和内部光束裁切：外部光束不能无条件穿透实体，棱镜内部段只在棱镜轮廓内显示。
-- [ ] 设计 Pass 顺序，使光束辐射可被 Glass Pass 采样，同时避免采样/写入同一 HDR 附件产生 Feedback；把 Incident / Internal / Exit Beam 分组写入 GPU Debug Label。
+- [x] 新增 `SpectralBeamRenderer`，把 CPU 光路生成相机朝向的柔边 Ribbon Mesh；入射束为白色，出射束按相邻波长构建连续带状几何。
+- [x] 使用 HDR Emissive + Additive Blend 输出光束，让高亮自然进入 Bloom；光束宽度、边缘柔度、强度和曝光可调。
+- [x] 明确物理与美术边界：干净空气中的侧视光束本来不可见，本 Demo 的 Ribbon 是光路可视化；后续若实现 Volumetric Scattering，作为独立高质量模式而不是偷换概念。
+- [x] 处理 Depth Test、棱镜遮挡和内部光束裁切：外部光束不能无条件穿透实体，棱镜内部段只在棱镜轮廓内显示。
+- [x] 设计 Pass 顺序，使光束辐射可被 Glass Pass 采样，同时避免采样/写入同一 HDR 附件产生 Feedback；把 Incident / Internal / Exit Beam 分组写入 GPU Debug Label。
+
+> Prism-3 完成（2026-08-24）：新增 CPU `SpectralBeamMesh` 和 GPU `SpectralBeamRenderer`，用动态三角形 VBO 替换 Prism-2 的 `GL_LINES`。入射光使用白色柔边 Ribbon，内部光束在两个界面处收窄以限制在棱镜截面内；Continuous 模式把相邻光谱样本连接成插值扇面，Seven-band 模式保留归一化的独立色带。独立 `Spectral beam HDR` Pass 位于 Opaque 几何之后、Glass 之前，复用 Opaque Depth 做遮挡，以 `GL_ONE + GL_ONE` 加法混合写入 RGBA16F，Resolve 后同时供 Glass Refraction、Bloom 和 Tone Mapping 使用，避免 Framebuffer Feedback。三个光束批次分别使用 GPU Debug Group。Inspector 与环境变量可调 Width / Intensity / Edge Softness，并沿用全局 Exposure / Bloom。CPU 测试新增网格批次、三角形数量、有限值与边缘坐标断言；`docs/images/prism3_*.png` 保存连续和七色 4x MSAA 结果。下一阶段 Prism-4 将把完整光学参数、材质 Preset 和调试视图统一到控制层。
 
 ##### Prism-4：控制、调试与可复用性
 

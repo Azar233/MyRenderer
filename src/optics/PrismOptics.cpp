@@ -156,6 +156,7 @@ SpectralBeamData tracePrismSpectrum(
 ) {
     SpectralBeamData spectrum;
     spectrum.incidentRay = ray;
+    spectrum.mode = mode;
     static constexpr std::array<float, 7> sevenBandWavelengths{
         650.0f, 610.0f, 580.0f, 540.0f, 500.0f, 460.0f, 420.0f
     };

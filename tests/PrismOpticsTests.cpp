@@ -8,6 +8,7 @@
 #include <glm/vec3.hpp>
 
 #include "optics/PrismOptics.h"
+#include "optics/SpectralBeamMesh.h"
 
 namespace {
 
@@ -19,6 +20,10 @@ void require(bool condition, const char* message) {
 
 bool finite(const glm::vec2& value) {
     return std::isfinite(value.x) && std::isfinite(value.y);
+}
+
+bool finite(const glm::vec3& value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
 float angularDifference(const glm::vec2& a, const glm::vec2& b) {
@@ -178,6 +183,53 @@ int main() {
                 nondispersive.samples.back().path.exitDirection
             ) < 1.0e-4f,
             "zero dispersion should collapse all outgoing wavelengths onto one path"
+        );
+
+        const SpectralBeamMeshData continuousMesh = buildSpectralBeamMesh(
+            continuous,
+            glm::vec3(0.0f, 0.0f, 4.8f),
+            2.4f,
+            0.055f
+        );
+        require(continuousMesh.batches.size() == 3U, "continuous ribbon mesh should have three beam groups");
+        require(
+            continuousMesh.batches[0].group == SpectralBeamGroup::Incident
+                && continuousMesh.batches[1].group == SpectralBeamGroup::Internal
+                && continuousMesh.batches[2].group == SpectralBeamGroup::Exit,
+            "beam batches should preserve incident, internal, and exit order"
+        );
+        std::size_t batchedVertexCount = 0U;
+        for (const SpectralBeamBatch& batch : continuousMesh.batches) {
+            require(batch.vertexCount > 0U && batch.vertexCount % 6U == 0U, "beam batches should contain triangle quads");
+            batchedVertexCount += batch.vertexCount;
+        }
+        require(
+            batchedVertexCount == continuousMesh.vertices.size(),
+            "beam batches should cover the complete dynamic vertex buffer"
+        );
+        for (const SpectralBeamVertex& vertex : continuousMesh.vertices) {
+            require(finite(vertex.position), "ribbon positions should remain finite");
+            require(finite(vertex.linearColor), "ribbon HDR colors should remain finite");
+            require(
+                vertex.edgeCoordinate >= -1.0001f && vertex.edgeCoordinate <= 1.0001f,
+                "ribbon edge coordinates should stay normalized"
+            );
+        }
+
+        const SpectralBeamMeshData sevenBandMesh = buildSpectralBeamMesh(
+            sevenBand,
+            glm::vec3(0.0f, 0.0f, 4.8f),
+            2.4f,
+            0.055f
+        );
+        require(sevenBandMesh.batches.size() == 3U, "seven-band mesh should preserve the three beam groups");
+        require(
+            sevenBandMesh.batches[1].vertexCount == 12U,
+            "the clipped internal guide should use two tapered ribbon segments"
+        );
+        require(
+            sevenBandMesh.batches[2].vertexCount == sevenBand.samples.size() * 6U,
+            "seven-band exits should use one ribbon per wavelength"
         );
 
         std::cout << "Prism optics tests passed\n";

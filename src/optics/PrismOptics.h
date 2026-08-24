@@ -43,6 +43,7 @@ struct PrismSpectralSample {
 
 struct SpectralBeamData {
     PrismRay2D incidentRay;
+    PrismSpectrumMode mode{PrismSpectrumMode::Continuous};
     std::vector<PrismSpectralSample> samples;
 };
 

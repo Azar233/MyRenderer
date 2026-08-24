@@ -13,3 +13,7 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
   wavelength-dependent Cauchy IOR and normalized HDR line energy.
 - `prism2_seven_band.png`: Prism-2 seven-band art-direction mode using the same
   two-interface optical solver.
+- `prism3_continuous_ribbon.png`: Prism-3 continuous spectrum rendered as a
+  camera-facing, soft-edged HDR ribbon mesh.
+- `prism3_seven_band_ribbon.png`: Prism-3 art-directed discrete ribbons with
+  additive HDR blending and bloom.

@@ -202,13 +202,16 @@
 | CIE 1931 Color Matching Functions | 描述不同波长对人眼 XYZ 三刺激值贡献的标准曲线，是把“物理波长”转换成“显示颜色”的桥梁。 | 使用 Wyman、Sloan、Shirley 的解析高斯近似，再由 XYZ 转换到线性 sRGB。 | 已实现（解析近似） |
 | Wavelength-to-RGB（波长到 RGB） | 把某个纳米波长对应的人眼颜色换成显示设备的红绿蓝数值；这不是简单手写七种颜色。 | `wavelengthToLinearSrgb` 先求 CIE XYZ，再转换并裁剪到线性 sRGB，Tone Mapping 前不做 Gamma 编码。 | 已实现 |
 | Spectral Energy Normalization（光谱能量归一化） | 把所有波长样本的权重重新缩放，使总和保持固定，避免采样数翻倍时亮度也翻倍。 | `tracePrismSpectrum` 把两界面 Fresnel 与波长相关 Beer-Lambert 衰减相乘后，将样本总权重归一到 1。 | 已实现 |
-| Emissive Ribbon（自发光带状几何） | 用朝向相机的窄带 Mesh 表现光束，并以柔边和 HDR 发光增强可见度。 | 计划绘制白色入射束、棱镜内部束与光谱出射束。 | 计划 |
+| Emissive Ribbon（自发光带状几何） | 用一条由三角形组成、带宽度的窄带表现光束；它能使用 Shader 做柔边，不受 OpenGL Line 宽度限制。 | `SpectralBeamMesh` 生成入射、内部和出射三组 Ribbon，`SpectralBeamRenderer` 在 HDR 中绘制。 | 已实现 |
+| Camera-facing Ribbon（相机朝向带） | 根据光束方向和相机视线计算带宽方向，使窄面始终大致朝向镜头，避免侧看时消失。 | 每帧根据 Camera Position 重建轻量光束顶点；光路中心仍保持世界空间位置。 | 已实现 |
 | Volumetric Scattering（体积散射） | 光被空气、雾或尘埃散射后，观察者才会从侧面看到光柱。 | Prism 第一版用 Ribbon 明确作为光路可视化；真实体积散射是可选高质量模式。 | 计划 |
 | Thin-film Iridescence（薄膜虹彩） | 薄层内部多次反射产生干涉，随角度呈现彩色表面。 | 可作为参考效果的可选表面增强，不等同于体积色散。 | 计划 |
 | Caustics（焦散） | 光经过反射或折射后聚集，在接收表面形成明亮花纹。 | 参考图地面的彩虹亮斑；Glass-3 目标。 | 计划 |
 | Caustics Projector / Decal | 把预制或程序化焦散图案投射到地面，以较低成本控制视觉效果。 | Glass-3 的第一版 TA 友好方案。 | 计划 |
 | Light-space Caustics | 从光源方向计算折射光落点并累积能量的实时焦散近似。 | Glass-3 图形程序进阶方案。 | 计划 |
-| Additive Blending（加法混合） | 把新颜色直接加到已有颜色上，适合表示光和能量叠加。 | 计划用于 HDR 焦散结果，使高亮能进入 Bloom。 | 计划 |
+| Additive Blending（加法混合） | 把新颜色直接加到已有颜色上，适合表示光和能量叠加；重叠越多通常越亮。 | Prism Beam Pass 使用 `GL_ONE + GL_ONE` 写入 RGBA16F，再由 Bloom 提取高亮；未来焦散也可复用。 | 已实现 |
+| Edge Softness（边缘柔度） | 控制光束从亮核心到透明边缘的过渡宽度，值越大过渡越柔和。 | Beam Fragment Shader 根据 Ribbon 横向坐标执行 `smoothstep`，Inspector 可实时调节。 | 已实现 |
+| GPU Debug Group | 给一组 GPU 命令加可读名称，便于在 RenderDoc、Nsight 或驱动回调中定位。 | Beam Pass 将 Incident、Internal、Exit 三批绘制分别标记。 | 已实现 |
 
 ## 10. 调试、性能与测试
 
@@ -310,6 +313,7 @@
 | DAE/glTF/GLB 导入 | `src/io/AssimpImporter.*` |
 | glTF/GLB 色散扩展适配 | `src/io/GltfMaterialExtensions.*` |
 | 棱镜求交与连续光谱 | `src/optics/PrismOptics.*` |
+| 光束 Ribbon 网格与 HDR 绘制 | `src/optics/SpectralBeamMesh.*`、`src/render/SpectralBeamRenderer.*`、`shaders/spectral_beam.*` |
 | UI、加载与主循环 | `src/app/Application.*` |
 | CPU 资产回归测试 | `tests/AssetImportTests.cpp` |
 | Prism 公式、数据流与近似边界 | `docs/prism-spectrum.md` |
