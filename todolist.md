@@ -398,10 +398,12 @@ Shadow / Depth
 
 ##### Prism-0：目标场景与视觉基线
 
-- [ ] 新增原创的封闭三棱柱固定资产或程序化网格；不要直接复制专辑封面的画面资产、字体或版式。
-- [ ] 增加 `Prism Spectrum` Demo Preset：正交/长焦固定镜头、纯黑环境、低粗糙高透射玻璃和关闭地面网格的独立场景配置。
-- [ ] 定义世界空间的 `IncidentBeam`：起点、归一化方向、宽度、强度和白点；先用不分色的占位光束验证构图。
-- [ ] 保存固定分辨率、相机和参数的 baseline PNG；后续物理实现必须与同一基线对照。
+- [x] 新增原创的封闭三棱柱固定资产或程序化网格；不要直接复制专辑封面的画面资产、字体或版式。
+- [x] 增加 `Prism Spectrum` Demo Preset：正面长焦固定镜头、纯黑环境、低粗糙高透射玻璃和关闭地面网格的独立场景配置。
+- [x] 定义世界空间的 `IncidentBeam` 占位：固定起点、入射方向、HDR 白色与入射面接触点；Prism-1 再替换为可调光束和真实求交结果。
+- [x] 保存固定分辨率、相机和参数的 baseline PNG；后续物理实现必须与同一基线对照。
+
+> Prism-0 完成（2026-08-24）：新增原创 `prism_spectrum.gltf` 封闭三棱柱（18 顶点 / 8 三角形），材质使用 `KHR_materials_transmission`、`KHR_materials_ior` 与 `KHR_materials_volume`。`MYRENDERER_PRISM_DEMO=1` 和 View 菜单的 `Prism spectrum preset` 会启用纯黑背景、固定正面 Orbit Pose、4x MSAA、HDR/Bloom、隐藏网格/地面/天空盒和世界空间白色入射束占位。`docs/images/prism0_baseline.png` 作为后续同机位比较基准；CPU 导入测试断言闭合网格与玻璃参数，MinGW 构建、CTest 与真实 OpenGL 截图验证通过。下一阶段 Prism-1 将把硬编码接触点升级为可测试的双界面 Ray/Prism 求交与 Snell 光路。
 
 ##### Prism-1：双界面棱镜光路求解
 

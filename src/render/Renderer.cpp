@@ -215,14 +215,22 @@ void Renderer::render(
             ++drawCallCount_;
             glEnable(GL_DEPTH_TEST);
         }
-        if (settings.showGrid || settings.showAxes) {
+        if (settings.showGrid || settings.showAxes || settings.showPrismIncidentBeam) {
         glDisable(GL_CULL_FACE);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
         glDepthMask(GL_FALSE);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        debugGrid_->draw(view, projection, settings.showGrid, settings.showAxes);
-        drawCallCount_ += (settings.showGrid ? 1U : 0U) + (settings.showAxes ? 1U : 0U);
+        debugGrid_->draw(
+            view,
+            projection,
+            settings.showGrid,
+            settings.showAxes,
+            settings.showPrismIncidentBeam
+        );
+        drawCallCount_ += (settings.showGrid ? 1U : 0U)
+            + (settings.showAxes ? 1U : 0U)
+            + (settings.showPrismIncidentBeam ? 1U : 0U);
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
         }

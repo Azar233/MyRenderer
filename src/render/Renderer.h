@@ -52,6 +52,7 @@ struct RendererSettings {
     bool skyboxEnabled{true};
     bool toneMapping{true};
     bool bloom{true};
+    bool showPrismIncidentBeam{false};
     float environmentIntensity{0.55f};
     float refractionScale{0.18f};
     int refractionSteps{12};

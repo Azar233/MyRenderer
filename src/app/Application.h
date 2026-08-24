@@ -54,6 +54,7 @@ private:
     std::filesystem::path resolvePath(const std::filesystem::path& path) const;
     std::filesystem::path nextScreenshotPath() const;
     void resetObjectTransform();
+    void activatePrismDemoPreset(bool loadFixture);
 
     GLFWwindow* window_{nullptr};
     bool guiInitialized_{false};
@@ -114,5 +115,6 @@ private:
     bool showComparisonObject_{false};
     bool vsync_{true};
     bool lastLoadFailed_{false};
+    bool prismDemoEnabled_{false};
     double previousFrameTime_{0.0};
 };

@@ -52,6 +52,20 @@ void Camera::reset(const glm::vec3& target) {
     fieldOfViewDegrees_ = 45.0f;
 }
 
+void Camera::setOrbitPose(
+    const glm::vec3& target,
+    float yawDegrees,
+    float pitchDegrees,
+    float distance,
+    float fieldOfViewDegrees
+) {
+    target_ = target;
+    yawRadians_ = glm::radians(yawDegrees);
+    pitchRadians_ = std::clamp(glm::radians(pitchDegrees), -1.5f, 1.5f);
+    distance_ = std::clamp(distance, 0.35f, 40.0f);
+    setFieldOfView(fieldOfViewDegrees);
+}
+
 void Camera::setFieldOfView(float degrees) {
     fieldOfViewDegrees_ = std::clamp(degrees, 15.0f, 90.0f);
 }

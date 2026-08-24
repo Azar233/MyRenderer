@@ -127,6 +127,17 @@ int main() {
         require(roughGlass->transmissionFactor > 0.8f, "rough glass should preserve transmission");
         require(roughGlass->thicknessFactor > 0.5f, "rough glass should preserve volume thickness");
 
+        const ModelImportResult prism = assimp.load(asset("prism_spectrum.gltf"));
+        require(prism.model.meshes.size() == 1U, "prism fixture should import one closed mesh");
+        require(
+            prism.model.meshes.front().indices.size() == 24U,
+            "triangular prism should contain eight triangles"
+        );
+        const MaterialData* prismGlass = findMaterial(prism, "PrismClearGlass");
+        require(prismGlass != nullptr, "prism fixture should preserve its glass material");
+        require(prismGlass->transmissionFactor > 0.95f, "prism glass should remain highly transmissive");
+        require(prismGlass->thicknessFactor > 0.49f, "prism glass should preserve volume thickness");
+
         const ModelImportResult dae = assimp.load(asset("textured_quad.dae"));
         require(!dae.model.meshes.empty(), "DAE fixture should import a mesh");
         require(!dae.model.textures.empty(), "DAE fixture should import its external texture reference");

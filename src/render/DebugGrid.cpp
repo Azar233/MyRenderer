@@ -101,6 +101,17 @@ DebugGrid::DebugGrid(
     appendPositiveAxis(vertices, axesOrigin, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.22f, 0.48f, 1.0f, 0.95f});
     axesVertexCount_ = vertices.size() - axesFirstVertex_;
 
+    // Prism-0 baseline only: a world-space white incident beam placeholder.
+    // Prism-1 replaces the hard-coded endpoint with the optical intersection result.
+    prismBeamFirstVertex_ = vertices.size();
+    appendLine(
+        vertices,
+        glm::vec3(-2.4f, -0.15f, 0.34f),
+        glm::vec3(-0.39f, 0.12f, 0.34f),
+        glm::vec4(7.0f, 7.0f, 7.0f, 1.0f)
+    );
+    prismBeamVertexCount_ = vertices.size() - prismBeamFirstVertex_;
+
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
     glBindVertexArray(vao_);
@@ -146,9 +157,10 @@ void DebugGrid::draw(
     const glm::mat4& view,
     const glm::mat4& projection,
     bool showGrid,
-    bool showAxes
+    bool showAxes,
+    bool showPrismIncidentBeam
 ) const {
-    if (!showGrid && !showAxes) {
+    if (!showGrid && !showAxes && !showPrismIncidentBeam) {
         return;
     }
 
@@ -166,6 +178,15 @@ void DebugGrid::draw(
             GL_LINES,
             static_cast<GLint>(axesFirstVertex_),
             static_cast<GLsizei>(axesVertexCount_)
+        );
+        glLineWidth(1.0f);
+    }
+    if (showPrismIncidentBeam) {
+        glLineWidth(3.0f);
+        glDrawArrays(
+            GL_LINES,
+            static_cast<GLint>(prismBeamFirstVertex_),
+            static_cast<GLsizei>(prismBeamVertexCount_)
         );
         glLineWidth(1.0f);
     }

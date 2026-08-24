@@ -134,12 +134,20 @@ int Application::run(const std::filesystem::path& initialModel) {
         );
     }
     if (const char* value = std::getenv("MYRENDERER_SCENE_DEMO")) showComparisonObject_ = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_PRISM_DEMO")) {
+        prismDemoEnabled_ = std::atoi(value) != 0;
+    }
+    if (prismDemoEnabled_) {
+        activatePrismDemoPreset(false);
+    }
 
     std::filesystem::path modelToLoad = initialModel;
     if (modelToLoad.empty()) {
-        const auto cube = sourceRoot_ / "assets" / "models" / "cube.obj";
-        modelToLoad = std::filesystem::exists(cube)
-            ? cube
+        const auto defaultModel = prismDemoEnabled_
+            ? sourceRoot_ / "assets" / "models" / "prism_spectrum.gltf"
+            : sourceRoot_ / "assets" / "models" / "cube.obj";
+        modelToLoad = std::filesystem::exists(defaultModel)
+            ? defaultModel
             : (availableModels_.empty() ? std::filesystem::path{} : availableModels_.front());
     }
     if (!modelToLoad.empty()) {
@@ -412,6 +420,9 @@ void Application::drawMainMenu() {
         if (ImGui::MenuItem("Reset camera", "F")) {
             camera_.reset();
         }
+        if (ImGui::MenuItem("Prism spectrum preset")) {
+            activatePrismDemoPreset(true);
+        }
         ImGui::MenuItem("Wireframe", nullptr, &rendererSettings_.wireframe);
         ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
         ImGui::Separator();
@@ -463,6 +474,10 @@ void Application::drawScenePanel() {
         }
         if (showComparisonObject_) {
             ImGui::TreeNodeEx("Comparison instance", ImGuiTreeNodeFlags_Leaf);
+            ImGui::TreePop();
+        }
+        if (rendererSettings_.showPrismIncidentBeam) {
+            ImGui::TreeNodeEx("Incident beam (Prism-0 placeholder)", ImGuiTreeNodeFlags_Leaf);
             ImGui::TreePop();
         }
     } else {
@@ -615,6 +630,10 @@ void Application::drawInspectorPanel() {
                 0.0f,
                 2.5f,
                 "%.2f"
+            );
+            ImGui::Checkbox(
+                "Prism incident beam guide",
+                &rendererSettings_.showPrismIncidentBeam
             );
             int glassDebugView = static_cast<int>(rendererSettings_.glassDebugView);
             const char* glassDebugViews[] = {
@@ -1111,7 +1130,12 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
     modelCenter_ = 0.5f * (loaded.model.boundsMin + loaded.model.boundsMax);
     modelNormalizationScale_ = 1.4f / maximumExtent;
     resetObjectTransform();
-    camera_.reset();
+    const bool loadedPrismFixture = lowercase(path.filename().string()) == "prism_spectrum.gltf";
+    if (prismDemoEnabled_ || loadedPrismFixture) {
+        activatePrismDemoPreset(false);
+    } else {
+        camera_.reset();
+    }
 
     const std::string pathString = currentModelPath_.string();
     std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", pathString.c_str());
@@ -1198,4 +1222,37 @@ void Application::resetObjectTransform() {
     modelPosition_ = glm::vec3(0.0f);
     modelRotationDegrees_ = glm::vec3(0.0f);
     modelScale_ = 1.0f;
+}
+
+void Application::activatePrismDemoPreset(bool loadFixture) {
+    prismDemoEnabled_ = true;
+    autoRotate_ = false;
+    showGroundPlane_ = false;
+    showComparisonObject_ = false;
+    rendererSettings_.showGrid = false;
+    rendererSettings_.showAxes = false;
+    rendererSettings_.showPrismIncidentBeam = true;
+    rendererSettings_.backgroundColor = glm::vec3(0.0015f, 0.0020f, 0.0025f);
+    rendererSettings_.skyboxEnabled = false;
+    rendererSettings_.shadowsEnabled = false;
+    rendererSettings_.pbrEnabled = true;
+    rendererSettings_.iblEnabled = true;
+    rendererSettings_.transmissionEnabled = true;
+    rendererSettings_.toneMapping = true;
+    rendererSettings_.bloom = true;
+    rendererSettings_.msaaSamples = 4;
+    rendererSettings_.environmentIntensity = 0.58f;
+    rendererSettings_.refractionScale = 0.28f;
+    rendererSettings_.refractionSteps = 20;
+    rendererSettings_.volumeThicknessScale = 1.0f;
+    rendererSettings_.dispersionStrength = 0.33f;
+    rendererSettings_.glassDebugView = GlassDebugView::Final;
+    rendererSettings_.exposure = 1.20f;
+    rendererSettings_.bloomThreshold = 0.75f;
+    rendererSettings_.bloomIntensity = 0.22f;
+    camera_.setOrbitPose(glm::vec3(0.0f), 0.0f, 0.0f, 4.8f, 35.0f);
+
+    if (loadFixture) {
+        loadModel(sourceRoot_ / "assets" / "models" / "prism_spectrum.gltf");
+    }
 }

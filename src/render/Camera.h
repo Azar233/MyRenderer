@@ -15,6 +15,13 @@ public:
     void pan(float xDelta, float yDelta);
     void zoom(float wheelDelta);
     void reset(const glm::vec3& target = glm::vec3(0.0f));
+    void setOrbitPose(
+        const glm::vec3& target,
+        float yawDegrees,
+        float pitchDegrees,
+        float distance,
+        float fieldOfViewDegrees
+    );
 
     float fieldOfView() const { return fieldOfViewDegrees_; }
     void setFieldOfView(float degrees);

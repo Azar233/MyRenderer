@@ -220,6 +220,7 @@
 | Smoke Test（冒烟测试） | 用最短流程确认程序能启动、加载和渲染，不保证所有细节正确。 | `gpu-smoke` 使用真实隐藏 OpenGL 窗口渲染 5 帧。 | 已实现 |
 | Regression Test（回归测试） | 验证新改动没有破坏此前正常功能。 | 资产导入 CTest 已实现；视觉回归仍在计划中。 | 部分实现 |
 | Visual Regression（视觉回归） | 固定场景输出图片并与基准图比较，发现渲染结果变化。 | 计划使用误差阈值和差异热图。 | 计划 |
+| Baseline Image（基准图） | 在固定场景、镜头和参数下保存的参考画面，后续改动都与它比较。 | `docs/images/prism0_baseline.png` 记录色散光路接入前的 Prism-0 构图。 | 已建立 |
 | SSIM | 比逐像素相等更关注结构相似度的图像比较指标。 | 计划用于容忍不同 GPU 的微小浮点差异。 | 计划 |
 | Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 已支持 Reflection、Refraction、IOR、Refracted UV、Thickness、Transmittance 与 RGB Dispersion；完整 GBuffer/材质视图仍在 P0 路线。 | 部分实现 |
 | Overdraw | 同一像素在一帧内被重复绘制多次，透明与粒子常导致高 Overdraw。 | TA/性能调试视图计划覆盖。 | 计划 |

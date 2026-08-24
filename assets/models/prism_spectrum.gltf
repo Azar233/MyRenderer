@@ -1,0 +1,64 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "MyRenderer Prism-0 original regression fixture",
+    "copyright": "Original procedural-style fixture created for MyRenderer"
+  },
+  "extensionsUsed": [
+    "KHR_materials_transmission",
+    "KHR_materials_ior",
+    "KHR_materials_volume"
+  ],
+  "scene": 0,
+  "scenes": [{"name": "Prism Spectrum Baseline", "nodes": [0]}],
+  "nodes": [{"name": "ClosedTriangularPrism", "mesh": 0}],
+  "meshes": [{
+    "name": "OriginalClosedTriangularPrism",
+    "primitives": [{
+      "attributes": {"POSITION": 0, "NORMAL": 1},
+      "indices": 2,
+      "material": 0,
+      "mode": 4
+    }]
+  }],
+  "materials": [{
+    "name": "PrismClearGlass",
+    "alphaMode": "OPAQUE",
+    "doubleSided": true,
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.78, 0.90, 1.0, 1.0],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.075
+    },
+    "extensions": {
+      "KHR_materials_transmission": {"transmissionFactor": 0.96},
+      "KHR_materials_ior": {"ior": 1.52},
+      "KHR_materials_volume": {
+        "thicknessFactor": 0.5,
+        "attenuationDistance": 8.0,
+        "attenuationColor": [0.88, 0.96, 1.0]
+      }
+    }
+  }],
+  "buffers": [{
+    "byteLength": 480,
+    "uri": "data:application/octet-stream;base64,zcxMv83MDL8AAIA+zcxMP83MDL8AAIA+AAAAAJqZWT8AAIA+zcxMv83MDL8AAIC+AAAAAJqZWT8AAIC+zcxMP83MDL8AAIC+zcxMv83MDL8AAIC+zcxMP83MDL8AAIC+zcxMP83MDL8AAIA+zcxMv83MDL8AAIA+zcxMP83MDL8AAIC+AAAAAJqZWT8AAIC+AAAAAJqZWT8AAIA+zcxMP83MDL8AAIA+AAAAAJqZWT8AAIC+zcxMv83MDL8AAIC+zcxMv83MDL8AAIA+AAAAAJqZWT8AAIA+AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAALEVeP+4F/j4AAAAALEVeP+4F/j4AAAAALEVeP+4F/j4AAAAALEVeP+4F/j4AAAAALEVev+4F/j4AAAAALEVev+4F/j4AAAAALEVev+4F/j4AAAAALEVev+4F/j4AAAAAAAABAAIAAwAEAAUABgAHAAgABgAIAAkACgALAAwACgAMAA0ADgAPABAADgAQABEA"
+  }],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 216, "target": 34962},
+    {"buffer": 0, "byteOffset": 216, "byteLength": 216, "target": 34962},
+    {"buffer": 0, "byteOffset": 432, "byteLength": 48, "target": 34963}
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 18,
+      "type": "VEC3",
+      "min": [-0.8, -0.55, -0.25],
+      "max": [0.8, 0.85, 0.25]
+    },
+    {"bufferView": 1, "componentType": 5126, "count": 18, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5123, "count": 24, "type": "SCALAR"}
+  ]
+}

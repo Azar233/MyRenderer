@@ -23,7 +23,8 @@ public:
         const glm::mat4& view,
         const glm::mat4& projection,
         bool showGrid,
-        bool showAxes
+        bool showAxes,
+        bool showPrismIncidentBeam
     ) const;
 
 private:
@@ -33,4 +34,6 @@ private:
     std::size_t gridVertexCount_{0};
     std::size_t axesFirstVertex_{0};
     std::size_t axesVertexCount_{0};
+    std::size_t prismBeamFirstVertex_{0};
+    std::size_t prismBeamVertexCount_{0};
 };
