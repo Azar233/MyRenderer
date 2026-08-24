@@ -189,6 +189,11 @@
 | Thickness（厚度） | 光在物体内部实际走过的距离，影响折射位移和吸收强度。 | Glass-2B 优先由每像素 Front/Back Depth 估算闭合模型几何厚度，再按折射角换算内部路径。 | 已实现（屏幕空间） |
 | Thickness Texture（厚度贴图） | 为模型表面每个 UV 位置预烘焙局部厚度的线性数据纹理；glTF 把数值放在 G 通道，并与 Thickness Factor 相乘。 | 几何退出表面无效或关闭 Geometric Thickness 时作为稳定回退。 | 已实现 |
 | Front/Back Surface Depth（前/后表面深度） | 从相机方向记录物体最先进入和最后离开的表面深度，两者差值可近似光穿过的几何距离。 | 两张 R32F 纹理用 `GL_MIN` / `GL_MAX` 聚合闭合玻璃的入口/退出深度。 | 已实现 |
+| Closed Manifold Mesh（闭合流形网格） | 网格完整包围一个内部空间，通常每条边恰好连接两个面；渲染器因此可以区分进入和离开介质。 | `glass_volume_sphere.gltf` 使用 1,986 个顶点构成平滑闭合球；CPU 回归逐边要求恰好被两个三角形使用。 | 已实现并验证 |
+| Exit Surface Normal（出射面法线） | 光在离开玻璃的位置所遇到表面的朝向；弯曲物体的出射法线通常不等于入口法线。 | Glass-2C 以 RGBA16F 保存对象最远表面法线，内部射线跨越 R32F 退出深度时读取并显示调试色。 | 已实现（屏幕空间） |
+| Two-interface Refraction（双界面折射） | 光进入玻璃时弯折一次，离开玻璃时根据另一侧表面方向再次弯折。 | Glass Shader 对空气→玻璃与玻璃→空气分别应用 Snell 定律，并插值退出交点以消除步进色带。 | 已实现（可切换） |
+| Object-ID-aware Depth Pairing（对象 ID 深度配对） | 用对象标识确保入口和出口来自同一个玻璃物体，避免重叠物体的深度被错误组合。 | 每个透明 `RenderItem` 在绘制前重建并立即消费自己的深度/法线缓存，R32UI ID 在 Shader 内再次校验。 | 已实现（逐对象） |
+| Split-Sum IBL | 将环境镜面光预积分成按粗糙度过滤的 Cubemap 与二维 BRDF LUT，并把漫反射单独卷积，避免每像素对 HDR 环境做大量采样。 | `EnvironmentMap` 从原创 Radiance HDRI 生成 Diffuse Irradiance、GGX Prefiltered Specular 和 RG16F BRDF LUT。 | 已实现 |
 | Beer-Lambert Law | 光在介质中传播越远，被吸收越多；不同颜色可以有不同吸收。 | Shader 使用 `attenuationColor^(pathLength/attenuationDistance)` 计算玻璃透射率。 | 已实现 |
 | Attenuation（衰减/吸收） | 光穿过介质后亮度和颜色逐渐减少。 | glTF 材质的 Color / Distance 决定两组测试玻璃的青色和琥珀色体积。 | 已实现 |
 | Transmittance（透射率） | 光穿过一段介质后还剩下的比例，1 表示没有损失，0 表示完全吸收。 | Glass Debug View 可直接显示 Beer-Lambert 计算出的 RGB 透射率。 | 已实现 |

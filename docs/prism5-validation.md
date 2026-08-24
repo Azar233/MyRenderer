@@ -62,6 +62,12 @@ and continuous adjacent directions. A ray exactly crossing a prism vertex can
 legitimately switch exit faces; the wider -8°/+12° pair is retained as explicit
 topology coverage rather than treated as an interpolation range.
 
+The Glass-2C integration replaced the former approximate environment mip chain
+with HDRI-driven Split-Sum IBL. Prism baselines containing the glass body were
+reviewed and re-recorded against that intentional lighting migration; the
+white-beam/no-prism image remained unchanged. The complete 10-image matrix then
+returned MAE 0 and 0% changed pixels without relaxing its thresholds.
+
 ## Presentation sequence
 
 The three-stage portfolio explanation uses:

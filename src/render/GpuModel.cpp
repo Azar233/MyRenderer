@@ -255,6 +255,19 @@ const glm::vec3& GpuModel::transparentSubmeshCenter(std::size_t transparentSubme
     return transparentDrawCommands_[transparentSubmeshIndex].localCenter;
 }
 
+bool GpuModel::transparentSubmeshIsTransmissive(
+    std::size_t transparentSubmeshIndex
+) const {
+    if (transparentSubmeshIndex >= transparentDrawCommands_.size()) {
+        throw std::out_of_range("Transparent submesh index is out of range");
+    }
+    const std::int32_t materialIndex =
+        transparentDrawCommands_[transparentSubmeshIndex].materialIndex;
+    return materialIndex >= 0
+        && static_cast<std::size_t>(materialIndex) < materials_.size()
+        && materials_[static_cast<std::size_t>(materialIndex)].transmissionFactor > 0.0f;
+}
+
 void GpuModel::drawDepth() const {
     for (const DrawCommand& command : opaqueDrawCommands_) {
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);

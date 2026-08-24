@@ -33,7 +33,9 @@ enum class GlassDebugView {
     Thickness = 5,
     Transmittance = 6,
     RgbDispersion = 7,
-    BackfaceThickness = 8
+    BackfaceThickness = 8,
+    ExitSurfaceNormal = 9,
+    ObjectId = 10
 };
 
 struct RendererSettings {
@@ -65,6 +67,12 @@ struct RendererSettings {
     int refractionSteps{12};
     float volumeThicknessScale{1.0f};
     bool geometricThicknessEnabled{true};
+    bool twoInterfaceRefractionEnabled{true};
+    bool volumeGlassOverrideEnabled{false};
+    float volumeGlassTransmission{1.0f};
+    float volumeGlassRoughness{0.06f};
+    glm::vec3 volumeGlassAttenuationColor{0.68f, 0.86f, 0.22f};
+    float volumeGlassAttenuationDistance{0.85f};
     float dispersionStrength{0.0f};
     GlassDebugView glassDebugView{GlassDebugView::Final};
     float exposure{1.0f};

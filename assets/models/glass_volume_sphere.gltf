@@ -1,0 +1,41 @@
+{
+  "asset": {"version": "2.0", "generator": "MyRenderer Glass-2C fixture generator"},
+  "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_volume"],
+  "scene": 0,
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "SmoothClosedVolumeSphere", "mesh": 0}],
+  "meshes": [{
+    "name": "SmoothClosedVolumeSphere",
+    "primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1}, "indices": 2, "material": 0}]
+  }],
+  "materials": [{
+    "name": "OliveVolumeGlass",
+    "alphaMode": "OPAQUE",
+    "doubleSided": false,
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.06
+    },
+    "extensions": {
+      "KHR_materials_transmission": {"transmissionFactor": 1.0},
+      "KHR_materials_ior": {"ior": 1.5},
+      "KHR_materials_volume": {
+        "thicknessFactor": 2.0,
+        "attenuationDistance": 0.85,
+        "attenuationColor": [0.68, 0.86, 0.22]
+      }
+    }
+  }],
+  "buffers": [{"byteLength": 71472, "uri": "glass_volume_sphere.bin"}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 23832, "target": 34962},
+    {"buffer": 0, "byteOffset": 23832, "byteLength": 23832, "target": 34962},
+    {"buffer": 0, "byteOffset": 47664, "byteLength": 23808, "target": 34963}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 1986, "type": "VEC3", "min": [-1, -1, -1], "max": [1, 1, 1]},
+    {"bufferView": 1, "componentType": 5126, "count": 1986, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5123, "count": 11904, "type": "SCALAR"}
+  ]
+}

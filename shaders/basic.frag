@@ -10,13 +10,17 @@ uniform vec4 uBaseColor;
 uniform sampler2D uBaseColorTexture;
 uniform sampler2D uNormalTexture;
 uniform sampler2D uMetallicRoughnessTexture;
-uniform samplerCube uEnvironmentMap;
+uniform samplerCube uIrradianceMap;
+uniform samplerCube uPrefilteredEnvironmentMap;
+uniform sampler2D uBrdfLut;
 uniform sampler2D uShadowMap;
 uniform sampler2D uOpaqueColorTexture;
 uniform sampler2D uSceneDepthTexture;
 uniform sampler2D uThicknessTexture;
 uniform sampler2D uGlassFrontfaceDepthTexture;
 uniform sampler2D uGlassBackfaceDepthTexture;
+uniform sampler2D uGlassExitNormalTexture;
+uniform usampler2D uGlassObjectIdTexture;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform bool uHasNormalTexture;
@@ -24,6 +28,8 @@ uniform bool uHasMetallicRoughnessTexture;
 uniform bool uHasThicknessTexture;
 uniform bool uHasGlassBackfaceData;
 uniform bool uGeometricThicknessEnabled;
+uniform bool uTwoInterfaceRefractionEnabled;
+uniform bool uVolumeGlassOverrideEnabled;
 uniform bool uNormalMappingEnabled;
 uniform bool uPbrEnabled;
 uniform bool uIblEnabled;
@@ -47,6 +53,10 @@ uniform vec3 uAttenuationColor;
 uniform float uAttenuationDistance;
 uniform float uRefractionScale;
 uniform float uVolumeThicknessScale;
+uniform float uVolumeGlassTransmission;
+uniform float uVolumeGlassRoughness;
+uniform vec3 uVolumeGlassAttenuationColor;
+uniform float uVolumeGlassAttenuationDistance;
 uniform float uDispersionStrength;
 uniform float uMaterialDispersion;
 uniform float uOpaqueColorMaxMip;
@@ -55,6 +65,7 @@ uniform int uGlassDebugView;
 uniform int uAlphaMode;
 uniform float uAlphaCutoff;
 uniform bool uDoubleSided;
+uniform int uGlassObjectId;
 
 out vec4 fragmentColor;
 
@@ -111,9 +122,10 @@ float estimateSurfaceNormalThickness(vec3 geometricNormal, vec3 viewDirection) {
     vec2 screenUv = gl_FragCoord.xy / max(framebufferSize, vec2(1.0));
     float frontfaceViewDepth = texture(uGlassFrontfaceDepthTexture, screenUv).r;
     float backfaceViewDepth = texture(uGlassBackfaceDepthTexture, screenUv).r;
+    uint pairedObjectId = texture(uGlassObjectIdTexture, screenUv).r;
     float viewDepthSpan = backfaceViewDepth - frontfaceViewDepth;
     if (frontfaceViewDepth >= 1.0e19 || backfaceViewDepth <= 0.0
-        || viewDepthSpan <= 0.0001) {
+        || viewDepthSpan <= 0.0001 || pairedObjectId != uint(max(uGlassObjectId, 0))) {
         return bakedThickness;
     }
 
@@ -122,6 +134,17 @@ float estimateSurfaceNormalThickness(vec3 geometricNormal, vec3 viewDirection) {
     float viewRayThickness = viewDepthSpan / max(cameraForwardProjection, 0.05);
     float normalProjection = abs(dot(cameraRay, normalize(geometricNormal)));
     return max(viewRayThickness * normalProjection * uVolumeThicknessScale, 0.0);
+}
+
+bool sampleExitSurface(vec2 uv, out vec3 exitNormal) {
+    vec4 encodedNormal = texture(uGlassExitNormalTexture, uv);
+    uint pairedObjectId = texture(uGlassObjectIdTexture, uv).r;
+    if (encodedNormal.a < 0.5 || pairedObjectId != uint(max(uGlassObjectId, 0))) {
+        exitNormal = vec3(0.0);
+        return false;
+    }
+    exitNormal = normalize(encodedNormal.xyz * 2.0 - 1.0);
+    return true;
 }
 
 vec3 sampleTransmittedRadiance(
@@ -133,11 +156,15 @@ vec3 sampleTransmittedRadiance(
     out bool totalInternalReflection,
     out bool screenSpaceHit,
     out vec2 refractedUv,
-    out float volumePathLength
+    out float volumePathLength,
+    out bool exitSurfaceHit,
+    out vec3 sampledExitNormal
 ) {
     screenSpaceHit = false;
     refractedUv = vec2(-1.0);
     volumePathLength = 0.0;
+    exitSurfaceHit = false;
+    sampledExitNormal = vec3(0.0);
     vec3 incident = -viewDirection;
     vec3 geometricNormal = normalize(vWorldNormal);
     bool entering = dot(incident, geometricNormal) < 0.0;
@@ -148,7 +175,7 @@ vec3 sampleTransmittedRadiance(
     if (totalInternalReflection) {
         vec3 reflectedDirection = reflect(incident, refractionNormal);
         return textureLod(
-            uEnvironmentMap,
+            uPrefilteredEnvironmentMap,
             reflectedDirection,
             roughness * uEnvironmentMaxMip
         ).rgb * uEnvironmentIntensity;
@@ -159,14 +186,119 @@ vec3 sampleTransmittedRadiance(
         volumePathLength = surfaceNormalThickness / normalDistance;
     }
 
+    vec3 radianceOrigin = vWorldPosition;
+    vec3 radianceDirection = normalize(refractedDirection);
+    if (uTwoInterfaceRefractionEnabled && uGeometricThicknessEnabled
+        && uHasGlassBackfaceData && surfaceNormalThickness > 0.0) {
+        int exitStepCount = clamp(uRefractionSteps, 4, 32);
+        vec2 entryUv = gl_FragCoord.xy
+            / max(vec2(textureSize(uGlassFrontfaceDepthTexture, 0)), vec2(1.0));
+        float cameraDepthSpan = max(
+            texture(uGlassBackfaceDepthTexture, entryUv).r
+                - texture(uGlassFrontfaceDepthTexture, entryUv).r,
+            0.0
+        );
+        float cameraForwardProjection = abs(
+            (uView * vec4(normalize(-viewDirection), 0.0)).z
+        );
+        float cameraRayPath = cameraDepthSpan / max(cameraForwardProjection, 0.05);
+        float exitTraceDistance = max(
+            max(volumePathLength * 1.6, cameraRayPath * 1.35),
+            uRefractionScale
+        );
+        float previousProgress = 0.0;
+        float previousDepthDifference = -cameraDepthSpan;
+        for (int stepIndex = 1; stepIndex <= 32; ++stepIndex) {
+            if (stepIndex > exitStepCount) break;
+            float rayProgress = float(stepIndex) / float(exitStepCount);
+            vec3 samplePosition = vWorldPosition
+                + refractedDirection * exitTraceDistance * rayProgress;
+            vec4 sampleViewPosition = uView * vec4(samplePosition, 1.0);
+            vec4 sampleClip = uProjection * sampleViewPosition;
+            if (sampleClip.w <= 0.0) break;
+            vec2 sampleUv = sampleClip.xy / sampleClip.w * 0.5 + 0.5;
+            if (any(lessThan(sampleUv, vec2(0.0)))
+                || any(greaterThan(sampleUv, vec2(1.0)))) break;
+
+            float exitViewDepth = texture(uGlassBackfaceDepthTexture, sampleUv).r;
+            float rayViewDepth = -sampleViewPosition.z;
+            float depthTolerance = max(exitViewDepth * 0.0015, 0.0025);
+            float depthDifference = rayViewDepth - exitViewDepth;
+            vec3 exitNormal = vec3(0.0);
+            if (exitViewDepth > 0.0
+                && depthDifference >= -depthTolerance
+                && sampleExitSurface(sampleUv, exitNormal)) {
+                float crossingWeight = clamp(
+                    -previousDepthDifference
+                        / max(depthDifference - previousDepthDifference, 0.00001),
+                    0.0,
+                    1.0
+                );
+                float crossingProgress = mix(
+                    previousProgress,
+                    rayProgress,
+                    crossingWeight
+                );
+                vec3 crossingPosition = vWorldPosition
+                    + refractedDirection * exitTraceDistance * crossingProgress;
+                vec4 crossingClip = uProjection * uView * vec4(crossingPosition, 1.0);
+                vec2 crossingUv = crossingClip.xy / crossingClip.w * 0.5 + 0.5;
+                vec3 refinedNormal = vec3(0.0);
+                if (sampleExitSurface(crossingUv, refinedNormal)) {
+                    exitNormal = refinedNormal;
+                }
+                exitSurfaceHit = true;
+                sampledExitNormal = exitNormal;
+                radianceOrigin = crossingPosition;
+                volumePathLength = length(crossingPosition - vWorldPosition);
+                vec3 exitInterfaceNormal = dot(refractedDirection, exitNormal) > 0.0
+                    ? -exitNormal
+                    : exitNormal;
+                vec3 exitedDirection = refract(
+                    normalize(refractedDirection),
+                    exitInterfaceNormal,
+                    ior
+                );
+                if (dot(exitedDirection, exitedDirection) > 0.000001) {
+                    radianceDirection = normalize(exitedDirection);
+                } else {
+                    totalInternalReflection = true;
+                    radianceDirection = normalize(reflect(
+                        refractedDirection,
+                        exitInterfaceNormal
+                    ));
+                }
+                break;
+            }
+            if (exitViewDepth > 0.0) {
+                previousProgress = rayProgress;
+                previousDepthDifference = depthDifference;
+            }
+        }
+    }
+
+    if (!exitSurfaceHit && uGeometricThicknessEnabled && uHasGlassBackfaceData
+        && surfaceNormalThickness > 0.0) {
+        vec3 approximateExitInterfaceNormal = refractionNormal;
+        vec3 exitedDirection = refract(
+            normalize(refractedDirection),
+            approximateExitInterfaceNormal,
+            ior
+        );
+        if (dot(exitedDirection, exitedDirection) > 0.000001) {
+            radianceDirection = normalize(exitedDirection);
+            radianceOrigin = vWorldPosition + refractedDirection * volumePathLength;
+        }
+    }
+
     int stepCount = clamp(uRefractionSteps, 4, 32);
     vec2 lastValidUv = vec2(-1.0);
     for (int stepIndex = 1; stepIndex <= 32; ++stepIndex) {
         if (stepIndex > stepCount) break;
         float rayProgress = float(stepIndex) / float(stepCount);
-        float traceDistance = max(uRefractionScale, volumePathLength);
-        vec3 samplePosition = vWorldPosition
-            + refractedDirection * traceDistance * rayProgress;
+        float traceDistance = max(uRefractionScale * 4.0, 1.5);
+        vec3 samplePosition = radianceOrigin
+            + radianceDirection * traceDistance * rayProgress;
         vec4 refractedClip = uProjection * uView * vec4(samplePosition, 1.0);
         if (refractedClip.w <= 0.0) break;
 
@@ -204,24 +336,9 @@ vec3 sampleTransmittedRadiance(
         ).rgb;
     }
 
-    vec3 environmentDirection = refractedDirection;
-    if (uGeometricThicknessEnabled && uHasGlassBackfaceData
-        && surfaceNormalThickness > 0.0) {
-        // The depth pass provides the exit distance but not an exit normal.
-        // A locally parallel exit surface is the stable raster approximation;
-        // curved/concave glass falls back gracefully but remains approximate.
-        vec3 exitIncidentNormal = refractionNormal;
-        vec3 exitedDirection = refract(refractedDirection, exitIncidentNormal, ior);
-        if (dot(exitedDirection, exitedDirection) > 0.000001) {
-            environmentDirection = normalize(exitedDirection);
-        } else {
-            totalInternalReflection = true;
-            environmentDirection = reflect(refractedDirection, exitIncidentNormal);
-        }
-    }
     return textureLod(
-        uEnvironmentMap,
-        environmentDirection,
+        uPrefilteredEnvironmentMap,
+        radianceDirection,
         roughness * uEnvironmentMaxMip
     ).rgb * uEnvironmentIntensity;
 }
@@ -248,6 +365,9 @@ void main() {
         ? texture(uMetallicRoughnessTexture, vTexCoord0).gb
         : vec2(1.0);
     float roughness = clamp(uRoughnessFactor * materialSample.x, 0.04, 1.0);
+    if (uVolumeGlassOverrideEnabled && uTransmissionFactor > 0.0) {
+        roughness = clamp(uVolumeGlassRoughness, 0.04, 1.0);
+    }
     float metallic = clamp(uMetallicFactor * materialSample.y, 0.0, 1.0);
     vec3 lightDirection = normalize(-uLightDirection);
     vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
@@ -290,32 +410,43 @@ void main() {
     vec3 ambientSpecular = vec3(0.0);
     if (uIblEnabled) {
         vec3 reflection = reflect(-viewDirection, normal);
-        vec3 diffuseEnvironment = textureLod(uEnvironmentMap, normal, uEnvironmentMaxMip).rgb;
+        vec3 diffuseEnvironment = texture(uIrradianceMap, normal).rgb;
         vec3 specularEnvironment = textureLod(
-            uEnvironmentMap, reflection, roughness * uEnvironmentMaxMip
+            uPrefilteredEnvironmentMap, reflection, roughness * uEnvironmentMaxMip
         ).rgb;
         vec3 environmentFresnel = fresnelSchlick(nDotV, f0);
+        vec2 environmentBrdf = texture(uBrdfLut, vec2(nDotV, roughness)).rg;
         ambientDiffuse = (vec3(1.0) - environmentFresnel)
             * (1.0 - metallic)
             * albedo
             * diffuseEnvironment
             * uEnvironmentIntensity;
-        ambientSpecular = specularEnvironment * environmentFresnel * uEnvironmentIntensity;
+        ambientSpecular = specularEnvironment
+            * (environmentFresnel * environmentBrdf.x + environmentBrdf.y)
+            * uEnvironmentIntensity;
     }
 
     vec3 diffuseLighting = ambientDiffuse + visibility * directDiffuse;
     vec3 specularLighting = ambientSpecular + visibility * directSpecular;
     float transmission = uTransmissionEnabled
-        ? clamp(uTransmissionFactor * (1.0 - metallic), 0.0, 1.0)
+        ? clamp(
+            (uVolumeGlassOverrideEnabled && uTransmissionFactor > 0.0
+                ? uVolumeGlassTransmission
+                : uTransmissionFactor) * (1.0 - metallic),
+            0.0,
+            1.0
+        )
         : 0.0;
     if (transmission > 0.0) {
         if (uHasGlassBackfaceData) {
             vec2 framebufferSize = vec2(textureSize(uGlassFrontfaceDepthTexture, 0));
             vec2 screenUv = gl_FragCoord.xy / max(framebufferSize, vec2(1.0));
             float nearestViewDepth = texture(uGlassFrontfaceDepthTexture, screenUv).r;
+            uint pairedObjectId = texture(uGlassObjectIdTexture, screenUv).r;
             float fragmentViewDepth = -(uView * vec4(vWorldPosition, 1.0)).z;
             float depthTolerance = max(nearestViewDepth * 0.0002, 0.0005);
-            if (nearestViewDepth < 1.0e19
+            if (pairedObjectId == uint(max(uGlassObjectId, 0))
+                && nearestViewDepth < 1.0e19
                 && fragmentViewDepth > nearestViewDepth + depthTolerance) {
                 discard;
             }
@@ -328,6 +459,8 @@ void main() {
         bool screenSpaceHit = false;
         vec2 refractedUv = vec2(-1.0);
         float volumePathLength = 0.0;
+        bool exitSurfaceHit = false;
+        vec3 exitSurfaceNormal = vec3(0.0);
         vec3 transmittedRadiance = sampleTransmittedRadiance(
             normal,
             viewDirection,
@@ -337,7 +470,9 @@ void main() {
             totalInternalReflection,
             screenSpaceHit,
             refractedUv,
-            volumePathLength
+            volumePathLength,
+            exitSurfaceHit,
+            exitSurfaceNormal
         );
         vec3 rgbPathLengths = vec3(volumePathLength);
         float dispersion = uDispersionStrength > 0.0
@@ -353,6 +488,8 @@ void main() {
             bool redHit = false;
             vec2 redUv = vec2(-1.0);
             float redPathLength = 0.0;
+            bool redExitHit = false;
+            vec3 redExitNormal = vec3(0.0);
             vec3 redRadiance = sampleTransmittedRadiance(
                 normal,
                 viewDirection,
@@ -362,12 +499,16 @@ void main() {
                 redTir,
                 redHit,
                 redUv,
-                redPathLength
+                redPathLength,
+                redExitHit,
+                redExitNormal
             );
             bool blueTir = false;
             bool blueHit = false;
             vec2 blueUv = vec2(-1.0);
             float bluePathLength = 0.0;
+            bool blueExitHit = false;
+            vec3 blueExitNormal = vec3(0.0);
             vec3 blueRadiance = sampleTransmittedRadiance(
                 normal,
                 viewDirection,
@@ -377,7 +518,9 @@ void main() {
                 blueTir,
                 blueHit,
                 blueUv,
-                bluePathLength
+                bluePathLength,
+                blueExitHit,
+                blueExitNormal
             );
             transmittedRadiance = vec3(
                 redRadiance.r,
@@ -387,15 +530,21 @@ void main() {
             rgbPathLengths = vec3(redPathLength, volumePathLength, bluePathLength);
         }
         vec3 volumeTransmittance = vec3(1.0);
-        if (uThicknessFactor > 0.0 && uAttenuationDistance < 1.0e19) {
+        vec3 attenuationColor = uVolumeGlassOverrideEnabled
+            ? uVolumeGlassAttenuationColor
+            : uAttenuationColor;
+        float attenuationDistance = uVolumeGlassOverrideEnabled
+            ? uVolumeGlassAttenuationDistance
+            : uAttenuationDistance;
+        if (uThicknessFactor > 0.0 && attenuationDistance < 1.0e19) {
             vec3 safeAttenuationColor = clamp(
-                uAttenuationColor,
+                attenuationColor,
                 vec3(0.0001),
                 vec3(1.0)
             );
             volumeTransmittance = pow(
                 safeAttenuationColor,
-                rgbPathLengths / max(uAttenuationDistance, 0.0001)
+                rgbPathLengths / max(attenuationDistance, 0.0001)
             );
         }
         vec3 viewFresnel = totalInternalReflection
@@ -451,6 +600,18 @@ void main() {
             fragmentColor = depthSpan > 0.0001
                 ? vec4(1.0 - exp(-depthSpan), 1.0, 0.0, 1.0)
                 : vec4(1.0, 0.0, 1.0, 1.0);
+            return;
+        }
+        if (uGlassDebugView == 9) {
+            fragmentColor = exitSurfaceHit
+                ? vec4(exitSurfaceNormal * 0.5 + 0.5, 1.0)
+                : vec4(1.0, 0.0, 1.0, 1.0);
+            return;
+        }
+        if (uGlassDebugView == 10) {
+            float id = float(max(uGlassObjectId, 0));
+            vec3 idColor = fract(vec3(0.1031, 0.11369, 0.13787) * id);
+            fragmentColor = vec4(idColor, 1.0);
             return;
         }
         fragmentColor = vec4(

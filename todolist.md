@@ -379,7 +379,23 @@ Shadow / Depth
 
 > Glass-2A 完成（2026-08-24）：Assimp 的 `AI_MATKEY_VOLUME_*` 已映射到格式无关 `MaterialData` 与 GPU 材质，`glass_material_test.gltf` 为两种玻璃增加不同的均匀厚度、吸收颜色与吸收距离。Shader 按折射方向和表面法线估算介质路径长度，并使用 `T(x) = attenuationColor^(x / attenuationDistance)` 计算 Beer-Lambert Transmittance；Dispersion Override 使用 Khronos 推荐的 `halfSpread = (IOR - 1) × 0.025 × dispersion`，分别追踪 R/G/B 后重组透射颜色。Inspector 与环境变量支持 Thickness Scale、Dispersion 和 8 种 Glass Debug View。MinGW 构建、2 项 CTest、完整 GPU smoke 通过，并导出 4x MSAA Final / Thickness / Transmittance / RGB Dispersion 截图。Prism-2 随后补齐了材质级 `KHR_materials_dispersion` 导入与 Abbe Number 显示；Glass-2B 仍需 Thickness Texture 和前后表面深度厚度。
 
-> Glass-2B 完成（2026-08-24）：新增 `Glass front/back thickness` Pass，以两张 R32F 纹理和 `GL_MIN` / `GL_MAX` 分别保存每个像素最近入口深度与最远退出深度，不依赖资产的 `doubleSided` 或三角形绕序。玻璃 Shader 把深度跨度换算为表面法线方向厚度，再按折射角得到介质路径长度，统一供 Beer-Lambert 与 RGB 色散使用；无有效退出表面时回退到 glTF 规范的 `thicknessFactor × thicknessTexture.g`。Assimp/GPU 材质现支持线性 Thickness Texture，新增 `volume_texture_test.gltf` 和 CPU 导入断言；Inspector 增加 Geometric Glass Thickness 开关与 Front/Back Thickness Data 调试视图。当前屏幕空间方法以局部平行退出界面近似第二界面法线，多个重叠或凹形玻璃仍可能合并错误的前后深度，后续可通过对象 ID/分层深度或 Ray Query 路线扩展。下一阶段进入 Glass-3 彩色焦散与透射阴影。
+> Glass-2B 完成（2026-08-24）：新增 `Glass front/back thickness` Pass，以两张 R32F 纹理和 `GL_MIN` / `GL_MAX` 分别保存每个像素最近入口深度与最远退出深度，不依赖资产的 `doubleSided` 或三角形绕序。玻璃 Shader 把深度跨度换算为表面法线方向厚度，再按折射角得到介质路径长度，统一供 Beer-Lambert 与 RGB 色散使用；无有效退出表面时回退到 glTF 规范的 `thicknessFactor × thicknessTexture.g`。Assimp/GPU 材质现支持线性 Thickness Texture，新增 `volume_texture_test.gltf` 和 CPU 导入断言；Inspector 增加 Geometric Glass Thickness 开关与 Front/Back Thickness Data 调试视图。当前屏幕空间方法以局部平行退出界面近似第二界面法线，多个重叠或凹形玻璃仍可能合并错误的前后深度，后续可通过对象 ID/分层深度或 Ray Query 路线扩展。经参考效果缺口复核，下一阶段先完成 Glass-2C 弯曲双界面折射，再进入 Glass-3 彩色焦散与透射阴影。
+
+#### Glass-2C：弯曲体积玻璃与 Khronos 参考效果补齐
+
+目标：让封闭球体等弯曲玻璃稳定呈现 `KHR_materials_volume` 参考图中的边缘反射、背景扭曲和随内部路径长度变化的黄绿色吸收。此阶段解决的是玻璃主体本身的可信度；Glass-3 的焦散不是该参考图成立的前置条件。
+
+- [x] 新增平滑、封闭且法线连续的 glTF/GLB 球体回归资产，材质同时覆盖 `KHR_materials_transmission`、`KHR_materials_ior` 与 `KHR_materials_volume`；不使用无法携带这些扩展且面数过低的现有 `sphere.obj` 作为最终验收资产。
+- [x] 将 Glass Front/Back Pass 扩展为可供折射路径查询的退出表面数据，至少保存退出位置/深度、退出法线和对象 ID；玻璃 Shader 在空气→玻璃和玻璃→空气两个界面分别应用 Snell 折射，不再对弯曲球体使用“退出面与入口面局部平行”的假设。
+- [x] 让入口/退出表面按对象 ID 或逐对象分层配对，避免两个玻璃物体投影重叠时把 A 的入口与 B 的出口组合成错误厚度；为单球、双球相邻、双球重叠和凹形失败边界建立调试截图。
+- [x] 把 P0 的标准 Split-Sum IBL 作为本阶段画质依赖：加载真实 HDR equirectangular 环境，生成 Diffuse Irradiance、GGX Prefiltered Specular Cubemap 与 BRDF LUT；保留程序化环境作为离线/失败回退。
+- [x] 增加 `Volume Glass` 材质预设与 Inspector 参数：Transmission、IOR、Roughness、Attenuation Color、Attenuation Distance、Thickness Scale，并提供 Clear / Olive / Amber 三组可复用配置；Dispersion 默认关闭，以免把体积吸收误认为彩虹色散。
+- [x] 制作与 Khronos 参考图具有相同“验证意图”但不复制其资产的测试舞台：原创棋盘格背景、两个并排球体、柔和地面和高对比 HDRI；固定相机分别输出 Final、Thickness、Exit Normal、Object ID、Transmittance 与 Refraction Hit。
+- [x] 建立 Glass-2C 视觉回归与性能验收：1080p、1x/4x MSAA 下保存 Approximate / Two-interface On-Off 对照；记录完整 Glass Frame 的 GPU P50/P95 与显存，并用 Exit Normal 的洋红区域显式标记屏幕外/无有效退出回退。对象缓存和折射在透明排序阶段交错执行，IBL 则在启动时 CPU 预计算，因此不伪造并不存在的独立每帧 Pass 计时。
+
+> Glass-2C 完成（2026-08-24）：新增 1,986 顶点 / 3,968 三角形的闭合流形 glTF 球体，并以逐边双引用断言验证封闭性。透明排序绘制前按 `RenderItem` 生成 R32F 入口/出口深度、RGBA16F 出射法线与 R32UI Object ID，Shader 沿内部折射方向查询退出深度场、插值交点并使用真实出射法线执行第二次 Snell 折射；屏幕外、凹形或无效退出继续回退到 Glass-2B 局部平行近似。环境系统加载原创 `glass_studio.hdr`，预计算 Diffuse Irradiance、GGX Prefiltered Specular Cubemap 和 BRDF LUT，文件缺失时保留程序化 Studio 回退。View 菜单新增 Volume Glass Preset，自动创建双球 + 原创棋盘格固定舞台；Inspector 提供双界面开关、完整体积参数、Clear / Olive / Amber Preset、Exit Normal 与 Object ID 调试视图。7 张 1920×1080 视觉基线在 1x/4x MSAA 下自动重拍比较为 7/7 通过。RTX 4060 Laptop 的 4x MSAA 双界面 On GPU P50/P95 为 2.271/3.611 ms，完整 Glass 管线估算显存 243.16 MiB；由于 IBL 在启动时 CPU 预计算、对象缓存与折射在排序阶段交错执行，报告以完整 Glass Frame 而不是虚构的独立 IBL Pass 计时。详细记录见 `docs/glass2c-volume.md`。下一阶段进入 Glass-3 彩色焦散与透射阴影。
+
+Glass-2C 验收：球体中心因路径更长而具有更浓的吸收色，边缘保持较薄且反射增强；棋盘格经过球体时产生连续、方向合理的双界面扭曲；两个球体相邻或局部重叠时不串用前后表面；关闭体积吸收、真实退出法线或标准 IBL 后的差异能在固定机位截图中明确观察。
 
 #### Prism Spectrum Demo：棱镜光谱分光专项
 
@@ -469,13 +485,13 @@ Prism Demo 验收：出射光谱必须由世界空间入射光经过两个棱镜
 
 #### Glass-4：展示、测试与验收
 
-- [ ] 制作专用水晶模型、白色地面、黑色背景和高对比 HDRI 展示场景。
+- [ ] 制作两套专用展示场景：水晶主体 + 白色地面 + 黑色背景的焦散 Hero Scene，以及平滑体积球 + 棋盘格背景 + 高对比 HDRI 的 `KHR_materials_volume` 验收场景。
 - [ ] 提供 Glass、Dispersion、Caustics 独立开关和相同机位的 On / Off 对照截图。
-- [ ] 建立固定相机视觉回归，覆盖 IOR、Thickness、Dispersion、Caustics 和 1x/4x MSAA。
+- [ ] 建立固定相机视觉回归，覆盖 IOR、Thickness、Attenuation、真实退出法线、双物体配对、Dispersion、Caustics 和 1x/4x MSAA。
 - [ ] 输出 1080p 下各 Pass 的 GPU 时间、Draw Call 和显存占用，并保存带 Pass 标记的 RenderDoc / Nsight Capture。
 - [ ] 为 TA 展示准备至少 3 个可复用玻璃 Preset；为图形程序展示准备算法、失败案例和优化前后报告。
 
-Glass 阶段验收：Glass-2 完成后水晶主体应具有稳定的反射、体积、内部折射和 RGB 色散；Glass-3 完成后地面出现与光源/物体关系一致的彩色焦散，才视为达到参考图的完整效果。
+Glass 阶段验收：Glass-2C 完成后，弯曲球体应达到 Khronos `KHR_materials_volume` 参考图所表达的核心效果——稳定环境反射、双界面背景折射和厚度相关体积吸收；Glass-3 完成后，水晶 Hero Scene 的地面还应出现与光源/物体关系一致的彩色焦散。两套参考目标分别验收，不用焦散掩盖玻璃主体的折射错误。
 
 ### 8.4 图形程序主线（Graphics Programmer Track）
 
@@ -536,7 +552,7 @@ TA 路线验收：一个未参与开发的使用者能在文档指导下导入�
 
 1. P0 架构拆分、Shader 热重载、glTF 材质完整性、标准 IBL。
 2. P0 视觉回归、Benchmark、GPU Debug Label、RenderDoc / Nsight 前后对比。
-3. 若以棱镜分光为近期目标：按 `Glass-0～Glass-2A → Prism-0～Prism-5` 推进；随后再做 Glass-2B 真实厚度与 Glass-3 通用焦散，不让通用体积/焦散阻塞专用 Hero Demo。
+3. 若以棱镜分光为近期目标：按 `Glass-0～Glass-2A → Prism-0～Prism-5` 推进；随后按 `Glass-2B → Glass-2C → Glass-3 → Glass-4` 补齐真实厚度、弯曲双界面折射、通用焦散和最终展示，不让通用体积/焦散阻塞专用 Hero Demo。
 4. 若主投图形程序且不以水晶 Demo 为旗舰：先做 Deferred + 多光源 + Culling/LOD，再选择 Vulkan 作为旗舰。
 5. 若主投 TA 且不以水晶 Demo 为旗舰：先做 Asset Audit + Material Inspector + Blender 脚本，再选择 NPR 套件作为旗舰。
 6. 最后集中完成英文 README、展示场景、Demo Reel、技术文章和 Release 包。

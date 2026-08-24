@@ -1,7 +1,10 @@
+#include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 #include "io/AssimpImporter.h"
 #include "io/ModelImporter.h"
@@ -35,6 +38,27 @@ const MaterialData* findMaterial(const ModelImportResult& result, const std::str
         }
     }
     return nullptr;
+}
+
+bool isClosedTriangleManifold(const MeshData& mesh) {
+    if (mesh.indices.size() % 3U != 0U) return false;
+    std::unordered_map<std::uint64_t, unsigned int> edgeUses;
+    const auto addEdge = [&edgeUses](std::uint32_t left, std::uint32_t right) {
+        const std::uint32_t minimum = std::min(left, right);
+        const std::uint32_t maximum = std::max(left, right);
+        const std::uint64_t key = (static_cast<std::uint64_t>(minimum) << 32U) | maximum;
+        ++edgeUses[key];
+    };
+    for (std::size_t index = 0; index < mesh.indices.size(); index += 3U) {
+        addEdge(mesh.indices[index], mesh.indices[index + 1U]);
+        addEdge(mesh.indices[index + 1U], mesh.indices[index + 2U]);
+        addEdge(mesh.indices[index + 2U], mesh.indices[index]);
+    }
+    return !edgeUses.empty() && std::all_of(
+        edgeUses.begin(),
+        edgeUses.end(),
+        [](const auto& edge) { return edge.second == 2U; }
+    );
 }
 
 } // namespace
@@ -126,6 +150,25 @@ int main() {
         require(roughGlass->roughnessFactor > 0.5f, "rough glass should preserve roughness");
         require(roughGlass->transmissionFactor > 0.8f, "rough glass should preserve transmission");
         require(roughGlass->thicknessFactor > 0.5f, "rough glass should preserve volume thickness");
+
+        const ModelImportResult volumeSphere = assimp.load(asset("glass_volume_sphere.gltf"));
+        require(volumeSphere.model.meshes.size() == 1U, "Glass-2C fixture should import one sphere");
+        require(
+            volumeSphere.model.meshes.front().vertices.size() > 1900U,
+            "Glass-2C sphere should be smooth enough for curved refraction validation"
+        );
+        require(
+            isClosedTriangleManifold(volumeSphere.model.meshes.front()),
+            "Glass-2C sphere should be a closed triangle manifold"
+        );
+        const MaterialData* oliveVolumeGlass = findMaterial(volumeSphere, "OliveVolumeGlass");
+        require(oliveVolumeGlass != nullptr, "Glass-2C fixture should preserve its volume material");
+        require(oliveVolumeGlass->transmissionFactor > 0.99f, "volume sphere should transmit light");
+        require(oliveVolumeGlass->thicknessFactor > 1.9f, "volume sphere should preserve diameter scale");
+        require(
+            oliveVolumeGlass->attenuationColor.g > oliveVolumeGlass->attenuationColor.r,
+            "olive absorption tint should survive import"
+        );
 
         const ModelImportResult texturedVolume = assimp.load(asset("volume_texture_test.gltf"));
         const MaterialData* texturedVolumeGlass = findMaterial(texturedVolume, "TexturedVolumeGlass");

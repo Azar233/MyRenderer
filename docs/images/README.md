@@ -37,3 +37,14 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
   thickness disabled, preserving the material factor/texture fallback.
 - `glass2b_front_back_debug.png`: entry/exit depth validity view; green/yellow
   pixels contain a valid positive depth span and magenta marks fallback regions.
+- `glass2c_msaa1.png` / `glass2c_msaa4.png`: fixed-camera curved volume-glass
+  stage with two independent objects, checkerboard distortion, HDRI reflections,
+  and thickness-dependent olive absorption.
+- `glass2c_approximate.png`: same camera with the Glass-2B locally parallel exit
+  approximation, used as the two-interface On/Off comparison.
+- `glass2c_thickness.png` / `glass2c_transmittance.png`: geometric path length
+  and Beer-Lambert output for the closed-sphere fixture.
+- `glass2c_exit_normal.png`: sampled curved exit normal; magenta identifies the
+  documented screen-space fallback region.
+- `glass2c_object_id.png`: stable per-RenderItem pairing colors for overlapping
+  glass instances.

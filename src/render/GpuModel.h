@@ -50,6 +50,7 @@ public:
     std::size_t opaqueSubmeshCount() const { return opaqueDrawCommands_.size(); }
     std::size_t transparentSubmeshCount() const { return transparentDrawCommands_.size(); }
     std::size_t transmissiveSubmeshCount() const { return transmissiveDrawCommands_.size(); }
+    bool transparentSubmeshIsTransmissive(std::size_t transparentSubmeshIndex) const;
     std::size_t loadedTextureCount() const { return loadedTextureCount_; }
     std::size_t fallbackTextureCount() const { return fallbackTextureCount_; }
     std::size_t textureMemoryBytes() const { return textureMemoryBytes_; }

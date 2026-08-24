@@ -144,7 +144,6 @@ void Renderer::render(
     glm::vec3 sceneCenter(0.0f);
     bool hasVisibleItems = false;
     bool hasShadowCasters = false;
-    bool hasTransmissiveItems = false;
     for (const RenderItem& item : renderItems) {
         if (!item.visible || item.model == nullptr) {
             continue;
@@ -154,7 +153,6 @@ void Renderer::render(
             hasVisibleItems = true;
         }
         hasShadowCasters |= item.castsShadow && item.model->opaqueSubmeshCount() > 0U;
-        hasTransmissiveItems |= item.model->transmissiveSubmeshCount() > 0U;
     }
     glm::vec3 lightUp(0.0f, 1.0f, 0.0f);
     if (std::abs(glm::dot(lightDirection, lightUp)) > 0.96f) lightUp = glm::vec3(0.0f, 0.0f, 1.0f);
@@ -203,7 +201,22 @@ void Renderer::render(
         shader_->setFloat("uRefractionScale", settings.refractionScale);
         shader_->setInt("uRefractionSteps", settings.refractionSteps);
         shader_->setFloat("uVolumeThicknessScale", settings.volumeThicknessScale);
+        shader_->setBool("uVolumeGlassOverrideEnabled", settings.volumeGlassOverrideEnabled);
+        shader_->setFloat("uVolumeGlassTransmission", settings.volumeGlassTransmission);
+        shader_->setFloat("uVolumeGlassRoughness", settings.volumeGlassRoughness);
+        shader_->setVec3(
+            "uVolumeGlassAttenuationColor",
+            settings.volumeGlassAttenuationColor
+        );
+        shader_->setFloat(
+            "uVolumeGlassAttenuationDistance",
+            settings.volumeGlassAttenuationDistance
+        );
         shader_->setBool("uGeometricThicknessEnabled", settings.geometricThicknessEnabled);
+        shader_->setBool(
+            "uTwoInterfaceRefractionEnabled",
+            settings.twoInterfaceRefractionEnabled
+        );
         shader_->setFloat("uDispersionStrength", settings.dispersionStrength);
         shader_->setFloat("uIndexOfRefractionOverride", settings.indexOfRefractionOverride);
         shader_->setInt("uGlassDebugView", static_cast<int>(settings.glassDebugView));
@@ -219,8 +232,17 @@ void Renderer::render(
         shader_->setInt("uSceneDepthTexture", 6);
         shader_->setInt("uGlassFrontfaceDepthTexture", 8);
         shader_->setInt("uGlassBackfaceDepthTexture", 9);
-        shader_->setBool("uHasGlassBackfaceData", hasTransmissiveItems);
+        shader_->setInt("uGlassExitNormalTexture", 10);
+        shader_->setInt("uGlassObjectIdTexture", 11);
+        shader_->setInt("uIrradianceMap", 12);
+        shader_->setInt("uPrefilteredEnvironmentMap", 13);
+        shader_->setInt("uBrdfLut", 14);
+        shader_->setBool("uHasGlassBackfaceData", false);
+        shader_->setInt("uGlassObjectId", 0);
         environmentMap_->bind(3U);
+        environmentMap_->bindIrradiance(12U);
+        environmentMap_->bindPrefiltered(13U);
+        environmentMap_->bindBrdfLut(14U);
         shadowMap_->bindTexture(4U);
     };
 
@@ -349,52 +371,6 @@ void Renderer::render(
             renderTarget_->resolveOpaqueScene();
         });
     }
-    if (hasTransmissiveItems && settings.transmissionEnabled) {
-        sequence.add("Glass front/back thickness", [&] {
-            glViewport(0, 0, width, height);
-            glDisable(GL_DEPTH_TEST);
-            glDepthMask(GL_FALSE);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE);
-            glDisable(GL_CULL_FACE);
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            glassThicknessShader_->use();
-            glassThicknessShader_->setMat4("uView", view);
-            glassThicknessShader_->setMat4("uProjection", projection);
-
-            const auto drawTransmissiveDepth = [&] {
-                for (const RenderItem& item : renderItems) {
-                    if (!item.visible || item.model == nullptr
-                        || item.model->transmissiveSubmeshCount() == 0U) {
-                        continue;
-                    }
-                    glassThicknessShader_->setMat4("uModel", item.modelMatrix);
-                    item.model->drawTransmissiveDepth();
-                    drawCallCount_ += item.model->transmissiveSubmeshCount();
-                }
-            };
-
-            // GL_MIN/GL_MAX select the entry and exit depths without relying
-            // on imported face winding or the material's double-sided flag.
-            renderTarget_->bindGlassFrontfaceThickness();
-            const std::array<float, 4> farClear{1.0e20f, 0.0f, 0.0f, 0.0f};
-            glClearBufferfv(GL_COLOR, 0, farClear.data());
-            glBlendEquation(GL_MIN);
-            drawTransmissiveDepth();
-
-            renderTarget_->bindGlassBackfaceThickness();
-            const std::array<float, 4> nearClear{0.0f, 0.0f, 0.0f, 0.0f};
-            glClearBufferfv(GL_COLOR, 0, nearClear.data());
-            glBlendEquation(GL_MAX);
-            drawTransmissiveDepth();
-
-            glBlendEquation(GL_FUNC_ADD);
-            glDisable(GL_BLEND);
-            glDepthMask(GL_TRUE);
-            glEnable(GL_DEPTH_TEST);
-            glDisable(GL_CULL_FACE);
-        });
-    }
     sequence.add("Forward transparent / refractive scene", [&] {
         // Copy the opaque HDR result into a distinct output attachment. Future
         // transmissive materials can sample opaqueColorTexture/sceneDepthTexture
@@ -410,6 +386,10 @@ void Renderer::render(
             glBindTexture(GL_TEXTURE_2D, renderTarget_->glassFrontfaceDepthTexture());
             glActiveTexture(GL_TEXTURE9);
             glBindTexture(GL_TEXTURE_2D, renderTarget_->glassBackfaceDepthTexture());
+            glActiveTexture(GL_TEXTURE10);
+            glBindTexture(GL_TEXTURE_2D, renderTarget_->glassExitNormalTexture());
+            glActiveTexture(GL_TEXTURE11);
+            glBindTexture(GL_TEXTURE_2D, renderTarget_->glassObjectIdTexture());
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
             glEnable(GL_BLEND);
@@ -421,8 +401,95 @@ void Renderer::render(
             );
             glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
             bindSceneShader();
+            std::size_t capturedRenderItem = renderItems.size();
             for (const TransparentSortEntry& draw : transparentDraws) {
                 const RenderItem& item = renderItems[draw.renderItemIndex];
+                const bool transmissive = settings.transmissionEnabled
+                    && item.model->transparentSubmeshIsTransmissive(
+                        draw.transparentSubmeshIndex
+                    );
+                if (transmissive && capturedRenderItem != draw.renderItemIndex) {
+                    glViewport(0, 0, width, height);
+                    glDisable(GL_DEPTH_TEST);
+                    glDepthMask(GL_FALSE);
+                    glEnable(GL_BLEND);
+                    glBlendFunc(GL_ONE, GL_ONE);
+                    glDisable(GL_CULL_FACE);
+                    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                    glassThicknessShader_->use();
+                    glassThicknessShader_->setMat4("uView", view);
+                    glassThicknessShader_->setMat4("uProjection", projection);
+                    glassThicknessShader_->setMat4("uModel", item.modelMatrix);
+                    glassThicknessShader_->setInt("uPassMode", 0);
+
+                    renderTarget_->bindGlassFrontfaceThickness();
+                    const std::array<float, 4> farClear{1.0e20f, 0.0f, 0.0f, 0.0f};
+                    glClearBufferfv(GL_COLOR, 0, farClear.data());
+                    glBlendEquation(GL_MIN);
+                    item.model->drawTransmissiveDepth();
+
+                    renderTarget_->bindGlassBackfaceThickness();
+                    const std::array<float, 4> nearClear{0.0f, 0.0f, 0.0f, 0.0f};
+                    glClearBufferfv(GL_COLOR, 0, nearClear.data());
+                    glBlendEquation(GL_MAX);
+                    item.model->drawTransmissiveDepth();
+
+                    glBlendEquation(GL_FUNC_ADD);
+                    glDisable(GL_BLEND);
+                    renderTarget_->bindGlassExitSurfaceData();
+                    const std::array<float, 4> invalidNormal{0.5f, 0.5f, 0.5f, 0.0f};
+                    const std::array<unsigned int, 4> noObject{0U, 0U, 0U, 0U};
+                    glClearBufferfv(GL_COLOR, 0, invalidNormal.data());
+                    glClearBufferuiv(GL_COLOR, 1, noObject.data());
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(
+                        GL_TEXTURE_2D,
+                        renderTarget_->glassBackfaceDepthTexture()
+                    );
+                    glassThicknessShader_->setInt("uGlassBackfaceDepthTexture", 0);
+                    glassThicknessShader_->setInt("uPassMode", 1);
+                    glassThicknessShader_->setInt(
+                        "uGlassObjectId",
+                        static_cast<int>(draw.renderItemIndex + 1U)
+                    );
+                    item.model->drawTransmissiveDepth();
+                    drawCallCount_ += item.model->transmissiveSubmeshCount() * 3U;
+
+                    renderTarget_->bindHdrSceneForOverlay();
+                    glActiveTexture(GL_TEXTURE5);
+                    glBindTexture(GL_TEXTURE_2D, renderTarget_->opaqueColorTexture());
+                    glActiveTexture(GL_TEXTURE6);
+                    glBindTexture(GL_TEXTURE_2D, renderTarget_->sceneDepthTexture());
+                    glActiveTexture(GL_TEXTURE8);
+                    glBindTexture(GL_TEXTURE_2D, renderTarget_->glassFrontfaceDepthTexture());
+                    glActiveTexture(GL_TEXTURE9);
+                    glBindTexture(GL_TEXTURE_2D, renderTarget_->glassBackfaceDepthTexture());
+                    glActiveTexture(GL_TEXTURE10);
+                    glBindTexture(GL_TEXTURE_2D, renderTarget_->glassExitNormalTexture());
+                    glActiveTexture(GL_TEXTURE11);
+                    glBindTexture(GL_TEXTURE_2D, renderTarget_->glassObjectIdTexture());
+                    glEnable(GL_DEPTH_TEST);
+                    glDepthMask(GL_FALSE);
+                    glEnable(GL_BLEND);
+                    glBlendEquation(GL_FUNC_ADD);
+                    glBlendFuncSeparate(
+                        GL_SRC_ALPHA,
+                        GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE,
+                        GL_ONE_MINUS_SRC_ALPHA
+                    );
+                    glPolygonMode(
+                        GL_FRONT_AND_BACK,
+                        settings.wireframe ? GL_LINE : GL_FILL
+                    );
+                    bindSceneShader();
+                    capturedRenderItem = draw.renderItemIndex;
+                }
+                shader_->setBool("uHasGlassBackfaceData", transmissive);
+                shader_->setInt(
+                    "uGlassObjectId",
+                    transmissive ? static_cast<int>(draw.renderItemIndex + 1U) : 0
+                );
                 shader_->setMat4("uModel", item.modelMatrix);
                 item.model->drawTransparentSubmesh(
                     *shader_,
@@ -441,6 +508,10 @@ void Renderer::render(
             glActiveTexture(GL_TEXTURE5);
             glBindTexture(GL_TEXTURE_2D, 0);
             glActiveTexture(GL_TEXTURE9);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glActiveTexture(GL_TEXTURE11);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glActiveTexture(GL_TEXTURE10);
             glBindTexture(GL_TEXTURE_2D, 0);
             glActiveTexture(GL_TEXTURE8);
             glBindTexture(GL_TEXTURE_2D, 0);

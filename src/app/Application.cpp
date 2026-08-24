@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -106,6 +107,71 @@ ModelData makeGroundPlaneData() {
     return model;
 }
 
+ModelData makeGlassCheckerboardData() {
+    constexpr int columns = 10;
+    constexpr int rows = 7;
+    constexpr float cellSize = 0.34f;
+    MeshData mesh;
+    mesh.name = "Glass-2C checkerboard backdrop";
+    std::vector<std::uint32_t> darkIndices;
+    std::vector<std::uint32_t> lightIndices;
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            const float left = (static_cast<float>(column) - columns * 0.5f) * cellSize;
+            const float right = left + cellSize;
+            const float bottom = (static_cast<float>(row) - rows * 0.5f) * cellSize;
+            const float top = bottom + cellSize;
+            const std::uint32_t first = static_cast<std::uint32_t>(mesh.vertices.size());
+            const glm::vec3 normal(0.0f, 0.0f, 1.0f);
+            const glm::vec4 tangent(1.0f, 0.0f, 0.0f, 1.0f);
+            mesh.vertices.push_back(Vertex{glm::vec3(left, bottom, -1.05f), normal, glm::vec2(0.0f), tangent});
+            mesh.vertices.push_back(Vertex{glm::vec3(right, bottom, -1.05f), normal, glm::vec2(1.0f, 0.0f), tangent});
+            mesh.vertices.push_back(Vertex{glm::vec3(right, top, -1.05f), normal, glm::vec2(1.0f), tangent});
+            mesh.vertices.push_back(Vertex{glm::vec3(left, top, -1.05f), normal, glm::vec2(0.0f, 1.0f), tangent});
+            std::vector<std::uint32_t>& target = ((row + column) % 2 == 0)
+                ? lightIndices
+                : darkIndices;
+            target.insert(target.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
+        }
+    }
+    mesh.indices = darkIndices;
+    mesh.indices.insert(mesh.indices.end(), lightIndices.begin(), lightIndices.end());
+    mesh.submeshes.push_back(SubmeshData{
+        "Dark checks",
+        0U,
+        static_cast<std::uint32_t>(darkIndices.size()),
+        0
+    });
+    mesh.submeshes.push_back(SubmeshData{
+        "Light checks",
+        static_cast<std::uint32_t>(darkIndices.size()),
+        static_cast<std::uint32_t>(lightIndices.size()),
+        1
+    });
+    mesh.boundsMin = glm::vec3(-columns * cellSize * 0.5f, -rows * cellSize * 0.5f, -1.05f);
+    mesh.boundsMax = glm::vec3(columns * cellSize * 0.5f, rows * cellSize * 0.5f, -1.05f);
+
+    MaterialData dark;
+    dark.name = "Checker charcoal";
+    dark.baseColorFactor = glm::vec4(0.035f, 0.045f, 0.055f, 1.0f);
+    dark.roughnessFactor = 0.78f;
+    MaterialData light;
+    light.name = "Checker ivory";
+    light.baseColorFactor = glm::vec4(0.82f, 0.78f, 0.66f, 1.0f);
+    light.roughnessFactor = 0.72f;
+
+    ModelData model;
+    model.name = "Procedural Glass-2C checkerboard";
+    model.meshes.push_back(std::move(mesh));
+    model.materials.push_back(std::move(dark));
+    model.materials.push_back(std::move(light));
+    model.rootNode.name = "Checkerboard root";
+    model.rootNode.meshIndices.push_back(0U);
+    model.boundsMin = model.meshes.front().boundsMin;
+    model.boundsMax = model.meshes.front().boundsMax;
+    return model;
+}
+
 } // namespace
 
 Application::Application()
@@ -179,12 +245,15 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_GEOMETRIC_THICKNESS")) {
         rendererSettings_.geometricThicknessEnabled = std::atoi(value) != 0;
     }
+    if (const char* value = std::getenv("MYRENDERER_TWO_INTERFACE_REFRACTION")) {
+        rendererSettings_.twoInterfaceRefractionEnabled = std::atoi(value) != 0;
+    }
     if (const char* value = std::getenv("MYRENDERER_DISPERSION")) {
         rendererSettings_.dispersionStrength = std::clamp(std::strtof(value, nullptr), 0.0f, 2.5f);
     }
     if (const char* value = std::getenv("MYRENDERER_GLASS_DEBUG")) {
         rendererSettings_.glassDebugView = static_cast<GlassDebugView>(
-            std::clamp(std::atoi(value), 0, 8)
+            std::clamp(std::atoi(value), 0, 10)
         );
     }
     if (const char* value = std::getenv("MYRENDERER_SCENE_DEMO")) showComparisonObject_ = std::atoi(value) != 0;
@@ -421,6 +490,11 @@ void Application::initializeRenderer() {
         renderer_->textureCache(),
         warnings
     );
+    glassBackdropModel_ = std::make_unique<GpuModel>(
+        makeGlassCheckerboardData(),
+        renderer_->textureCache(),
+        warnings
+    );
 }
 
 void Application::initializeImporters() {
@@ -447,6 +521,7 @@ void Application::shutdown() {
         glfwMakeContextCurrent(window_);
         model_.reset();
         groundModel_.reset();
+        glassBackdropModel_.reset();
         renderer_.reset();
     }
     if (guiInitialized_) {
@@ -507,6 +582,9 @@ void Application::drawMainMenu() {
         }
         if (ImGui::MenuItem("Prism spectrum preset")) {
             activatePrismDemoPreset(true);
+        }
+        if (ImGui::MenuItem("Volume glass preset")) {
+            loadModel(sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf");
         }
         ImGui::MenuItem("Wireframe", nullptr, &rendererSettings_.wireframe);
         ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
@@ -701,6 +779,16 @@ void Application::drawInspectorPanel() {
                     "falls back to the material thickness/texture when no exit surface is found."
                 );
             }
+            ImGui::Checkbox(
+                "Two-interface refraction",
+                &rendererSettings_.twoInterfaceRefractionEnabled
+            );
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Traces the curved exit surface and applies Snell refraction again "
+                    "when light leaves the glass."
+                );
+            }
             ImGui::SliderFloat(
                 "Refraction scale",
                 &rendererSettings_.refractionScale,
@@ -716,6 +804,58 @@ void Application::drawInspectorPanel() {
                 4.0f,
                 "%.2f"
             );
+            ImGui::Checkbox(
+                "Volume glass material override",
+                &rendererSettings_.volumeGlassOverrideEnabled
+            );
+            if (rendererSettings_.volumeGlassOverrideEnabled) {
+                ImGui::SliderFloat(
+                    "Glass transmission",
+                    &rendererSettings_.volumeGlassTransmission,
+                    0.0f,
+                    1.0f,
+                    "%.2f"
+                );
+                ImGui::SliderFloat(
+                    "Glass roughness",
+                    &rendererSettings_.volumeGlassRoughness,
+                    0.04f,
+                    1.0f,
+                    "%.2f"
+                );
+                ImGui::ColorEdit3(
+                    "Attenuation color",
+                    &rendererSettings_.volumeGlassAttenuationColor.x
+                );
+                ImGui::SliderFloat(
+                    "Attenuation distance",
+                    &rendererSettings_.volumeGlassAttenuationDistance,
+                    0.05f,
+                    8.0f,
+                    "%.2f",
+                    ImGuiSliderFlags_Logarithmic
+                );
+                if (ImGui::Button("Clear")) {
+                    rendererSettings_.volumeGlassAttenuationColor = glm::vec3(1.0f);
+                    rendererSettings_.volumeGlassAttenuationDistance = 8.0f;
+                    rendererSettings_.volumeGlassRoughness = 0.04f;
+                    rendererSettings_.dispersionStrength = 0.0f;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Olive")) {
+                    rendererSettings_.volumeGlassAttenuationColor = glm::vec3(0.68f, 0.86f, 0.22f);
+                    rendererSettings_.volumeGlassAttenuationDistance = 0.85f;
+                    rendererSettings_.volumeGlassRoughness = 0.06f;
+                    rendererSettings_.dispersionStrength = 0.0f;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Amber")) {
+                    rendererSettings_.volumeGlassAttenuationColor = glm::vec3(1.0f, 0.48f, 0.12f);
+                    rendererSettings_.volumeGlassAttenuationDistance = 0.72f;
+                    rendererSettings_.volumeGlassRoughness = 0.08f;
+                    rendererSettings_.dispersionStrength = 0.0f;
+                }
+            }
             if (!prismDemoEnabled_) {
                 ImGui::SliderFloat(
                     "Dispersion override",
@@ -912,9 +1052,11 @@ void Application::drawInspectorPanel() {
                 "Thickness",
                 "Transmittance",
                 "RGB dispersion",
-                "Front/back thickness data"
+                "Front/back thickness data",
+                "Exit surface normal",
+                "Object ID"
             };
-            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 9)) {
+            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 11)) {
                 rendererSettings_.glassDebugView = static_cast<GlassDebugView>(glassDebugView);
             }
             ImGui::SliderFloat("Environment", &rendererSettings_.environmentIntensity, 0.0f, 2.0f, "%.2f");
@@ -1061,23 +1203,41 @@ void Application::drawViewportPanel() {
         if (showComparisonObject_) {
             glm::mat4 comparisonMatrix = glm::translate(
                 glm::mat4(1.0f),
-                modelPosition_ + glm::vec3(0.95f, 0.0f, 0.35f)
+                modelPosition_ + (glassVolumeDemoEnabled_
+                    ? glm::vec3(0.92f, 0.0f, 0.0f)
+                    : glm::vec3(0.95f, 0.0f, 0.35f))
             );
-            comparisonMatrix = glm::rotate(
+            if (!glassVolumeDemoEnabled_) {
+                comparisonMatrix = glm::rotate(
+                    comparisonMatrix,
+                    glm::radians(-28.0f),
+                    glm::vec3(0.0f, 1.0f, 0.0f)
+                );
+            }
+            comparisonMatrix = glm::scale(
                 comparisonMatrix,
-                glm::radians(-28.0f),
-                glm::vec3(0.0f, 1.0f, 0.0f)
+                glm::vec3(modelScale_ * (glassVolumeDemoEnabled_ ? 0.88f : 0.50f))
             );
-            comparisonMatrix = glm::scale(comparisonMatrix, glm::vec3(modelScale_ * 0.50f));
             comparisonMatrix *= normalization;
             renderItems.push_back(RenderItem{
                 model_.get(),
                 comparisonMatrix,
-                glm::vec3(0.72f, 0.82f, 1.0f),
+                glassVolumeDemoEnabled_
+                    ? glm::vec3(1.0f)
+                    : glm::vec3(0.72f, 0.82f, 1.0f),
                 true,
                 true
             });
         }
+    }
+    if (glassVolumeDemoEnabled_ && glassBackdropModel_ != nullptr) {
+        renderItems.push_back(RenderItem{
+            glassBackdropModel_.get(),
+            glm::mat4(1.0f),
+            glm::vec3(1.0f),
+            true,
+            false
+        });
     }
     if (showGroundPlane_ && groundModel_ != nullptr) {
         const glm::mat4 groundMatrix = glm::translate(
@@ -1432,11 +1592,39 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
     modelNormalizationScale_ = 1.4f / maximumExtent;
     resetObjectTransform();
     const bool loadedPrismFixture = lowercase(path.filename().string()) == "prism_spectrum.gltf";
+    const bool loadedGlassVolumeFixture =
+        lowercase(path.filename().string()) == "glass_volume_sphere.gltf";
+    const bool wasGlassVolumeDemo = glassVolumeDemoEnabled_;
     if (loadedPrismFixture) {
         activatePrismDemoPreset(false);
     } else {
         deactivatePrismDemoPreset();
-        camera_.reset();
+        glassVolumeDemoEnabled_ = loadedGlassVolumeFixture;
+        if (loadedGlassVolumeFixture) {
+            modelPosition_ = glm::vec3(-0.46f, 0.0f, 0.0f);
+            showComparisonObject_ = true;
+            showGroundPlane_ = false;
+            rendererSettings_.showGrid = false;
+            rendererSettings_.showAxes = false;
+            rendererSettings_.backgroundColor = glm::vec3(0.018f, 0.022f, 0.03f);
+            rendererSettings_.environmentIntensity = 0.85f;
+            rendererSettings_.volumeGlassOverrideEnabled = true;
+            rendererSettings_.volumeGlassTransmission = 1.0f;
+            rendererSettings_.volumeGlassRoughness = 0.06f;
+            rendererSettings_.volumeGlassAttenuationColor = glm::vec3(0.68f, 0.86f, 0.22f);
+            rendererSettings_.volumeGlassAttenuationDistance = 0.85f;
+            rendererSettings_.dispersionStrength = 0.0f;
+            camera_.setOrbitPose(glm::vec3(0.0f), 0.0f, 0.0f, 3.35f, 38.0f);
+        } else {
+            if (wasGlassVolumeDemo) {
+                showComparisonObject_ = false;
+                showGroundPlane_ = true;
+                rendererSettings_.showGrid = true;
+                rendererSettings_.showAxes = true;
+                rendererSettings_.volumeGlassOverrideEnabled = false;
+            }
+            camera_.reset();
+        }
     }
 
     const std::string pathString = currentModelPath_.string();

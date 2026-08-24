@@ -70,6 +70,7 @@ private:
     std::unique_ptr<Renderer> renderer_;
     std::unique_ptr<GpuModel> model_;
     std::unique_ptr<GpuModel> groundModel_;
+    std::unique_ptr<GpuModel> glassBackdropModel_;
     std::vector<std::unique_ptr<ModelImporter>> importers_;
     Camera camera_;
     RendererSettings rendererSettings_;
@@ -147,6 +148,7 @@ private:
     bool vsync_{true};
     bool lastLoadFailed_{false};
     bool prismDemoEnabled_{false};
+    bool glassVolumeDemoEnabled_{false};
     bool prismCameraLocked_{true};
     bool prismModelVisible_{true};
     bool benchmarkMode_{false};

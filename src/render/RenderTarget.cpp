@@ -122,10 +122,10 @@ std::size_t RenderTarget::estimatedBytes() const {
         mipHeight = std::max(mipHeight / 2, 1);
     }
     // Opaque RGBA16F mip chain + resolved depth/stencil + scene RGBA16F,
-    // glass front/back R32F depths,
+    // glass front/back R32F depths, RGBA16F exit normal and R32UI object ID,
     // refractive depth/stencil + final RGBA8.
     std::size_t bytes = opaqueMipPixels * 8U
-        + pixels * (4U + 8U + 4U + 4U + 4U + 4U);
+        + pixels * (4U + 8U + 4U + 4U + 8U + 4U + 4U + 4U);
     if (samples_ > 1) {
         bytes += pixels * static_cast<std::size_t>(samples_) * (8U + 4U);
     }
@@ -247,6 +247,57 @@ void RenderTarget::resize(int width, int height, int samples) {
 
     requireComplete("glass back-face thickness");
 
+    glGenFramebuffers(1, &glassExitSurfaceFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, glassExitSurfaceFramebuffer_);
+    glGenTextures(1, &glassExitNormalTexture_);
+    glBindTexture(GL_TEXTURE_2D, glassExitNormalTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width_, height_, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        glassExitNormalTexture_,
+        0
+    );
+
+    glGenTextures(1, &glassObjectIdTexture_);
+    glBindTexture(GL_TEXTURE_2D, glassObjectIdTexture_);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_R32UI,
+        width_,
+        height_,
+        0,
+        GL_RED_INTEGER,
+        GL_UNSIGNED_INT,
+        nullptr
+    );
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT1,
+        GL_TEXTURE_2D,
+        glassObjectIdTexture_,
+        0
+    );
+    const std::array<unsigned int, 2> glassExitDrawBuffers{
+        GL_COLOR_ATTACHMENT0,
+        GL_COLOR_ATTACHMENT1
+    };
+    glDrawBuffers(
+        static_cast<GLsizei>(glassExitDrawBuffers.size()),
+        glassExitDrawBuffers.data()
+    );
+    requireComplete("glass exit-surface data");
+
     if (samples_ > 1) {
         glGenFramebuffers(1, &multisampleFramebuffer_);
         glBindFramebuffer(GL_FRAMEBUFFER, multisampleFramebuffer_);
@@ -339,6 +390,10 @@ void RenderTarget::bindGlassFrontfaceThickness() const {
     glBindFramebuffer(GL_FRAMEBUFFER, glassFrontThicknessFramebuffer_);
 }
 
+void RenderTarget::bindGlassExitSurfaceData() const {
+    glBindFramebuffer(GL_FRAMEBUFFER, glassExitSurfaceFramebuffer_);
+}
+
 void RenderTarget::bindHdrSceneForOverlay() const {
     glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
 }
@@ -375,11 +430,14 @@ void RenderTarget::destroy() {
     if (sceneDepthTexture_ != 0U) glDeleteTextures(1, &sceneDepthTexture_);
     if (glassFrontfaceDepthTexture_ != 0U) glDeleteTextures(1, &glassFrontfaceDepthTexture_);
     if (glassBackfaceDepthTexture_ != 0U) glDeleteTextures(1, &glassBackfaceDepthTexture_);
+    if (glassExitNormalTexture_ != 0U) glDeleteTextures(1, &glassExitNormalTexture_);
+    if (glassObjectIdTexture_ != 0U) glDeleteTextures(1, &glassObjectIdTexture_);
     if (hdrColorTexture_ != 0U) glDeleteTextures(1, &hdrColorTexture_);
     if (opaqueColorTexture_ != 0U) glDeleteTextures(1, &opaqueColorTexture_);
     if (finalFramebuffer_ != 0U) glDeleteFramebuffers(1, &finalFramebuffer_);
     if (sceneFramebuffer_ != 0U) glDeleteFramebuffers(1, &sceneFramebuffer_);
     if (glassThicknessFramebuffer_ != 0U) glDeleteFramebuffers(1, &glassThicknessFramebuffer_);
+    if (glassExitSurfaceFramebuffer_ != 0U) glDeleteFramebuffers(1, &glassExitSurfaceFramebuffer_);
     if (glassFrontThicknessFramebuffer_ != 0U) glDeleteFramebuffers(1, &glassFrontThicknessFramebuffer_);
     if (multisampleFramebuffer_ != 0U) glDeleteFramebuffers(1, &multisampleFramebuffer_);
     if (opaqueFramebuffer_ != 0U) glDeleteFramebuffers(1, &opaqueFramebuffer_);
@@ -390,11 +448,14 @@ void RenderTarget::destroy() {
     sceneDepthTexture_ = 0U;
     glassFrontfaceDepthTexture_ = 0U;
     glassBackfaceDepthTexture_ = 0U;
+    glassExitNormalTexture_ = 0U;
+    glassObjectIdTexture_ = 0U;
     hdrColorTexture_ = 0U;
     opaqueColorTexture_ = 0U;
     finalFramebuffer_ = 0U;
     sceneFramebuffer_ = 0U;
     glassThicknessFramebuffer_ = 0U;
+    glassExitSurfaceFramebuffer_ = 0U;
     glassFrontThicknessFramebuffer_ = 0U;
     multisampleFramebuffer_ = 0U;
     opaqueFramebuffer_ = 0U;

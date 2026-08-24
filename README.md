@@ -22,9 +22,9 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
-- glTF 2.0 metallic-roughness PBR（Cook-Torrance GGX）、程序化 HDR 环境贴图、近似 IBL、天空盒与方向光 PCF 阴影。
+- glTF 2.0 metallic-roughness PBR（Cook-Torrance GGX）、Radiance HDR equirectangular 环境、Diffuse Irradiance、GGX Prefiltered Specular Cubemap、BRDF LUT、Split-Sum IBL、天空盒与方向光 PCF 阴影；HDR 资产缺失时回退到程序化 Studio 环境。
 - glTF `OPAQUE` / `MASK` / `BLEND`、Alpha Cutoff、双面材质、透明子网格后向前排序，以及独立的透明深度/混合状态。
-- glTF `KHR_materials_transmission` / `KHR_materials_ior` / `KHR_materials_volume` / `KHR_materials_dispersion`：IOR 驱动的 Fresnel、Snell 折射、全反射、深度 Ray March、粗糙 Opaque HDR Mip 透射、Thickness Texture、前/后表面几何厚度、Beer-Lambert 体积吸收、环境 Cubemap 回退与九种 Glass Debug View；材质色散可被 Inspector 全局覆盖。
+- glTF `KHR_materials_transmission` / `KHR_materials_ior` / `KHR_materials_volume` / `KHR_materials_dispersion`：IOR 驱动的 Fresnel、Snell 折射、全反射、深度 Ray March、Thickness Texture、对象级前/后表面深度、真实出射法线、双界面折射、Beer-Lambert 体积吸收、环境回退与 11 种 Glass Debug View；材质色散可被 Inspector 全局覆盖。
 - Prism-0～3 光谱 Demo：原创封闭三棱柱、纯黑舞台、固定正面镜头、CPU 双界面 Ray/Prism 求交，以及 380～700 nm 的 7/15/21/31 档波长采样；每个样本使用 Cauchy IOR、CIE 1931 近似线性 RGB、两界面 Fresnel 与 Beer-Lambert 能量。独立 `Spectral beam HDR` Pass 把结果生成相机朝向的柔边 Ribbon Mesh，支持连续光谱和七色美术模式，并在玻璃折射前以 Additive Blend 写入 Bloom 输入。
 - 多对象 `RenderItem` 场景提交、跨对象透明 Draw List 全局排序，以及可调颜色/高度并能接收 PBR 光照与阴影的程序化地面；可开启第二模型实例验证场景级排序。
 - `Shadow map → Opaque HDR scene → Forward transparent/refractive scene → Bloom + tone map` 多 Pass 管线；Opaque HDR Color、最终 HDR Scene Color 与可采样 Depth 相互独立，可切换 ACES Tone Mapping、曝光和 Bloom。
@@ -68,6 +68,7 @@ cmake --build build-mingw --parallel
 - Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
 - Inspector / Renderer：切换 PBR、IBL、天空盒、阴影、Transmission、Geometric Glass Thickness、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整折射距离/步数、体积厚度倍率、RGB 色散、Glass Debug View、环境强度、曝光、Bloom、背景色、灯光与 FOV，并查看活动 Pass 和运行统计。网格和轴线也可从 View 菜单或视口工具栏快速切换。
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
+- View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber 三组体积玻璃参数。
 - 渲染视口：鼠标右键拖动旋转相机，中键拖动平移，滚轮缩放；工具栏或 File 菜单可将当前解析后画面保存为 PNG。
 - `Esc`：退出程序。
 
@@ -79,9 +80,9 @@ ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRe
 
 所有格式最终转换为相同的 `ModelData`、子网格、材质和纹理来源数据。渲染层统一解码并缓存外部或内嵌图像，基础色 Shader 将材质因子、可调 Tint 和基础色贴图相乘；没有贴图的材质使用白色纹理，无法解码或缺失的基础色贴图使用洋红棋盘并在状态区报告原因。基础色纹理使用 sRGB 内部格式，法线贴图保持线性数据；光照在线性空间完成，最终颜色仅进行一次 sRGB 编码。
 
-OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道），并支持基础 Alpha Mode、双面材质、`KHR_materials_transmission`、`KHR_materials_ior`、`KHR_materials_volume` 和 `KHR_materials_dispersion`。Alpha Blending 只做颜色覆盖率合成；Glass-1 已完成光学透射、深度 Ray March 和粗糙 Mip 折射，Glass-2A/Prism-2 已完成 Beer-Lambert 吸收、RGB 三通道色散、材质级色散导入与连续波长光路。Glass-2B 现以 R32F Front/Back Depth Pass 估算闭合玻璃的真实几何厚度，并在无有效退出表面时回退到 `thicknessFactor × thicknessTexture.g`；当前对重叠或凹形玻璃仍是屏幕空间近似，退出界面法线采用局部平行表面假设。高度图不会自动转换为法线贴图；当前环境贴图是内置程序化 Cubemap，IBL 为适配 OpenGL 3.3 的近似预滤波方案。骨骼动画和 FBX 尚未启用。
+OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道），并支持基础 Alpha Mode、双面材质、`KHR_materials_transmission`、`KHR_materials_ior`、`KHR_materials_volume` 和 `KHR_materials_dispersion`。Alpha Blending 只做颜色覆盖率合成；Glass-1～2B 已完成透射、几何厚度、Beer-Lambert 吸收与色散。Glass-2C 按 `RenderItem` 重建 R32F 入口/出口深度、RGBA16F 出射法线和 R32UI 对象 ID，沿内部折射方向追踪真实退出点，再执行玻璃→空气的第二次 Snell 折射；无有效退出点时继续使用稳定的局部平行表面回退。对象级缓存解决独立玻璃实例互相串层，但同一 `RenderItem` 内的嵌套/凹形多壳体仍属于屏幕空间近似。环境光来自原创 Radiance HDRI，并预计算标准 Split-Sum IBL。骨骼动画和 FBX 尚未启用。
 
-固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）和 `prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）。`uv_quadrants.ppm` 的四象限颜色用于检查 UV 方向，`normal_test.ppm` 用于检查切线空间法线扰动。
+固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）、`glass_volume_sphere.gltf`（1,986 顶点闭合流形球体）和 `prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）。`glass_studio.hdr` 是项目生成的原创高动态范围 Studio 环境。
 
 ## 自动测试
 
@@ -121,6 +122,15 @@ Prism-4 在 Inspector 中提供实时 Beam Direction、IOR、Dispersion/Abbe、�
 
 Glass-2B 默认启用前/后表面几何厚度，也可用 `MYRENDERER_GEOMETRIC_THICKNESS=0|1` 做回退厚度与几何厚度的同机对照；`MYRENDERER_GLASS_DEBUG=8` 显示 Front/Back Depth 数据有效性与深度跨度。
 
+Glass-2C 默认启用真实出射面追踪；`MYRENDERER_TWO_INTERFACE_REFRACTION=0|1` 提供局部平行近似/双界面同机对照，`MYRENDERER_GLASS_DEBUG=9|10` 分别显示 Exit Surface Normal 与 Object ID。可重复验收命令为：
+
+```powershell
+cmake --build build-mingw --target glass2c-visual-regression
+cmake --build build-mingw --target glass2c-benchmark
+```
+
+视觉目标重拍并比较 7 张 1920×1080 固定镜头图片；Benchmark 覆盖 1x/4x MSAA 与双界面 On/Off 的 CPU/GPU P50/P95、Draw Call 和显存估算。参考结果见 `docs/glass2c-volume.md`。
+
 `gpu-smoke` 目标会运行材质场景以及“成功场景后加载错误资产”的恢复测试，确保 GPU 路径使用真实上下文且失败导入保留当前场景：
 
 ```powershell
@@ -151,7 +161,7 @@ src/optics/PrismOptics.* 无 OpenGL 依赖的三棱镜求交、双界面折射�
 src/optics/PrismDemo.*   Prism 参数、四组光学 Preset、White Point 与实时求解入口
 src/render/Camera.*      轨道相机
 src/render/DebugGrid.*   世界网格、XYZ 轴线与 Debug Line GPU 绘制
-src/render/EnvironmentMap.* 程序化 HDR Cubemap、IBL 采样与天空盒
+src/render/EnvironmentMap.* HDR equirectangular 导入、Split-Sum IBL 预计算、程序化回退与天空盒
 src/render/GpuModel.*    一个模型所拥有的 GPU Mesh 集合与统计
 src/render/Mesh.*        VAO/VBO/EBO、顶点布局与子网格 Draw Call
 src/render/OpenGlDebug.* Debug 构建的 OpenGL 驱动诊断

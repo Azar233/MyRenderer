@@ -20,6 +20,9 @@ public:
     EnvironmentMap& operator=(const EnvironmentMap&) = delete;
 
     void bind(unsigned int unit) const;
+    void bindIrradiance(unsigned int unit) const;
+    void bindPrefiltered(unsigned int unit) const;
+    void bindBrdfLut(unsigned int unit) const;
     void draw(const glm::mat4& inverseViewProjection, const glm::vec3& cameraPosition, float intensity) const;
     int maximumMipLevel() const { return maximumMipLevel_; }
     std::size_t estimatedBytes() const;
@@ -27,6 +30,9 @@ public:
 private:
     std::unique_ptr<Shader> shader_;
     unsigned int texture_{0};
+    unsigned int irradianceTexture_{0};
+    unsigned int prefilteredTexture_{0};
+    unsigned int brdfLutTexture_{0};
     unsigned int vertexArray_{0};
     int maximumMipLevel_{0};
     int faceSize_{64};

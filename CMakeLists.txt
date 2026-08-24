@@ -267,6 +267,29 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "Benchmarking Prism-5 at 1920x1080, 4x MSAA, and four spectral tiers"
     )
+
+    add_custom_target(glass2c-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/glass2c-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/Glass2cVisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing and comparing the Glass-2C visual regression matrix"
+    )
+
+    add_custom_target(glass2c-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/glass2c-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/Glass2cBenchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Benchmarking Glass-2C at 1920x1080 with 1x/4x MSAA"
+    )
 endif()
 
 add_custom_target(gpu-smoke
