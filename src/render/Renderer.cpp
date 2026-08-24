@@ -157,6 +157,8 @@ void Renderer::render(
         shader_->setBool("uTransmissionEnabled", settings.transmissionEnabled);
         shader_->setFloat("uRefractionScale", settings.refractionScale);
         shader_->setInt("uRefractionSteps", settings.refractionSteps);
+        shader_->setFloat("uVolumeThicknessScale", settings.volumeThicknessScale);
+        shader_->setFloat("uDispersionStrength", settings.dispersionStrength);
         shader_->setInt("uGlassDebugView", static_cast<int>(settings.glassDebugView));
         shader_->setFloat(
             "uOpaqueColorMaxMip",

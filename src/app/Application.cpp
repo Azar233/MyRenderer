@@ -122,9 +122,15 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_REFRACTION_STEPS")) {
         rendererSettings_.refractionSteps = std::clamp(std::atoi(value), 4, 32);
     }
+    if (const char* value = std::getenv("MYRENDERER_VOLUME_THICKNESS_SCALE")) {
+        rendererSettings_.volumeThicknessScale = std::clamp(std::strtof(value, nullptr), 0.0f, 4.0f);
+    }
+    if (const char* value = std::getenv("MYRENDERER_DISPERSION")) {
+        rendererSettings_.dispersionStrength = std::clamp(std::strtof(value, nullptr), 0.0f, 2.5f);
+    }
     if (const char* value = std::getenv("MYRENDERER_GLASS_DEBUG")) {
         rendererSettings_.glassDebugView = static_cast<GlassDebugView>(
-            std::clamp(std::atoi(value), 0, 4)
+            std::clamp(std::atoi(value), 0, 7)
         );
     }
     if (const char* value = std::getenv("MYRENDERER_SCENE_DEMO")) showComparisonObject_ = std::atoi(value) != 0;
@@ -596,15 +602,32 @@ void Application::drawInspectorPanel() {
                 "%.3f"
             );
             ImGui::SliderInt("Refraction steps", &rendererSettings_.refractionSteps, 4, 32);
+            ImGui::SliderFloat(
+                "Volume thickness scale",
+                &rendererSettings_.volumeThicknessScale,
+                0.0f,
+                4.0f,
+                "%.2f"
+            );
+            ImGui::SliderFloat(
+                "Dispersion override",
+                &rendererSettings_.dispersionStrength,
+                0.0f,
+                2.5f,
+                "%.2f"
+            );
             int glassDebugView = static_cast<int>(rendererSettings_.glassDebugView);
             const char* glassDebugViews[] = {
                 "Final",
                 "Reflection",
                 "Refraction",
                 "IOR",
-                "Refracted UV"
+                "Refracted UV",
+                "Thickness",
+                "Transmittance",
+                "RGB dispersion"
             };
-            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 5)) {
+            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 8)) {
                 rendererSettings_.glassDebugView = static_cast<GlassDebugView>(glassDebugView);
             }
             ImGui::SliderFloat("Environment", &rendererSettings_.environmentIntensity, 0.0f, 2.0f, "%.2f");

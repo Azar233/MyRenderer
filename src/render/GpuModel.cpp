@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include <glad/gl.h>
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
@@ -64,6 +65,15 @@ GpuModel::GpuModel(
         material.roughnessFactor = std::clamp(materialData.roughnessFactor, 0.04f, 1.0f);
         material.transmissionFactor = std::clamp(materialData.transmissionFactor, 0.0f, 1.0f);
         material.indexOfRefraction = std::max(materialData.indexOfRefraction, 1.0f);
+        material.thicknessFactor = std::max(materialData.thicknessFactor, 0.0f);
+        material.attenuationColor = glm::clamp(
+            materialData.attenuationColor,
+            glm::vec3(0.0f),
+            glm::vec3(1.0f)
+        );
+        material.attenuationDistance = materialData.attenuationDistance > 0.0f
+            ? materialData.attenuationDistance
+            : std::numeric_limits<float>::infinity();
         material.alphaMode = materialData.alphaMode;
         material.alphaCutoff = std::max(materialData.alphaCutoff, 0.0f);
         material.doubleSided = materialData.doubleSided;
@@ -155,6 +165,17 @@ const GpuModel::GpuMaterial* GpuModel::bindMaterial(
     shader.setFloat("uRoughnessFactor", material == nullptr ? 1.0f : material->roughnessFactor);
     shader.setFloat("uTransmissionFactor", material == nullptr ? 0.0f : material->transmissionFactor);
     shader.setFloat("uIndexOfRefraction", material == nullptr ? 1.5f : material->indexOfRefraction);
+    shader.setFloat("uThicknessFactor", material == nullptr ? 0.0f : material->thicknessFactor);
+    shader.setVec3(
+        "uAttenuationColor",
+        material == nullptr ? glm::vec3(1.0f) : material->attenuationColor
+    );
+    shader.setFloat(
+        "uAttenuationDistance",
+        material == nullptr || !std::isfinite(material->attenuationDistance)
+            ? 1.0e20f
+            : material->attenuationDistance
+    );
     shader.setInt(
         "uAlphaMode",
         material == nullptr ? 0 : static_cast<int>(material->alphaMode)

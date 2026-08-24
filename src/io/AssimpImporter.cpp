@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -18,6 +19,7 @@
 #include <assimp/matrix3x3.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
 namespace {
@@ -405,9 +407,28 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
         source.Get(AI_MATKEY_ROUGHNESS_FACTOR, material.roughnessFactor);
         source.Get(AI_MATKEY_TRANSMISSION_FACTOR, material.transmissionFactor);
         source.Get(AI_MATKEY_REFRACTI, material.indexOfRefraction);
+        source.Get(AI_MATKEY_VOLUME_THICKNESS_FACTOR, material.thicknessFactor);
+        aiColor3D attenuationColor(1.0f, 1.0f, 1.0f);
+        if (source.Get(AI_MATKEY_VOLUME_ATTENUATION_COLOR, attenuationColor) == AI_SUCCESS) {
+            material.attenuationColor = {
+                attenuationColor.r,
+                attenuationColor.g,
+                attenuationColor.b
+            };
+        }
+        source.Get(AI_MATKEY_VOLUME_ATTENUATION_DISTANCE, material.attenuationDistance);
         material.transmissionFactor = std::clamp(material.transmissionFactor, 0.0f, 1.0f);
         if (material.indexOfRefraction < 1.0f) {
             material.indexOfRefraction = 1.5f;
+        }
+        material.thicknessFactor = std::max(material.thicknessFactor, 0.0f);
+        material.attenuationColor = glm::clamp(
+            material.attenuationColor,
+            glm::vec3(0.0f),
+            glm::vec3(1.0f)
+        );
+        if (!(material.attenuationDistance > 0.0f)) {
+            material.attenuationDistance = std::numeric_limits<float>::infinity();
         }
         aiString alphaMode;
         if (source.Get(AI_MATKEY_GLTF_ALPHAMODE, alphaMode) == AI_SUCCESS) {

@@ -24,7 +24,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
 - glTF 2.0 metallic-roughness PBR（Cook-Torrance GGX）、程序化 HDR 环境贴图、近似 IBL、天空盒与方向光 PCF 阴影。
 - glTF `OPAQUE` / `MASK` / `BLEND`、Alpha Cutoff、双面材质、透明子网格后向前排序，以及独立的透明深度/混合状态。
-- glTF `KHR_materials_transmission` / `KHR_materials_ior`：IOR 驱动的 Fresnel、Snell 折射、全反射、深度 Ray March、粗糙 Opaque HDR Mip 透射、环境 Cubemap 回退与四种 Glass Debug View。
+- glTF `KHR_materials_transmission` / `KHR_materials_ior` / `KHR_materials_volume`：IOR 驱动的 Fresnel、Snell 折射、全反射、深度 Ray March、粗糙 Opaque HDR Mip 透射、Beer-Lambert 体积吸收、环境 Cubemap 回退与八种 Glass Debug View；另提供可调 RGB 三通道色散。
 - 多对象 `RenderItem` 场景提交、跨对象透明 Draw List 全局排序，以及可调颜色/高度并能接收 PBR 光照与阴影的程序化地面；可开启第二模型实例验证场景级排序。
 - `Shadow map → Opaque HDR scene → Forward transparent/refractive scene → Bloom + tone map` 多 Pass 管线；Opaque HDR Color、最终 HDR Scene Color 与可采样 Depth 相互独立，可切换 ACES Tone Mapping、曝光和 Bloom。
 - 像素风应用图标，覆盖 GLFW 标题栏、任务栏和 Windows 可执行文件资源。
@@ -65,7 +65,7 @@ cmake --build build-mingw --parallel
 
 - Scene 面板：查看主体、地面接收器与可选对照实例，切换 `assets/models` 中的 OBJ、DAE、glTF/GLB，使用原生文件选择器，输入其他模型路径，或把模型文件拖入窗口。CPU 导入期间会显示文件大小、耗时和活动进度，当前场景保持可用。
 - Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
-- Inspector / Renderer：切换 PBR、IBL、天空盒、阴影、Transmission、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整折射距离/步数、Glass Debug View、环境强度、曝光、Bloom、背景色、灯光与 FOV，并查看活动 Pass 和运行统计。网格和轴线也可从 View 菜单或视口工具栏快速切换。
+- Inspector / Renderer：切换 PBR、IBL、天空盒、阴影、Transmission、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整折射距离/步数、体积厚度倍率、RGB 色散、Glass Debug View、环境强度、曝光、Bloom、背景色、灯光与 FOV，并查看活动 Pass 和运行统计。网格和轴线也可从 View 菜单或视口工具栏快速切换。
 - 渲染视口：鼠标右键拖动旋转相机，中键拖动平移，滚轮缩放；工具栏或 File 菜单可将当前解析后画面保存为 PNG。
 - `Esc`：退出程序。
 
@@ -77,9 +77,9 @@ ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRe
 
 所有格式最终转换为相同的 `ModelData`、子网格、材质和纹理来源数据。渲染层统一解码并缓存外部或内嵌图像，基础色 Shader 将材质因子、可调 Tint 和基础色贴图相乘；没有贴图的材质使用白色纹理，无法解码或缺失的基础色贴图使用洋红棋盘并在状态区报告原因。基础色纹理使用 sRGB 内部格式，法线贴图保持线性数据；光照在线性空间完成，最终颜色仅进行一次 sRGB 编码。
 
-OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道），并支持基础 Alpha Mode、双面材质、`KHR_materials_transmission` 和 `KHR_materials_ior`。Alpha Blending 只做颜色覆盖率合成；Glass-1 已完成光学透射、深度 Ray March、粗糙 Mip 折射与调试视图。当前 Refraction Scale 仍是最大距离/厚度代理，真实厚度、体积吸收与色散属于 Glass-2。高度图不会自动转换为法线贴图；当前环境贴图是内置程序化 Cubemap，IBL 为适配 OpenGL 3.3 的近似预滤波方案。骨骼动画和 FBX 尚未启用。
+OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道），并支持基础 Alpha Mode、双面材质、`KHR_materials_transmission`、`KHR_materials_ior` 和 `KHR_materials_volume`。Alpha Blending 只做颜色覆盖率合成；Glass-1 已完成光学透射、深度 Ray March 和粗糙 Mip 折射，Glass-2A 已完成均匀厚度、Beer-Lambert 吸收、RGB 三通道色散与对应调试视图。当前 Refraction Scale 仍是最大追踪距离，体积路径长度由均匀 Thickness 和折射角估算；Thickness Texture、前/后表面真实厚度以及材质级 `KHR_materials_dispersion` 导入尚未实现。高度图不会自动转换为法线贴图；当前环境贴图是内置程序化 Cubemap，IBL 为适配 OpenGL 3.3 的近似预滤波方案。骨骼动画和 FBX 尚未启用。
 
-固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）和 `glass_material_test.gltf`（光滑/粗糙 OPAQUE 光学透射、两个 IOR、背景遮挡物与全场景折射排序）。`uv_quadrants.ppm` 的四象限颜色用于检查 UV 方向，`normal_test.ppm` 用于检查切线空间法线扰动。
+固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）和 `glass_material_test.gltf`（光滑/粗糙 OPAQUE 光学透射、两个 IOR、两组体积厚度/吸收参数、背景遮挡物与全场景折射排序）。`uv_quadrants.ppm` 的四象限颜色用于检查 UV 方向，`normal_test.ppm` 用于检查切线空间法线扰动。
 
 ## 自动测试
 

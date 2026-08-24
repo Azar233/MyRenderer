@@ -35,7 +35,12 @@ uniform float uEnvironmentIntensity;
 uniform float uEnvironmentMaxMip;
 uniform float uTransmissionFactor;
 uniform float uIndexOfRefraction;
+uniform float uThicknessFactor;
+uniform vec3 uAttenuationColor;
+uniform float uAttenuationDistance;
 uniform float uRefractionScale;
+uniform float uVolumeThicknessScale;
+uniform float uDispersionStrength;
 uniform float uOpaqueColorMaxMip;
 uniform int uRefractionSteps;
 uniform int uGlassDebugView;
@@ -89,10 +94,12 @@ vec3 sampleTransmittedRadiance(
     float roughness,
     out bool totalInternalReflection,
     out bool screenSpaceHit,
-    out vec2 refractedUv
+    out vec2 refractedUv,
+    out float volumePathLength
 ) {
     screenSpaceHit = false;
     refractedUv = vec2(-1.0);
+    volumePathLength = 0.0;
     vec3 incident = -viewDirection;
     vec3 geometricNormal = normalize(vWorldNormal);
     bool entering = dot(incident, geometricNormal) < 0.0;
@@ -107,6 +114,12 @@ vec3 sampleTransmittedRadiance(
             reflectedDirection,
             roughness * uEnvironmentMaxMip
         ).rgb * uEnvironmentIntensity;
+    }
+
+    float surfaceThickness = max(uThicknessFactor * uVolumeThicknessScale, 0.0);
+    if (surfaceThickness > 0.0) {
+        float normalDistance = max(abs(dot(refractedDirection, refractionNormal)), 0.15);
+        volumePathLength = surfaceThickness / normalDistance;
     }
 
     int stepCount = clamp(uRefractionSteps, 4, 32);
@@ -241,6 +254,7 @@ void main() {
         bool totalInternalReflection = false;
         bool screenSpaceHit = false;
         vec2 refractedUv = vec2(-1.0);
+        float volumePathLength = 0.0;
         vec3 transmittedRadiance = sampleTransmittedRadiance(
             normal,
             viewDirection,
@@ -248,18 +262,77 @@ void main() {
             roughness,
             totalInternalReflection,
             screenSpaceHit,
-            refractedUv
+            refractedUv,
+            volumePathLength
         );
+        vec3 rgbPathLengths = vec3(volumePathLength);
+        float dispersion = max(uDispersionStrength, 0.0);
+        if (dispersion > 0.0001 && uThicknessFactor > 0.0) {
+            float halfSpread = (ior - 1.0) * 0.025 * dispersion;
+            vec3 channelIors = max(
+                vec3(ior - halfSpread, ior, ior + halfSpread),
+                vec3(1.0)
+            );
+            bool redTir = false;
+            bool redHit = false;
+            vec2 redUv = vec2(-1.0);
+            float redPathLength = 0.0;
+            vec3 redRadiance = sampleTransmittedRadiance(
+                normal,
+                viewDirection,
+                channelIors.r,
+                roughness,
+                redTir,
+                redHit,
+                redUv,
+                redPathLength
+            );
+            bool blueTir = false;
+            bool blueHit = false;
+            vec2 blueUv = vec2(-1.0);
+            float bluePathLength = 0.0;
+            vec3 blueRadiance = sampleTransmittedRadiance(
+                normal,
+                viewDirection,
+                channelIors.b,
+                roughness,
+                blueTir,
+                blueHit,
+                blueUv,
+                bluePathLength
+            );
+            transmittedRadiance = vec3(
+                redRadiance.r,
+                transmittedRadiance.g,
+                blueRadiance.b
+            );
+            rgbPathLengths = vec3(redPathLength, volumePathLength, bluePathLength);
+        }
+        vec3 volumeTransmittance = vec3(1.0);
+        if (uThicknessFactor > 0.0 && uAttenuationDistance < 1.0e19) {
+            vec3 safeAttenuationColor = clamp(
+                uAttenuationColor,
+                vec3(0.0001),
+                vec3(1.0)
+            );
+            volumeTransmittance = pow(
+                safeAttenuationColor,
+                rgbPathLengths / max(uAttenuationDistance, 0.0001)
+            );
+        }
         vec3 viewFresnel = totalInternalReflection
             ? vec3(1.0)
             : fresnelSchlick(nDotV, f0);
-        vec3 transmittedLighting = transmittedRadiance * albedo * (vec3(1.0) - viewFresnel);
+        vec3 transmittedLighting = transmittedRadiance
+            * volumeTransmittance
+            * albedo
+            * (vec3(1.0) - viewFresnel);
         if (uGlassDebugView == 1) {
             fragmentColor = vec4(specularLighting, 1.0);
             return;
         }
         if (uGlassDebugView == 2) {
-            fragmentColor = vec4(transmittedRadiance * albedo, 1.0);
+            fragmentColor = vec4(transmittedRadiance * volumeTransmittance * albedo, 1.0);
             return;
         }
         if (uGlassDebugView == 3) {
@@ -277,6 +350,18 @@ void main() {
                 screenSpaceHit ? vec3(refractedUv, 1.0) : vec3(1.0, 0.0, 1.0),
                 1.0
             );
+            return;
+        }
+        if (uGlassDebugView == 5) {
+            fragmentColor = vec4(vec3(1.0 - exp(-volumePathLength)), 1.0);
+            return;
+        }
+        if (uGlassDebugView == 6) {
+            fragmentColor = vec4(volumeTransmittance, 1.0);
+            return;
+        }
+        if (uGlassDebugView == 7) {
+            fragmentColor = vec4(transmittedRadiance, 1.0);
             return;
         }
         fragmentColor = vec4(

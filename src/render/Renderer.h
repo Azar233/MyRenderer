@@ -25,7 +25,10 @@ enum class GlassDebugView {
     Reflection = 1,
     Refraction = 2,
     IndexOfRefraction = 3,
-    RefractedUv = 4
+    RefractedUv = 4,
+    Thickness = 5,
+    Transmittance = 6,
+    RgbDispersion = 7
 };
 
 struct RendererSettings {
@@ -52,6 +55,8 @@ struct RendererSettings {
     float environmentIntensity{0.55f};
     float refractionScale{0.18f};
     int refractionSteps{12};
+    float volumeThicknessScale{1.0f};
+    float dispersionStrength{0.0f};
     GlassDebugView glassDebugView{GlassDebugView::Final};
     float exposure{1.0f};
     float bloomThreshold{1.0f};

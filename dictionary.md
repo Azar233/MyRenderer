@@ -177,7 +177,7 @@
 | Transparent Sorting（透明排序） | 通常按从远到近绘制透明表面，减少混合顺序错误。 | 当前汇总所有可见 Render Item 的 BLEND 子网格，并按世界空间中心距离稳定地从远到近排序。 | 已实现 |
 | Transmission（透射） | 光穿过材质继续传播，是玻璃区别于普通半透明贴纸的核心。 | 已导入 `KHR_materials_transmission`，并在 Refractive Pass 混合透射背景与介质反射。 | 基础已实现 |
 | Refraction（折射） | 光进入不同介质时改变传播方向，使玻璃后的背景发生扭曲。 | Glass Shader 已按法线和 IOR 计算折射方向，并采样 Opaque Scene。 | 第一版已实现 |
-| Refractive Pass（折射 Pass） | 在不透明场景完成后，专门绘制透明、玻璃、水晶等材质的阶段。 | 当前已绘制 Alpha Blend 子网格并建立独立 HDR 输出；真实折射 Shader 尚未实现。 | 基础已就绪 |
+| Refractive Pass（折射 Pass） | 在不透明场景完成后，专门绘制透明、玻璃、水晶等材质的阶段。 | 当前在独立 HDR 输出中绘制 Alpha Blend 与光学透射材质，并采样 Opaque Color/Depth 完成折射。 | 已实现 |
 | Screen-space Refraction（屏幕空间折射） | 利用当前画面的颜色与深度近似追踪折射，只能看到屏幕中已经存在的内容。 | 第一版按折射方向偏移世界位置并采样 Opaque Color/Depth；越界或深度不匹配时回退环境图。 | 基础已实现 |
 | Screen-space Ray March（屏幕空间步进） | 沿一条三维射线分多步投影到屏幕，并与画面深度比较来寻找交点。 | 折射最多使用 32 步；Refraction Scale 控制最大距离，Steps 控制精度和成本。 | 已实现 |
 | Rough Refraction（粗糙折射） | 表面微小方向越杂乱，透过它看到的背景越模糊。 | 使用 Roughness 选择 Opaque HDR Mip；环境回退选择预过滤 Cubemap Mip。 | 已实现 |
@@ -185,11 +185,19 @@
 | IOR（折射率） | 表示光在介质中传播速度差异的参数，决定折射弯曲和基础反射比例。 | 已支持 `KHR_materials_ior`；默认 1.5，并用于 Fresnel F0 与 Snell 折射。 | 已实现 |
 | Snell's Law（斯涅尔定律） | 根据两种介质折射率和入射角计算折射方向。 | Glass Shader 通过 GLSL `refract` 按空气/介质两侧 IOR 比计算。 | 已实现 |
 | Total Internal Reflection（全反射） | 从高折射率介质向外传播且角度过斜时，光不再透出而完全反射。 | `refract` 无有效方向时回退到环境反射。 | 已实现 |
-| Thickness（厚度） | 光在物体内部实际走过的距离，影响位移和吸收强度。 | Glass-2 计划支持参数、贴图和前后深度估算。 | 计划 |
-| Beer-Lambert Law | 光在介质中传播越远，被吸收越多；不同颜色可以有不同吸收。 | 用于让玻璃呈现真实体积颜色。 | 计划 |
-| Attenuation（衰减/吸收） | 光穿过介质后亮度和颜色逐渐减少。 | Glass Material 将提供 Color 和 Distance 参数。 | 计划 |
-| Spectral Dispersion（光谱色散） | 不同波长的折射率不同，白光经过水晶后分离成彩虹。 | Glass-2 计划先用 R/G/B 三通道近似。 | 计划 |
-| Abbe Number（阿贝数） | 描述材料色散强弱的参数；数值越低通常色散越明显。 | 可作为比简单“色散强度”更接近物理的材质控制。 | 计划 |
+| KHR_materials_volume | glTF 的体积材质扩展，为透射表面补充厚度和介质吸收参数。 | 已导入 Thickness Factor、Attenuation Color 与 Attenuation Distance。 | 部分实现 |
+| Thickness（厚度） | 光在物体内部实际走过的距离，影响位移和吸收强度。 | 当前支持均匀材质厚度并按折射角估算路径；贴图与前/后表面深度待实现。 | 部分实现 |
+| Beer-Lambert Law | 光在介质中传播越远，被吸收越多；不同颜色可以有不同吸收。 | Shader 使用 `attenuationColor^(pathLength/attenuationDistance)` 计算玻璃透射率。 | 已实现 |
+| Attenuation（衰减/吸收） | 光穿过介质后亮度和颜色逐渐减少。 | glTF 材质的 Color / Distance 决定两组测试玻璃的青色和琥珀色体积。 | 已实现 |
+| Transmittance（透射率） | 光穿过一段介质后还剩下的比例，1 表示没有损失，0 表示完全吸收。 | Glass Debug View 可直接显示 Beer-Lambert 计算出的 RGB 透射率。 | 已实现 |
+| Spectral Dispersion（光谱色散） | 不同波长的折射率不同，白光经过水晶后分离成彩虹。 | 当前按 Khronos 公式计算 R/G/B 三个 IOR 并分别 Ray March；材质级扩展导入待补。 | 部分实现 |
+| Abbe Number（阿贝数） | 描述材料色散强弱的参数；数值越低通常色散越明显。 | 当前 Dispersion Override 对应 glTF 的 `20 / Abbe Number` 参数化，UI 尚未反算显示 Abbe 值。 | 部分实现 |
+| Prism Dispersion（棱镜分光） | 白光经过棱镜的入射和出射两个界面后，不同波长沿不同方向离开。 | Prism Spectrum Demo 将从世界空间入射光求解连续出射光谱。 | 计划 |
+| Cauchy's Equation（柯西方程） | 用少量材料参数近似折射率随光波长的变化。 | 计划从中心 IOR 与 Abbe Number 计算 380～700 nm 各采样点的 IOR。 | 计划 |
+| Spectral Sampling（光谱采样） | 把连续可见光拆成有限个波长样本分别计算，再合成为显示颜色。 | Prism Demo 计划提供 7/15/21/31 样本画质档位。 | 计划 |
+| CIE 1931 Color Matching Functions | 描述不同波长对人眼三刺激值贡献的标准函数。 | 计划用于把波长能量转换到线性 sRGB，避免随意指定彩虹颜色。 | 计划 |
+| Emissive Ribbon（自发光带状几何） | 用朝向相机的窄带 Mesh 表现光束，并以柔边和 HDR 发光增强可见度。 | 计划绘制白色入射束、棱镜内部束与光谱出射束。 | 计划 |
+| Volumetric Scattering（体积散射） | 光被空气、雾或尘埃散射后，观察者才会从侧面看到光柱。 | Prism 第一版用 Ribbon 明确作为光路可视化；真实体积散射是可选高质量模式。 | 计划 |
 | Thin-film Iridescence（薄膜虹彩） | 薄层内部多次反射产生干涉，随角度呈现彩色表面。 | 可作为参考效果的可选表面增强，不等同于体积色散。 | 计划 |
 | Caustics（焦散） | 光经过反射或折射后聚集，在接收表面形成明亮花纹。 | 参考图地面的彩虹亮斑；Glass-3 目标。 | 计划 |
 | Caustics Projector / Decal | 把预制或程序化焦散图案投射到地面，以较低成本控制视觉效果。 | Glass-3 的第一版 TA 友好方案。 | 计划 |
@@ -213,7 +221,7 @@
 | Regression Test（回归测试） | 验证新改动没有破坏此前正常功能。 | 资产导入 CTest 已实现；视觉回归仍在计划中。 | 部分实现 |
 | Visual Regression（视觉回归） | 固定场景输出图片并与基准图比较，发现渲染结果变化。 | 计划使用误差阈值和差异热图。 | 计划 |
 | SSIM | 比逐像素相等更关注结构相似度的图像比较指标。 | 计划用于容忍不同 GPU 的微小浮点差异。 | 计划 |
-| Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 已支持 Reflection、Refraction、IOR、Refracted UV；完整 GBuffer/材质视图仍在 P0 路线。 | 部分实现 |
+| Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 已支持 Reflection、Refraction、IOR、Refracted UV、Thickness、Transmittance 与 RGB Dispersion；完整 GBuffer/材质视图仍在 P0 路线。 | 部分实现 |
 | Overdraw | 同一像素在一帧内被重复绘制多次，透明与粒子常导致高 Overdraw。 | TA/性能调试视图计划覆盖。 | 计划 |
 | GPU Memory / VRAM | GPU 用于纹理、Buffer 和 RenderTarget 的显存。 | 当前统计纹理估算值；完整 RenderTarget/Buffer 预算待补。 | 部分实现 |
 

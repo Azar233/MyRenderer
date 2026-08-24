@@ -333,7 +333,7 @@ cmake --build build --config Debug
 
 P0 验收：干净机器解压即可运行；标准 glTF 材质测试场景显示正确；Shader 改坏后界面继续显示上一帧正确材质并报告错误；CI 通过；固定视觉回归通过；README 能链接到一份包含硬件、分辨率和优化前后数据的性能报告。
 
-### 8.3 跨方向旗舰 Demo：Spectral Glass & Real-time Caustics
+### 8.3 跨方向旗舰 Demo：Spectral Glass、Prism Dispersion & Real-time Caustics
 
 这个阶段放在 P0 的必要渲染基础之后、图形程序/TA 分线之前。它不要求先完成 Deferred、骨骼动画或 Vulkan；不透明物体以后可以进入 Deferred，水晶仍通过 Forward Refractive Pass 绘制。目标参考管线：
 
@@ -369,11 +369,79 @@ Shadow / Depth
 
 #### Glass-2：厚度、体积吸收与光谱色散
 
-- [ ] 支持均匀 Thickness 与 Thickness Texture，并通过前/后表面深度 Pass 估算闭合模型厚度。
-- [ ] 使用 Beer-Lambert Law 实现 Attenuation Color / Distance，避免透明物体呈现为无体积的彩色塑料。
-- [ ] 分别计算 R/G/B 折射率形成波长相关的色散，并提供 Dispersion / Abbe Number 控制。
-- [ ] 区分材质光谱色散与全屏 Chromatic Aberration；后者只能作为镜头效果，不能代替玻璃折射。
-- [ ] 可选增加 Thin-film Iridescence，并提供 Thickness、Transmittance、RGB Refraction Offset 调试视图。
+- [x] 接入 `KHR_materials_volume` 的均匀 Thickness、Attenuation Color 与 Attenuation Distance。
+- [ ] 支持 Thickness Texture，并通过前/后表面深度 Pass 估算闭合模型的真实几何厚度；替换当前按均匀厚度和折射角估算的路径长度。
+- [x] 使用 Beer-Lambert Law 实现体积吸收，避免透明物体呈现为无体积的彩色塑料。
+- [~] 按 Khronos `KHR_materials_dispersion` 公式分别计算 R/G/B 折射率并执行三通道 Ray March；当前提供全局 Dispersion Override，材质级扩展导入与 Abbe Number 显示仍待补充。
+- [x] 区分材质光谱色散与全屏 Chromatic Aberration；当前色散发生在 Glass Shader 的三条折射射线上，不使用全屏 RGB 偏移。
+- [x] 增加 Thickness、Transmittance 与 RGB Dispersion 调试视图。
+- [ ] 可选增加 Thin-film Iridescence。
+
+> Glass-2A 完成（2026-08-24）：Assimp 的 `AI_MATKEY_VOLUME_*` 已映射到格式无关 `MaterialData` 与 GPU 材质，`glass_material_test.gltf` 为两种玻璃增加不同的均匀厚度、吸收颜色与吸收距离。Shader 按折射方向和表面法线估算介质路径长度，并使用 `T(x) = attenuationColor^(x / attenuationDistance)` 计算 Beer-Lambert Transmittance；Dispersion Override 使用 Khronos 推荐的 `halfSpread = (IOR - 1) × 0.025 × dispersion`，分别追踪 R/G/B 后重组透射颜色。Inspector 与环境变量支持 Thickness Scale、Dispersion 和 8 种 Glass Debug View。MinGW 构建、2 项 CTest、完整 GPU smoke 通过，并导出 4x MSAA Final / Thickness / Transmittance / RGB Dispersion 截图。Glass-2B 将补 Thickness Texture、前后表面深度厚度和材质级 `KHR_materials_dispersion` 导入。
+
+#### Prism Spectrum Demo：棱镜光谱分光专项
+
+目标：制作一个受经典棱镜分光构图启发、但使用原创模型与镜头的实时 Demo。黑色背景中，一束窄白光进入透明三棱镜，在两个空气/玻璃界面发生折射，离开后形成从红到紫、方向连续且可调的光谱带。这里要实现的是 **Light Transport（光传播）**，不是把最终画面做一次全屏 RGB 偏移。
+
+当前 base 已具备可复用能力：HDR、Bloom、透明/折射 Pass、IOR、Beer-Lambert、RGB 色散、地面/多对象场景和 GPU 时间统计。仍缺少的是“从光源出发”的光路求交、第二个出射界面、可见光束几何、连续波长采样以及专用 Demo 场景。
+
+排期建议（单人连续开发约 8～12 个工作日，视觉打磨不计入底层算法返工）：
+
+| 子阶段 | 预计时间 | 前置依赖 | 可交付结果 |
+| --- | ---: | --- | --- |
+| Prism-0：目标场景与基线 | 0.5～1 天 | Glass-2A | 固定镜头、黑背景、原创三棱镜、白色入射光占位与基准截图 |
+| Prism-1：双界面光路求解 | 1.5～2 天 | Prism-0 | CPU 可测试的入射点、内部路径、出射点与 Snell/TIR 结果 |
+| Prism-2：连续光谱模型 | 2～3 天 | Prism-1 | 15～31 波长采样、Cauchy/Abbe IOR、线性 RGB 光谱权重与能量归一化 |
+| Prism-3：HDR 可见光束 | 1.5～2 天 | Prism-2 | 白色入射束、棱镜内部束、连续/七色出射束、柔边与 Bloom |
+| Prism-4：管线/UI/调试整合 | 1～2 天 | Prism-3 | 专用 Pass、Preset、参数面板、光路与法线调试视图 |
+| Prism-5：测试与作品集验收 | 1.5～2 天 | Prism-4 | 单元测试、视觉回归、1080p 性能数据、On/Off 对照与 Demo 录屏素材 |
+
+##### Prism-0：目标场景与视觉基线
+
+- [ ] 新增原创的封闭三棱柱固定资产或程序化网格；不要直接复制专辑封面的画面资产、字体或版式。
+- [ ] 增加 `Prism Spectrum` Demo Preset：正交/长焦固定镜头、纯黑环境、低粗糙高透射玻璃和关闭地面网格的独立场景配置。
+- [ ] 定义世界空间的 `IncidentBeam`：起点、归一化方向、宽度、强度和白点；先用不分色的占位光束验证构图。
+- [ ] 保存固定分辨率、相机和参数的 baseline PNG；后续物理实现必须与同一基线对照。
+
+##### Prism-1：双界面棱镜光路求解
+
+- [ ] 新增不依赖 OpenGL 的 `PrismOptics` 模块，对入射 Ray 与三棱柱表面求最近交点、入射面法线、内部 Ray、出射交点和出射面法线。
+- [ ] 在空气 → 玻璃与玻璃 → 空气两个边界分别应用 Snell's Law；每个边界计算 Fresnel 能量，并安全处理 Total Internal Reflection。
+- [ ] 光学求解只在光束、棱镜 Transform 或材质参数变化时更新；将结果缓存为格式无关 `SpectralBeamData`，渲染层只负责上传和绘制。
+- [ ] 增加 CPU 单元测试：法线入射不偏折、Dispersion=0 时所有波长重合、色散增大时角分离单调增加、出射红光偏折小于紫光、TIR 不产生 NaN。
+
+##### Prism-2：连续光谱与材质参数
+
+- [ ] 接入材质级 `KHR_materials_dispersion`；按规范使用 `dispersion = 20 / AbbeNumber`，UI 同时显示 Dispersion 与换算后的 Abbe Number。
+- [ ] 使用 Cauchy's Equation 从中心 IOR 和 Abbe Number 计算 380～700 nm 的波长相关 IOR；默认 21 个样本，提供 7 / 15 / 21 / 31 四档质量。
+- [ ] 使用可追溯的 CIE 1931 Color Matching Functions 或明确记录的近似函数把波长转换到线性 sRGB；在 HDR 线性空间累积，Tone Mapping 前不做 sRGB 编码。
+- [ ] 对光谱样本做能量归一化，并把两次 Fresnel 透射和 Beer-Lambert 吸收计入每条波长的强度，避免采样数越高画面越亮。
+- [ ] 提供 `Continuous Spectrum` 与 `Seven-band Art Direction` 两种模式：前者用于算法展示，后者用于接近参考图的清晰彩虹条带。
+
+##### Prism-3：可见光束渲染
+
+- [ ] 新增 `SpectralBeamRenderer`，把 CPU 光路生成相机朝向的柔边 Ribbon Mesh；入射束为白色，出射束按相邻波长构建连续带状几何。
+- [ ] 使用 HDR Emissive + Additive Blend 输出光束，让高亮自然进入 Bloom；光束宽度、边缘柔度、强度和曝光可调。
+- [ ] 明确物理与美术边界：干净空气中的侧视光束本来不可见，本 Demo 的 Ribbon 是光路可视化；后续若实现 Volumetric Scattering，作为独立高质量模式而不是偷换概念。
+- [ ] 处理 Depth Test、棱镜遮挡和内部光束裁切：外部光束不能无条件穿透实体，棱镜内部段只在棱镜轮廓内显示。
+- [ ] 设计 Pass 顺序，使光束辐射可被 Glass Pass 采样，同时避免采样/写入同一 HDR 附件产生 Feedback；把 Incident / Internal / Exit Beam 分组写入 GPU Debug Label。
+
+##### Prism-4：控制、调试与可复用性
+
+- [ ] Inspector 增加 Beam Direction、Width、Intensity、White Point、Central IOR、Dispersion/Abbe、Spectral Samples、Spectrum Mode、Edge Softness 与 Bloom Contribution。
+- [ ] 增加 `Optical Path` 调试视图：显示入射/出射交点、表面法线、每个波长的世界空间路径、TIR 状态和每段能量。
+- [ ] 至少提供 Crown Glass、Water-like、Diamond-like、Exaggerated Cover 四个 Preset；Preset 只保存参数，不复制 Shader。
+- [ ] 支持暂停自动旋转、锁定镜头和一键恢复 Hero Shot，保证录屏与截图可重复。
+
+##### Prism-5：验收与作品集证据
+
+- [ ] 视觉验收：Dispersion=0 时出射束保持白色或完全重合；开启后红到紫顺序稳定，旋转光束/棱镜时出射方向连续变化，没有屏幕空间粘连。
+- [ ] 建立固定相机视觉回归，覆盖 No Prism、No Dispersion、7-band、Continuous、TIR 与 1x/4x MSAA。
+- [ ] 在 1920×1080、4x MSAA 下分别记录 7/15/21/31 波长的 CPU 更新耗时、GPU Beam Pass 时间、Draw Call 和显存；若新增 Beam Pass 超过 2 ms，先分析 Fill-rate/Bloom/几何开销再优化。
+- [ ] 输出同机位的 `White Beam → Prism → Spectrum` 分阶段图、调试光路图和最终 Hero Shot；录制 15～30 秒参数变化片段作为 Demo Reel 的一个章节。
+- [ ] 在 `docs/prism-spectrum.md` 记录公式、坐标约定、Pass 顺序、物理近似、失败案例、性能数据，以及 [Khronos KHR_materials_dispersion](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_dispersion) 的参数映射。
+
+Prism Demo 验收：出射光谱必须由世界空间入射光经过两个棱镜界面求解得到，而不是固定在屏幕上的彩虹贴图；关闭色散时各波长光路重合，改变 IOR / Abbe / 入射角时结果符合预期；最终画面同时提供“物理连续光谱”和“七色美术模式”作为图形程序与 TA 两种叙事证据。
 
 #### Glass-3：彩色焦散与透射阴影
 
@@ -452,7 +520,7 @@ TA 路线验收：一个未参与开发的使用者能在文档指导下导入�
 
 1. P0 架构拆分、Shader 热重载、glTF 材质完整性、标准 IBL。
 2. P0 视觉回归、Benchmark、GPU Debug Label、RenderDoc / Nsight 前后对比。
-3. 若以水晶参考图为近期目标：完成 Glass-0～Glass-3，再根据主投方向强化算法性能报告或材质工具体验。
+3. 若以棱镜分光为近期目标：按 `Glass-0～Glass-2A → Prism-0～Prism-5` 推进；随后再做 Glass-2B 真实厚度与 Glass-3 通用焦散，不让通用体积/焦散阻塞专用 Hero Demo。
 4. 若主投图形程序且不以水晶 Demo 为旗舰：先做 Deferred + 多光源 + Culling/LOD，再选择 Vulkan 作为旗舰。
 5. 若主投 TA 且不以水晶 Demo 为旗舰：先做 Asset Audit + Material Inspector + Blender 脚本，再选择 NPR 套件作为旗舰。
 6. 最后集中完成英文 README、展示场景、Demo Reel、技术文章和 Release 包。

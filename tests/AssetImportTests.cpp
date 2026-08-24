@@ -108,10 +108,24 @@ int main() {
                 && dielectricGlass->indexOfRefraction < 1.53f,
             "KHR_materials_ior should survive import"
         );
+        require(
+            dielectricGlass->thicknessFactor > 0.7f,
+            "KHR_materials_volume thickness should survive import"
+        );
+        require(
+            dielectricGlass->attenuationDistance > 1.3f
+                && dielectricGlass->attenuationDistance < 1.5f,
+            "KHR_materials_volume attenuation distance should survive import"
+        );
+        require(
+            dielectricGlass->attenuationColor.b > dielectricGlass->attenuationColor.r,
+            "KHR_materials_volume attenuation color should survive import"
+        );
         const MaterialData* roughGlass = findMaterial(glass, "RoughDielectricGlass");
         require(roughGlass != nullptr, "glass fixture should preserve its rough material");
         require(roughGlass->roughnessFactor > 0.5f, "rough glass should preserve roughness");
         require(roughGlass->transmissionFactor > 0.8f, "rough glass should preserve transmission");
+        require(roughGlass->thicknessFactor > 0.5f, "rough glass should preserve volume thickness");
 
         const ModelImportResult dae = assimp.load(asset("textured_quad.dae"));
         require(!dae.model.meshes.empty(), "DAE fixture should import a mesh");

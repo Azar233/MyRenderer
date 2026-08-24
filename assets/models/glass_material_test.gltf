@@ -1,6 +1,6 @@
 {
-  "asset": {"version": "2.0", "generator": "MyRenderer Glass-1 regression fixture"},
-  "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_ior"],
+  "asset": {"version": "2.0", "generator": "MyRenderer Glass-2 volume regression fixture"},
+  "extensionsUsed": ["KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_volume"],
   "scene": 0,
   "scenes": [{"nodes": [0, 1, 2, 3]}],
   "nodes": [
@@ -26,7 +26,12 @@
     },
     "extensions": {
       "KHR_materials_transmission": {"transmissionFactor": 0.94},
-      "KHR_materials_ior": {"ior": 1.52}
+      "KHR_materials_ior": {"ior": 1.52},
+      "KHR_materials_volume": {
+        "thicknessFactor": 0.72,
+        "attenuationDistance": 1.4,
+        "attenuationColor": [0.34, 0.82, 1.0]
+      }
     }
   }, {
     "name": "WarmOpaque",
@@ -53,7 +58,12 @@
     },
     "extensions": {
       "KHR_materials_transmission": {"transmissionFactor": 0.88},
-      "KHR_materials_ior": {"ior": 1.33}
+      "KHR_materials_ior": {"ior": 1.33},
+      "KHR_materials_volume": {
+        "thicknessFactor": 0.52,
+        "attenuationDistance": 0.9,
+        "attenuationColor": [1.0, 0.58, 0.22]
+      }
     }
   }],
   "buffers": [{

@@ -52,6 +52,10 @@ struct MaterialData {
     float roughnessFactor{1.0f};
     float transmissionFactor{0.0f};
     float indexOfRefraction{1.5f};
+    // KHR_materials_volume. A zero thickness keeps the material thin-walled.
+    float thicknessFactor{0.0f};
+    glm::vec3 attenuationColor{1.0f};
+    float attenuationDistance{std::numeric_limits<float>::infinity()};
     MaterialAlphaMode alphaMode{MaterialAlphaMode::Opaque};
     float alphaCutoff{0.5f};
     bool doubleSided{false};
