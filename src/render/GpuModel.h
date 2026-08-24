@@ -38,6 +38,7 @@ public:
         bool cullBackFaces
     ) const;
     void drawDepth() const;
+    void drawTransmissiveDepth() const;
     const glm::vec3& transparentSubmeshCenter(std::size_t transparentSubmeshIndex) const;
 
     std::size_t meshCount() const { return meshes_.size(); }
@@ -48,6 +49,7 @@ public:
     std::size_t textureCount() const { return textures_.size(); }
     std::size_t opaqueSubmeshCount() const { return opaqueDrawCommands_.size(); }
     std::size_t transparentSubmeshCount() const { return transparentDrawCommands_.size(); }
+    std::size_t transmissiveSubmeshCount() const { return transmissiveDrawCommands_.size(); }
     std::size_t loadedTextureCount() const { return loadedTextureCount_; }
     std::size_t fallbackTextureCount() const { return fallbackTextureCount_; }
     std::size_t textureMemoryBytes() const { return textureMemoryBytes_; }
@@ -58,8 +60,10 @@ private:
         std::shared_ptr<Texture2D> baseColorTexture;
         std::shared_ptr<Texture2D> normalTexture;
         std::shared_ptr<Texture2D> metallicRoughnessTexture;
+        std::shared_ptr<Texture2D> thicknessTexture;
         bool hasNormalTexture{false};
         bool hasMetallicRoughnessTexture{false};
+        bool hasThicknessTexture{false};
         float metallicFactor{0.0f};
         float roughnessFactor{1.0f};
         float transmissionFactor{0.0f};
@@ -96,6 +100,7 @@ private:
     std::shared_ptr<Texture2D> linearWhiteTexture_;
     std::vector<DrawCommand> opaqueDrawCommands_;
     std::vector<DrawCommand> transparentDrawCommands_;
+    std::vector<DrawCommand> transmissiveDrawCommands_;
     std::size_t submeshCount_{0};
     std::size_t vertexCount_{0};
     std::size_t triangleCount_{0};

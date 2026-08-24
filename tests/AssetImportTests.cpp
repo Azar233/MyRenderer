@@ -127,6 +127,25 @@ int main() {
         require(roughGlass->transmissionFactor > 0.8f, "rough glass should preserve transmission");
         require(roughGlass->thicknessFactor > 0.5f, "rough glass should preserve volume thickness");
 
+        const ModelImportResult texturedVolume = assimp.load(asset("volume_texture_test.gltf"));
+        const MaterialData* texturedVolumeGlass = findMaterial(texturedVolume, "TexturedVolumeGlass");
+        require(texturedVolumeGlass != nullptr, "textured volume fixture should preserve its material");
+        require(
+            texturedVolumeGlass->thicknessTextureIndex >= 0,
+            "KHR_materials_volume thickness texture should survive import"
+        );
+        require(
+            static_cast<std::size_t>(texturedVolumeGlass->thicknessTextureIndex)
+                < texturedVolume.model.textures.size(),
+            "thickness texture index should reference imported texture data"
+        );
+        require(
+            !texturedVolume.model.textures[
+                static_cast<std::size_t>(texturedVolumeGlass->thicknessTextureIndex)
+            ].srgb,
+            "thickness texture must use linear sampling"
+        );
+
         const ModelImportResult prism = assimp.load(asset("prism_spectrum.gltf"));
         require(prism.model.meshes.size() == 1U, "prism fixture should import one closed mesh");
         require(

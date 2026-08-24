@@ -176,12 +176,15 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_VOLUME_THICKNESS_SCALE")) {
         rendererSettings_.volumeThicknessScale = std::clamp(std::strtof(value, nullptr), 0.0f, 4.0f);
     }
+    if (const char* value = std::getenv("MYRENDERER_GEOMETRIC_THICKNESS")) {
+        rendererSettings_.geometricThicknessEnabled = std::atoi(value) != 0;
+    }
     if (const char* value = std::getenv("MYRENDERER_DISPERSION")) {
         rendererSettings_.dispersionStrength = std::clamp(std::strtof(value, nullptr), 0.0f, 2.5f);
     }
     if (const char* value = std::getenv("MYRENDERER_GLASS_DEBUG")) {
         rendererSettings_.glassDebugView = static_cast<GlassDebugView>(
-            std::clamp(std::atoi(value), 0, 7)
+            std::clamp(std::atoi(value), 0, 8)
         );
     }
     if (const char* value = std::getenv("MYRENDERER_SCENE_DEMO")) showComparisonObject_ = std::atoi(value) != 0;
@@ -691,6 +694,13 @@ void Application::drawInspectorPanel() {
             ImGui::Checkbox("Skybox", &rendererSettings_.skyboxEnabled);
             ImGui::Checkbox("Shadow mapping", &rendererSettings_.shadowsEnabled);
             ImGui::Checkbox("Dielectric transmission", &rendererSettings_.transmissionEnabled);
+            ImGui::Checkbox("Geometric glass thickness", &rendererSettings_.geometricThicknessEnabled);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Uses a back-face depth pass for closed glass meshes; "
+                    "falls back to the material thickness/texture when no exit surface is found."
+                );
+            }
             ImGui::SliderFloat(
                 "Refraction scale",
                 &rendererSettings_.refractionScale,
@@ -901,9 +911,10 @@ void Application::drawInspectorPanel() {
                 "Refracted UV",
                 "Thickness",
                 "Transmittance",
-                "RGB dispersion"
+                "RGB dispersion",
+                "Front/back thickness data"
             };
-            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 8)) {
+            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 9)) {
                 rendererSettings_.glassDebugView = static_cast<GlassDebugView>(glassDebugView);
             }
             ImGui::SliderFloat("Environment", &rendererSettings_.environmentIntensity, 0.0f, 2.0f, "%.2f");
@@ -1547,6 +1558,7 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     rendererSettings_.refractionScale = 0.28f;
     rendererSettings_.refractionSteps = 20;
     rendererSettings_.volumeThicknessScale = 1.0f;
+    rendererSettings_.geometricThicknessEnabled = true;
     rendererSettings_.glassDebugView = GlassDebugView::Final;
     rendererSettings_.exposure = 1.20f;
     rendererSettings_.bloomThreshold = 0.75f;
@@ -1592,6 +1604,9 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
             0.0f,
             2.0f
         );
+    }
+    if (const char* value = std::getenv("MYRENDERER_GEOMETRIC_THICKNESS")) {
+        rendererSettings_.geometricThicknessEnabled = std::atoi(value) != 0;
     }
     if (const char* value = std::getenv("MYRENDERER_PRISM_SAMPLES")) {
         static constexpr std::array<int, 4> qualityTiers{7, 15, 21, 31};

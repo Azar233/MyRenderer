@@ -56,6 +56,8 @@ struct MaterialData {
     float dispersion{0.0f};
     // KHR_materials_volume. A zero thickness keeps the material thin-walled.
     float thicknessFactor{0.0f};
+    // KHR_materials_volume stores its scalar thickness texture in the G channel.
+    std::int32_t thicknessTextureIndex{-1};
     glm::vec3 attenuationColor{1.0f};
     float attenuationDistance{std::numeric_limits<float>::infinity()};
     MaterialAlphaMode alphaMode{MaterialAlphaMode::Opaque};

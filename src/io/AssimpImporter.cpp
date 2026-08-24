@@ -226,6 +226,36 @@ std::int32_t materialTexture(
     return -1;
 }
 
+std::int32_t materialTextureAt(
+    const aiMaterial& material,
+    aiTextureType type,
+    unsigned int textureIndex,
+    const aiScene& scene,
+    ModelData& model,
+    std::unordered_map<std::string, std::int32_t>& textureIndices,
+    const std::filesystem::path& sourceDirectory,
+    std::string& warnings,
+    std::vector<ModelDiagnostic>& diagnostics,
+    const std::string& materialName,
+    bool srgb
+) {
+    aiString reference;
+    if (material.GetTexture(type, textureIndex, &reference) != AI_SUCCESS) {
+        return -1;
+    }
+    return appendTextureReference(
+        scene,
+        model,
+        textureIndices,
+        reference,
+        sourceDirectory,
+        warnings,
+        diagnostics,
+        materialName,
+        srgb
+    );
+}
+
 struct ImportContext {
     const aiScene& scene;
     ModelData& model;
@@ -480,6 +510,19 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
             source,
             aiTextureType_GLTF_METALLIC_ROUGHNESS,
             aiTextureType_METALNESS,
+            *scene,
+            result.model,
+            textureIndices,
+            sourceDirectory,
+            result.warnings,
+            result.diagnostics,
+            material.name,
+            false
+        );
+        material.thicknessTextureIndex = materialTextureAt(
+            source,
+            aiTextureType_TRANSMISSION,
+            1U,
             *scene,
             result.model,
             textureIndices,

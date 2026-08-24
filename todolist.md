@@ -370,7 +370,7 @@ Shadow / Depth
 #### Glass-2：厚度、体积吸收与光谱色散
 
 - [x] 接入 `KHR_materials_volume` 的均匀 Thickness、Attenuation Color 与 Attenuation Distance。
-- [ ] 支持 Thickness Texture，并通过前/后表面深度 Pass 估算闭合模型的真实几何厚度；替换当前按均匀厚度和折射角估算的路径长度。
+- [x] 支持 Thickness Texture，并通过前/后表面深度 Pass 估算闭合模型的真实几何厚度；替换当前按均匀厚度和折射角估算的路径长度。
 - [x] 使用 Beer-Lambert Law 实现体积吸收，避免透明物体呈现为无体积的彩色塑料。
 - [x] 按 Khronos `KHR_materials_dispersion` 公式分别计算 R/G/B 折射率并执行三通道 Ray March；现已支持材质级扩展导入、全局 Dispersion Override 与对应 Abbe Number 显示。
 - [x] 区分材质光谱色散与全屏 Chromatic Aberration；当前色散发生在 Glass Shader 的三条折射射线上，不使用全屏 RGB 偏移。
@@ -378,6 +378,8 @@ Shadow / Depth
 - [ ] 可选增加 Thin-film Iridescence。
 
 > Glass-2A 完成（2026-08-24）：Assimp 的 `AI_MATKEY_VOLUME_*` 已映射到格式无关 `MaterialData` 与 GPU 材质，`glass_material_test.gltf` 为两种玻璃增加不同的均匀厚度、吸收颜色与吸收距离。Shader 按折射方向和表面法线估算介质路径长度，并使用 `T(x) = attenuationColor^(x / attenuationDistance)` 计算 Beer-Lambert Transmittance；Dispersion Override 使用 Khronos 推荐的 `halfSpread = (IOR - 1) × 0.025 × dispersion`，分别追踪 R/G/B 后重组透射颜色。Inspector 与环境变量支持 Thickness Scale、Dispersion 和 8 种 Glass Debug View。MinGW 构建、2 项 CTest、完整 GPU smoke 通过，并导出 4x MSAA Final / Thickness / Transmittance / RGB Dispersion 截图。Prism-2 随后补齐了材质级 `KHR_materials_dispersion` 导入与 Abbe Number 显示；Glass-2B 仍需 Thickness Texture 和前后表面深度厚度。
+
+> Glass-2B 完成（2026-08-24）：新增 `Glass front/back thickness` Pass，以两张 R32F 纹理和 `GL_MIN` / `GL_MAX` 分别保存每个像素最近入口深度与最远退出深度，不依赖资产的 `doubleSided` 或三角形绕序。玻璃 Shader 把深度跨度换算为表面法线方向厚度，再按折射角得到介质路径长度，统一供 Beer-Lambert 与 RGB 色散使用；无有效退出表面时回退到 glTF 规范的 `thicknessFactor × thicknessTexture.g`。Assimp/GPU 材质现支持线性 Thickness Texture，新增 `volume_texture_test.gltf` 和 CPU 导入断言；Inspector 增加 Geometric Glass Thickness 开关与 Front/Back Thickness Data 调试视图。当前屏幕空间方法以局部平行退出界面近似第二界面法线，多个重叠或凹形玻璃仍可能合并错误的前后深度，后续可通过对象 ID/分层深度或 Ray Query 路线扩展。下一阶段进入 Glass-3 彩色焦散与透射阴影。
 
 #### Prism Spectrum Demo：棱镜光谱分光专项
 

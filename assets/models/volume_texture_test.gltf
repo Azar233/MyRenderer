@@ -1,0 +1,77 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "MyRenderer Glass-2B thickness texture regression asset"
+  },
+  "extensionsUsed": [
+    "KHR_materials_transmission",
+    "KHR_materials_volume"
+  ],
+  "scene": 0,
+  "scenes": [{"nodes": [0]}],
+  "nodes": [{"name": "ThicknessTextureTriangle", "mesh": 0}],
+  "meshes": [{
+    "name": "ThicknessTextureTriangle",
+    "primitives": [{
+      "attributes": {
+        "POSITION": 0,
+        "NORMAL": 1,
+        "TEXCOORD_0": 2
+      },
+      "indices": 3,
+      "material": 0
+    }]
+  }],
+  "materials": [{
+    "name": "TexturedVolumeGlass",
+    "doubleSided": true,
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [1.0, 1.0, 1.0, 1.0],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.08
+    },
+    "extensions": {
+      "KHR_materials_transmission": {"transmissionFactor": 0.92},
+      "KHR_materials_volume": {
+        "thicknessFactor": 2.0,
+        "thicknessTexture": {"index": 0},
+        "attenuationDistance": 3.0,
+        "attenuationColor": [0.8, 0.92, 1.0]
+      }
+    }
+  }],
+  "images": [{
+    "name": "LinearThicknessGChannel",
+    "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII="
+  }],
+  "samplers": [{
+    "magFilter": 9729,
+    "minFilter": 9729,
+    "wrapS": 33071,
+    "wrapT": 33071
+  }],
+  "textures": [{"name": "ThicknessData", "sampler": 0, "source": 0}],
+  "buffers": [{
+    "byteLength": 102,
+    "uri": "data:application/octet-stream;base64,zcxMv5qZGb8AAAAAzcxMP5qZGb8AAAAAAAAAAM3MTD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAABAAIA"
+  }],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962},
+    {"buffer": 0, "byteOffset": 72, "byteLength": 24, "target": 34962},
+    {"buffer": 0, "byteOffset": 96, "byteLength": 6, "target": 34963}
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [-0.8, -0.6, 0.0],
+      "max": [0.8, 0.8, 0.0]
+    },
+    {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2"},
+    {"bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR"}
+  ]
+}

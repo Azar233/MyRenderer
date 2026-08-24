@@ -100,6 +100,14 @@ GpuModel::GpuModel(
         } else {
             material.metallicRoughnessTexture = linearWhiteTexture_;
         }
+        if (materialData.thicknessTextureIndex >= 0
+            && static_cast<std::size_t>(materialData.thicknessTextureIndex) < textures_.size()
+            && !textureFallbacks_[static_cast<std::size_t>(materialData.thicknessTextureIndex)]) {
+            material.thicknessTexture = textures_[static_cast<std::size_t>(materialData.thicknessTextureIndex)];
+            material.hasThicknessTexture = true;
+        } else {
+            material.thicknessTexture = linearWhiteTexture_;
+        }
         materials_.push_back(std::move(material));
     }
 
@@ -127,6 +135,11 @@ GpuModel::GpuModel(
                 mesh.submeshCenter(submeshIndex)
             };
             (isBlended ? transparentDrawCommands_ : opaqueDrawCommands_).push_back(command);
+            if (materialIndex >= 0
+                && static_cast<std::size_t>(materialIndex) < materials_.size()
+                && materials_[static_cast<std::size_t>(materialIndex)].transmissionFactor > 0.0f) {
+                transmissiveDrawCommands_.push_back(command);
+            }
         }
     }
 }
@@ -141,6 +154,7 @@ const GpuModel::GpuMaterial* GpuModel::bindMaterial(
     shader.setInt("uBaseColorTexture", 0);
     shader.setInt("uNormalTexture", 1);
     shader.setInt("uMetallicRoughnessTexture", 2);
+    shader.setInt("uThicknessTexture", 7);
     const GpuMaterial* material = nullptr;
     if (materialIndex >= 0 && static_cast<std::size_t>(materialIndex) < materials_.size()) {
         material = &materials_[static_cast<std::size_t>(materialIndex)];
@@ -162,6 +176,11 @@ const GpuModel::GpuMaterial* GpuModel::bindMaterial(
         "uHasMetallicRoughnessTexture",
         material != nullptr && material->hasMetallicRoughnessTexture
     );
+    const auto& thicknessTexture = material == nullptr
+        ? linearWhiteTexture_
+        : material->thicknessTexture;
+    thicknessTexture->bind(7U);
+    shader.setBool("uHasThicknessTexture", material != nullptr && material->hasThicknessTexture);
     shader.setFloat("uMetallicFactor", material == nullptr ? 0.0f : material->metallicFactor);
     shader.setFloat("uRoughnessFactor", material == nullptr ? 1.0f : material->roughnessFactor);
     shader.setFloat("uTransmissionFactor", material == nullptr ? 0.0f : material->transmissionFactor);
@@ -188,7 +207,14 @@ const GpuModel::GpuMaterial* GpuModel::bindMaterial(
 }
 
 void GpuModel::applyCullState(const GpuMaterial* material, bool cullBackFaces) const {
-    if (cullBackFaces && (material == nullptr || !material->doubleSided)) {
+    const bool isVolumeBoundary = material != nullptr
+        && material->transmissionFactor > 0.0f
+        && material->thicknessFactor > 0.0f;
+    if (isVolumeBoundary) {
+        // Glass-2B selects the nearest volume surface from the front-depth
+        // texture in the fragment shader, independent of mesh winding.
+        glDisable(GL_CULL_FACE);
+    } else if (cullBackFaces && (material == nullptr || !material->doubleSided)) {
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         glFrontFace(GL_CCW);
@@ -231,6 +257,12 @@ const glm::vec3& GpuModel::transparentSubmeshCenter(std::size_t transparentSubme
 
 void GpuModel::drawDepth() const {
     for (const DrawCommand& command : opaqueDrawCommands_) {
+        meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
+    }
+}
+
+void GpuModel::drawTransmissiveDepth() const {
+    for (const DrawCommand& command : transmissiveDrawCommands_) {
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
 }

@@ -32,7 +32,8 @@ enum class GlassDebugView {
     RefractedUv = 4,
     Thickness = 5,
     Transmittance = 6,
-    RgbDispersion = 7
+    RgbDispersion = 7,
+    BackfaceThickness = 8
 };
 
 struct RendererSettings {
@@ -63,6 +64,7 @@ struct RendererSettings {
     float refractionScale{0.18f};
     int refractionSteps{12};
     float volumeThicknessScale{1.0f};
+    bool geometricThicknessEnabled{true};
     float dispersionStrength{0.0f};
     GlassDebugView glassDebugView{GlassDebugView::Final};
     float exposure{1.0f};
@@ -135,6 +137,7 @@ private:
     std::unique_ptr<ShadowMap> shadowMap_;
     std::unique_ptr<SpectralBeamRenderer> spectralBeamRenderer_;
     std::unique_ptr<Shader> shadowShader_;
+    std::unique_ptr<Shader> glassThicknessShader_;
     std::unique_ptr<PostProcessor> postProcessor_;
     std::unique_ptr<RenderTarget> renderTarget_;
     std::unique_ptr<TextureCache> textureCache_;

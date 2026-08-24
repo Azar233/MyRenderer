@@ -185,8 +185,10 @@
 | IOR（折射率） | 表示光在介质中传播速度差异的参数，决定折射弯曲和基础反射比例。 | 已支持 `KHR_materials_ior`；默认 1.5，并用于 Fresnel F0 与 Snell 折射。 | 已实现 |
 | Snell's Law（斯涅尔定律） | 根据两种介质折射率和入射角计算折射方向。 | Glass Shader 通过 GLSL `refract` 按空气/介质两侧 IOR 比计算。 | 已实现 |
 | Total Internal Reflection（全反射） | 从高折射率介质向外传播且角度过斜时，光不再透出而完全反射。 | `refract` 无有效方向时回退到环境反射。 | 已实现 |
-| KHR_materials_volume | glTF 的体积材质扩展，为透射表面补充厚度和介质吸收参数。 | 已导入 Thickness Factor、Attenuation Color 与 Attenuation Distance。 | 部分实现 |
-| Thickness（厚度） | 光在物体内部实际走过的距离，影响位移和吸收强度。 | 当前支持均匀材质厚度并按折射角估算路径；贴图与前/后表面深度待实现。 | 部分实现 |
+| KHR_materials_volume | glTF 的体积材质扩展，为透射表面补充厚度和介质吸收参数。 | 已导入 Thickness Factor/Texture、Attenuation Color 与 Attenuation Distance；Thickness Texture 按规范读取 G 通道。 | 已实现 |
+| Thickness（厚度） | 光在物体内部实际走过的距离，影响折射位移和吸收强度。 | Glass-2B 优先由每像素 Front/Back Depth 估算闭合模型几何厚度，再按折射角换算内部路径。 | 已实现（屏幕空间） |
+| Thickness Texture（厚度贴图） | 为模型表面每个 UV 位置预烘焙局部厚度的线性数据纹理；glTF 把数值放在 G 通道，并与 Thickness Factor 相乘。 | 几何退出表面无效或关闭 Geometric Thickness 时作为稳定回退。 | 已实现 |
+| Front/Back Surface Depth（前/后表面深度） | 从相机方向记录物体最先进入和最后离开的表面深度，两者差值可近似光穿过的几何距离。 | 两张 R32F 纹理用 `GL_MIN` / `GL_MAX` 聚合闭合玻璃的入口/退出深度。 | 已实现 |
 | Beer-Lambert Law | 光在介质中传播越远，被吸收越多；不同颜色可以有不同吸收。 | Shader 使用 `attenuationColor^(pathLength/attenuationDistance)` 计算玻璃透射率。 | 已实现 |
 | Attenuation（衰减/吸收） | 光穿过介质后亮度和颜色逐渐减少。 | glTF 材质的 Color / Distance 决定两组测试玻璃的青色和琥珀色体积。 | 已实现 |
 | Transmittance（透射率） | 光穿过一段介质后还剩下的比例，1 表示没有损失，0 表示完全吸收。 | Glass Debug View 可直接显示 Beer-Lambert 计算出的 RGB 透射率。 | 已实现 |

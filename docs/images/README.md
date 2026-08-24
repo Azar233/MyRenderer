@@ -31,3 +31,9 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
   and prism-face topology coverage.
 - `prism5_msaa1.png` / `prism5_msaa4.png`: fixed-camera edge-sampling pair.
 - `prism5_hero_exaggerated.png`: final portfolio Hero Shot.
+- `glass2b_geometric_thickness.png`: Glass-2B Thickness debug view using
+  front/back surface depth instead of a uniform material proxy.
+- `glass2b_uniform_fallback.png`: same camera and debug view with geometric
+  thickness disabled, preserving the material factor/texture fallback.
+- `glass2b_front_back_debug.png`: entry/exit depth validity view; green/yellow
+  pixels contain a valid positive depth span and magenta marks fallback regions.

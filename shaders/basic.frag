@@ -14,10 +14,16 @@ uniform samplerCube uEnvironmentMap;
 uniform sampler2D uShadowMap;
 uniform sampler2D uOpaqueColorTexture;
 uniform sampler2D uSceneDepthTexture;
+uniform sampler2D uThicknessTexture;
+uniform sampler2D uGlassFrontfaceDepthTexture;
+uniform sampler2D uGlassBackfaceDepthTexture;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform bool uHasNormalTexture;
 uniform bool uHasMetallicRoughnessTexture;
+uniform bool uHasThicknessTexture;
+uniform bool uHasGlassBackfaceData;
+uniform bool uGeometricThicknessEnabled;
 uniform bool uNormalMappingEnabled;
 uniform bool uPbrEnabled;
 uniform bool uIblEnabled;
@@ -89,11 +95,41 @@ float shadowVisibility(vec3 normal, vec3 lightDirection) {
     return visible / 9.0;
 }
 
+float estimateSurfaceNormalThickness(vec3 geometricNormal, vec3 viewDirection) {
+    if (uThicknessFactor <= 0.0) return 0.0;
+    float thicknessTextureValue = uHasThicknessTexture
+        ? texture(uThicknessTexture, vTexCoord0).g
+        : 1.0;
+    float bakedThickness = uThicknessFactor
+        * thicknessTextureValue
+        * uVolumeThicknessScale;
+    if (!uGeometricThicknessEnabled || !uHasGlassBackfaceData) {
+        return bakedThickness;
+    }
+
+    vec2 framebufferSize = vec2(textureSize(uGlassFrontfaceDepthTexture, 0));
+    vec2 screenUv = gl_FragCoord.xy / max(framebufferSize, vec2(1.0));
+    float frontfaceViewDepth = texture(uGlassFrontfaceDepthTexture, screenUv).r;
+    float backfaceViewDepth = texture(uGlassBackfaceDepthTexture, screenUv).r;
+    float viewDepthSpan = backfaceViewDepth - frontfaceViewDepth;
+    if (frontfaceViewDepth >= 1.0e19 || backfaceViewDepth <= 0.0
+        || viewDepthSpan <= 0.0001) {
+        return bakedThickness;
+    }
+
+    vec3 cameraRay = -viewDirection;
+    float cameraForwardProjection = abs((uView * vec4(cameraRay, 0.0)).z);
+    float viewRayThickness = viewDepthSpan / max(cameraForwardProjection, 0.05);
+    float normalProjection = abs(dot(cameraRay, normalize(geometricNormal)));
+    return max(viewRayThickness * normalProjection * uVolumeThicknessScale, 0.0);
+}
+
 vec3 sampleTransmittedRadiance(
     vec3 normal,
     vec3 viewDirection,
     float ior,
     float roughness,
+    float surfaceNormalThickness,
     out bool totalInternalReflection,
     out bool screenSpaceHit,
     out vec2 refractedUv,
@@ -118,10 +154,9 @@ vec3 sampleTransmittedRadiance(
         ).rgb * uEnvironmentIntensity;
     }
 
-    float surfaceThickness = max(uThicknessFactor * uVolumeThicknessScale, 0.0);
-    if (surfaceThickness > 0.0) {
+    if (surfaceNormalThickness > 0.0) {
         float normalDistance = max(abs(dot(refractedDirection, refractionNormal)), 0.15);
-        volumePathLength = surfaceThickness / normalDistance;
+        volumePathLength = surfaceNormalThickness / normalDistance;
     }
 
     int stepCount = clamp(uRefractionSteps, 4, 32);
@@ -129,8 +164,9 @@ vec3 sampleTransmittedRadiance(
     for (int stepIndex = 1; stepIndex <= 32; ++stepIndex) {
         if (stepIndex > stepCount) break;
         float rayProgress = float(stepIndex) / float(stepCount);
+        float traceDistance = max(uRefractionScale, volumePathLength);
         vec3 samplePosition = vWorldPosition
-            + refractedDirection * uRefractionScale * rayProgress;
+            + refractedDirection * traceDistance * rayProgress;
         vec4 refractedClip = uProjection * uView * vec4(samplePosition, 1.0);
         if (refractedClip.w <= 0.0) break;
 
@@ -168,9 +204,24 @@ vec3 sampleTransmittedRadiance(
         ).rgb;
     }
 
+    vec3 environmentDirection = refractedDirection;
+    if (uGeometricThicknessEnabled && uHasGlassBackfaceData
+        && surfaceNormalThickness > 0.0) {
+        // The depth pass provides the exit distance but not an exit normal.
+        // A locally parallel exit surface is the stable raster approximation;
+        // curved/concave glass falls back gracefully but remains approximate.
+        vec3 exitIncidentNormal = refractionNormal;
+        vec3 exitedDirection = refract(refractedDirection, exitIncidentNormal, ior);
+        if (dot(exitedDirection, exitedDirection) > 0.000001) {
+            environmentDirection = normalize(exitedDirection);
+        } else {
+            totalInternalReflection = true;
+            environmentDirection = reflect(refractedDirection, exitIncidentNormal);
+        }
+    }
     return textureLod(
         uEnvironmentMap,
-        refractedDirection,
+        environmentDirection,
         roughness * uEnvironmentMaxMip
     ).rgb * uEnvironmentIntensity;
 }
@@ -258,6 +309,21 @@ void main() {
         ? clamp(uTransmissionFactor * (1.0 - metallic), 0.0, 1.0)
         : 0.0;
     if (transmission > 0.0) {
+        if (uHasGlassBackfaceData) {
+            vec2 framebufferSize = vec2(textureSize(uGlassFrontfaceDepthTexture, 0));
+            vec2 screenUv = gl_FragCoord.xy / max(framebufferSize, vec2(1.0));
+            float nearestViewDepth = texture(uGlassFrontfaceDepthTexture, screenUv).r;
+            float fragmentViewDepth = -(uView * vec4(vWorldPosition, 1.0)).z;
+            float depthTolerance = max(nearestViewDepth * 0.0002, 0.0005);
+            if (nearestViewDepth < 1.0e19
+                && fragmentViewDepth > nearestViewDepth + depthTolerance) {
+                discard;
+            }
+        }
+        float surfaceNormalThickness = estimateSurfaceNormalThickness(
+            normalize(vWorldNormal),
+            viewDirection
+        );
         bool totalInternalReflection = false;
         bool screenSpaceHit = false;
         vec2 refractedUv = vec2(-1.0);
@@ -267,6 +333,7 @@ void main() {
             viewDirection,
             ior,
             roughness,
+            surfaceNormalThickness,
             totalInternalReflection,
             screenSpaceHit,
             refractedUv,
@@ -291,6 +358,7 @@ void main() {
                 viewDirection,
                 channelIors.r,
                 roughness,
+                surfaceNormalThickness,
                 redTir,
                 redHit,
                 redUv,
@@ -305,6 +373,7 @@ void main() {
                 viewDirection,
                 channelIors.b,
                 roughness,
+                surfaceNormalThickness,
                 blueTir,
                 blueHit,
                 blueUv,
@@ -371,6 +440,17 @@ void main() {
         }
         if (uGlassDebugView == 7) {
             fragmentColor = vec4(transmittedRadiance, 1.0);
+            return;
+        }
+        if (uGlassDebugView == 8) {
+            vec2 framebufferSize = vec2(textureSize(uGlassFrontfaceDepthTexture, 0));
+            vec2 screenUv = gl_FragCoord.xy / max(framebufferSize, vec2(1.0));
+            float frontfaceViewDepth = texture(uGlassFrontfaceDepthTexture, screenUv).r;
+            float backfaceViewDepth = texture(uGlassBackfaceDepthTexture, screenUv).r;
+            float depthSpan = max(backfaceViewDepth - frontfaceViewDepth, 0.0);
+            fragmentColor = depthSpan > 0.0001
+                ? vec4(1.0 - exp(-depthSpan), 1.0, 0.0, 1.0)
+                : vec4(1.0, 0.0, 1.0, 1.0);
             return;
         }
         fragmentColor = vec4(

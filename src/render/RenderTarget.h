@@ -15,6 +15,8 @@ public:
     void resize(int width, int height, int samples);
     void bindOpaqueScene() const;
     void resolveOpaqueScene() const;
+    void bindGlassFrontfaceThickness() const;
+    void bindGlassBackfaceThickness() const;
     void bindRefractiveScene() const;
     void bindHdrSceneForOverlay() const;
     void bindFinal() const;
@@ -26,6 +28,8 @@ public:
     unsigned int opaqueColorTexture() const { return opaqueColorTexture_; }
     unsigned int hdrColorTexture() const { return hdrColorTexture_; }
     unsigned int sceneDepthTexture() const { return sceneDepthTexture_; }
+    unsigned int glassFrontfaceDepthTexture() const { return glassFrontfaceDepthTexture_; }
+    unsigned int glassBackfaceDepthTexture() const { return glassBackfaceDepthTexture_; }
     int width() const { return width_; }
     int height() const { return height_; }
     int samples() const { return samples_; }
@@ -35,6 +39,8 @@ public:
 private:
     unsigned int opaqueFramebuffer_{0};
     unsigned int sceneFramebuffer_{0};
+    unsigned int glassFrontThicknessFramebuffer_{0};
+    unsigned int glassThicknessFramebuffer_{0};
     unsigned int finalFramebuffer_{0};
     unsigned int multisampleFramebuffer_{0};
     unsigned int multisampleColor_{0};
@@ -43,6 +49,8 @@ private:
     unsigned int opaqueColorTexture_{0};
     unsigned int hdrColorTexture_{0};
     unsigned int sceneDepthTexture_{0};
+    unsigned int glassFrontfaceDepthTexture_{0};
+    unsigned int glassBackfaceDepthTexture_{0};
     unsigned int finalColorTexture_{0};
     int width_{0};
     int height_{0};
