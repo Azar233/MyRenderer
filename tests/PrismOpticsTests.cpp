@@ -284,6 +284,43 @@ int main() {
             "the incident ribbon should receive the selected white point"
         );
 
+        glm::vec2 previousCenterDirection(0.0f);
+        float separationOrientation = 0.0f;
+        for (int step = 0; step <= 20; ++step) {
+            PrismDemoParameters sweep = prismOpticalPresetParameters(
+                PrismOpticalPreset::CrownGlass
+            );
+            sweep.beamAngleDegrees = 2.0f + 0.5f * static_cast<float>(step);
+            const PrismDemoSolution solution = solvePrismDemo(sweep);
+            require(solution.valid, "the documented beam-angle sweep should remain traceable");
+            const PrismOpticalPath& violetPath = solution.spectrum.samples.front().path;
+            const PrismOpticalPath& redPath = solution.spectrum.samples.back().path;
+            require(violetPath.valid && redPath.valid, "spectrum endpoints should survive angle changes");
+            const float orientation = violetPath.exitDirection.x * redPath.exitDirection.y
+                - violetPath.exitDirection.y * redPath.exitDirection.x;
+            if (std::abs(orientation) > 1.0e-5f) {
+                if (separationOrientation == 0.0f) separationOrientation = orientation;
+                require(
+                    orientation * separationOrientation > 0.0f,
+                    "red/violet separation order should not flip during the angle sweep"
+                );
+            }
+            const glm::vec2 centerDirection = solution.spectrum.samples[
+                solution.spectrum.samples.size() / 2U
+            ].path.exitDirection;
+            if (step > 0) {
+                const float stepDifference = angularDifference(
+                    previousCenterDirection,
+                    centerDirection
+                );
+                require(
+                    stepDifference < 0.08f,
+                    "adjacent beam-angle steps should change continuously without path jumps"
+                );
+            }
+            previousCenterDirection = centerDirection;
+        }
+
         std::cout << "Prism optics tests passed\n";
         return 0;
     } catch (const std::exception& error) {

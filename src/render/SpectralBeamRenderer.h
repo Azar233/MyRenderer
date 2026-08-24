@@ -34,9 +34,11 @@ public:
         float bloomContribution,
         const glm::vec3& incidentWhitePoint
     ) const;
+    std::size_t vertexBufferBytes() const { return vertexBufferBytes_; }
 
 private:
     std::unique_ptr<Shader> shader_;
     unsigned int vao_{0};
     unsigned int vbo_{0};
+    mutable std::size_t vertexBufferBytes_{0};
 };

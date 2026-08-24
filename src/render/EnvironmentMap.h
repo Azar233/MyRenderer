@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 
@@ -21,10 +22,12 @@ public:
     void bind(unsigned int unit) const;
     void draw(const glm::mat4& inverseViewProjection, const glm::vec3& cameraPosition, float intensity) const;
     int maximumMipLevel() const { return maximumMipLevel_; }
+    std::size_t estimatedBytes() const;
 
 private:
     std::unique_ptr<Shader> shader_;
     unsigned int texture_{0};
     unsigned int vertexArray_{0};
     int maximumMipLevel_{0};
+    int faceSize_{64};
 };

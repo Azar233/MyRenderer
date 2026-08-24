@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 
@@ -28,6 +29,7 @@ public:
     PostProcessor& operator=(const PostProcessor&) = delete;
 
     void process(RenderTarget& target, const PostProcessSettings& settings);
+    std::size_t estimatedBytes() const;
 
 private:
     void resize(int width, int height);

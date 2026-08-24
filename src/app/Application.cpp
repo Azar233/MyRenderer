@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 
@@ -64,6 +66,15 @@ const char* diagnosticSeverityName(ModelDiagnosticSeverity severity) {
     return "Unknown";
 }
 
+double percentile(std::vector<double> values, double fraction) {
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    const std::size_t index = static_cast<std::size_t>(std::ceil(
+        std::clamp(fraction, 0.0, 1.0) * static_cast<double>(values.size())
+    ));
+    return values[std::min(index > 0U ? index - 1U : 0U, values.size() - 1U)];
+}
+
 ModelData makeGroundPlaneData() {
     constexpr float halfExtent = 4.0f;
     MeshData mesh;
@@ -106,6 +117,43 @@ Application::~Application() {
 }
 
 int Application::run(const std::filesystem::path& initialModel) {
+    benchmarkMode_ = std::getenv("MYRENDERER_BENCHMARK_FRAMES") != nullptr
+        || std::getenv("MYRENDERER_BENCHMARK_OUTPUT") != nullptr;
+    if (benchmarkMode_) {
+        vsync_ = false;
+        if (const char* value = std::getenv("MYRENDERER_BENCHMARK_FRAMES")) {
+            benchmarkMeasurementFrames_ = std::max(std::atoi(value), 30);
+        }
+        if (const char* value = std::getenv("MYRENDERER_BENCHMARK_WARMUP")) {
+            benchmarkWarmupFrames_ = std::max(std::atoi(value), 4);
+        }
+        benchmarkOutputPath_ = std::getenv("MYRENDERER_BENCHMARK_OUTPUT") == nullptr
+            ? std::filesystem::absolute("prism-benchmark.json")
+            : std::filesystem::absolute(std::getenv("MYRENDERER_BENCHMARK_OUTPUT"));
+    }
+    if (const char* value = std::getenv("MYRENDERER_PRISM_REEL_DIR")) {
+        prismReelMode_ = true;
+        vsync_ = false;
+        prismReelFramesDirectory_ = std::filesystem::absolute(value).lexically_normal();
+        std::filesystem::create_directories(prismReelFramesDirectory_);
+        if (const char* frameCount = std::getenv("MYRENDERER_PRISM_REEL_FRAMES")) {
+            prismReelFrameCount_ = std::clamp(std::atoi(frameCount), 24, 1440);
+        }
+    }
+    if (const char* value = std::getenv("MYRENDERER_RENDER_WIDTH")) {
+        renderWidthOverride_ = std::clamp(std::atoi(value), 64, 7680);
+    } else if (benchmarkMode_) {
+        renderWidthOverride_ = 1920;
+    } else if (prismReelMode_) {
+        renderWidthOverride_ = 1280;
+    }
+    if (const char* value = std::getenv("MYRENDERER_RENDER_HEIGHT")) {
+        renderHeightOverride_ = std::clamp(std::atoi(value), 64, 4320);
+    } else if (benchmarkMode_) {
+        renderHeightOverride_ = 1080;
+    } else if (prismReelMode_) {
+        renderHeightOverride_ = 720;
+    }
     initializeWindow();
     initializeGui();
     initializeRenderer();
@@ -140,6 +188,7 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_PRISM_DEMO")) {
         prismDemoEnabled_ = std::atoi(value) != 0;
     }
+    if (prismReelMode_) prismDemoEnabled_ = true;
     if (prismDemoEnabled_) {
         activatePrismDemoPreset(false);
     }
@@ -195,6 +244,10 @@ int Application::run(const std::filesystem::path& initialModel) {
         if (autoRotate_) {
             modelRotationDegrees_.y = std::fmod(modelRotationDegrees_.y + 25.0f * deltaTime, 360.0f);
         }
+        if (prismReelMode_ && model_ != nullptr && !pendingModelImport_.has_value()
+            && prismReelWarmupFrames_ == 0) {
+            updatePrismReelFrame();
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -227,6 +280,29 @@ int Application::run(const std::filesystem::path& initialModel) {
         cpuFrameTimeMilliseconds_ = cpuFrameTimeMilliseconds_ > 0.0
             ? cpuFrameTimeMilliseconds_ * 0.9 + measuredCpuTime * 0.1
             : measuredCpuTime;
+        if (benchmarkMode_ && model_ != nullptr && !pendingModelImport_.has_value()) {
+            ++benchmarkRenderedFrames_;
+            if (benchmarkRenderedFrames_ > benchmarkWarmupFrames_) {
+                benchmarkCpuFrameTimes_.push_back(measuredCpuTime);
+                if (renderer_->gpuFrameMeasurementSerial() != lastBenchmarkGpuFrameSerial_) {
+                    lastBenchmarkGpuFrameSerial_ = renderer_->gpuFrameMeasurementSerial();
+                    benchmarkGpuFrameTimes_.push_back(
+                        renderer_->latestGpuFrameMeasurementMilliseconds()
+                    );
+                }
+                if (renderer_->prismBeamMeasurementSerial() != lastBenchmarkBeamSerial_) {
+                    lastBenchmarkBeamSerial_ = renderer_->prismBeamMeasurementSerial();
+                    benchmarkBeamGpuTimes_.push_back(
+                        renderer_->latestPrismBeamMeasurementMilliseconds()
+                    );
+                }
+            }
+            if (benchmarkRenderedFrames_
+                >= benchmarkWarmupFrames_ + benchmarkMeasurementFrames_) {
+                writePrismBenchmarkReport();
+                glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            }
+        }
         if (smokeTestFrames > 0 && !pendingModelImport_.has_value() && --smokeTestFrames == 0) {
             glfwSetWindowShouldClose(window_, GLFW_TRUE);
         }
@@ -250,7 +326,7 @@ void Application::initializeWindow() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 0);
-    if (std::getenv("MYRENDERER_SMOKE_TEST") != nullptr) {
+    if (std::getenv("MYRENDERER_SMOKE_TEST") != nullptr || benchmarkMode_ || prismReelMode_) {
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     }
 #ifndef NDEBUG
@@ -878,6 +954,9 @@ void Application::drawInspectorPanel() {
             } else {
                 ImGui::TextDisabled("GPU viewport: collecting...");
             }
+            if (renderer_->hasPrismBeamGpuTime()) {
+                ImGui::Text("GPU beam pass: %.3f ms", renderer_->prismBeamGpuTimeMilliseconds());
+            }
             ImGui::Text("Draw calls: %zu", renderer_->drawCallCount());
             ImGui::Text("Active passes: %zu", renderer_->activePassNames().size());
             for (const auto& passName : renderer_->activePassNames()) {
@@ -887,6 +966,10 @@ void Application::drawInspectorPanel() {
             ImGui::Text(
                 "Texture memory: %.2f MiB",
                 static_cast<double>(loadedTextureMemoryBytes_) / (1024.0 * 1024.0)
+            );
+            ImGui::Text(
+                "Render memory: %.2f MiB",
+                static_cast<double>(renderer_->estimatedRenderMemoryBytes()) / (1024.0 * 1024.0)
             );
             if (lastLoadTotalMilliseconds_ > 0.0) {
                 ImGui::TextDisabled(
@@ -938,8 +1021,12 @@ void Application::drawViewportPanel() {
     ImGui::SetCursorPosY(55.0f);
 
     const ImVec2 available = ImGui::GetContentRegionAvail();
-    const int width = std::max(static_cast<int>(available.x), 1);
-    const int height = std::max(static_cast<int>(available.y), 1);
+    const int width = renderWidthOverride_ > 0
+        ? renderWidthOverride_
+        : std::max(static_cast<int>(available.x), 1);
+    const int height = renderHeightOverride_ > 0
+        ? renderHeightOverride_
+        : std::max(static_cast<int>(available.y), 1);
 
     const glm::mat4 normalization =
         glm::scale(glm::mat4(1.0f), glm::vec3(modelNormalizationScale_))
@@ -952,7 +1039,7 @@ void Application::drawViewportPanel() {
     modelMatrix *= normalization;
 
     std::vector<RenderItem> renderItems;
-    if (model_ != nullptr) {
+    if (model_ != nullptr && (!prismDemoEnabled_ || prismModelVisible_)) {
         renderItems.push_back(RenderItem{
             model_.get(),
             modelMatrix,
@@ -995,6 +1082,24 @@ void Application::drawViewportPanel() {
         });
     }
     renderer_->render(renderItems, camera_, rendererSettings_, width, height);
+
+    if (prismReelMode_ && model_ != nullptr && !pendingModelImport_.has_value()) {
+        if (prismReelWarmupFrames_ > 0) {
+            --prismReelWarmupFrames_;
+        } else {
+            char filename[32]{};
+            std::snprintf(filename, sizeof(filename), "frame_%04d.png", prismReelFrameIndex_);
+            std::string reelError;
+            if (!renderer_->saveScreenshot(prismReelFramesDirectory_ / filename, reelError)) {
+                std::cerr << "Prism reel frame failed: " << reelError << '\n';
+                glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            } else if (++prismReelFrameIndex_ >= prismReelFrameCount_) {
+                std::cout << "Saved " << prismReelFrameIndex_
+                          << " Prism reel frames to " << prismReelFramesDirectory_ << '\n';
+                glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            }
+        }
+    }
 
     if (!pendingScreenshotPath_.empty() && model_ != nullptr && !pendingModelImport_.has_value()
         && pendingScreenshotWarmupFrames_ > 0) {
@@ -1443,6 +1548,9 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     rendererSettings_.prismBeamEdgeSoftness = 0.72f;
     rendererSettings_.prismBeamBloomContribution = 0.35f;
     rendererSettings_.showPrismOpticalPathDebug = false;
+    if (const char* value = std::getenv("MYRENDERER_MSAA")) {
+        rendererSettings_.msaaSamples = std::atoi(value) <= 1 ? 1 : 4;
+    }
     if (const char* value = std::getenv("MYRENDERER_PRISM_PRESET")) {
         const int requestedPreset = std::clamp(std::atoi(value), 0, 3);
         prismOpticalPreset_ = static_cast<PrismOpticalPreset>(requestedPreset);
@@ -1524,6 +1632,9 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     if (const char* value = std::getenv("MYRENDERER_PRISM_DEBUG")) {
         rendererSettings_.showPrismOpticalPathDebug = std::atoi(value) != 0;
     }
+    if (const char* value = std::getenv("MYRENDERER_PRISM_SHOW_MODEL")) {
+        prismModelVisible_ = std::atoi(value) != 0;
+    }
     updatePrismDemoOptics();
     restorePrismHeroShot();
 
@@ -1550,4 +1661,92 @@ void Application::applyPrismOpticalPreset(PrismOpticalPreset preset) {
 
 void Application::restorePrismHeroShot() {
     camera_.setOrbitPose(glm::vec3(0.0f), 0.0f, 0.0f, 4.8f, 35.0f);
+}
+
+void Application::writePrismBenchmarkReport() {
+    if (benchmarkOutputPath_.empty() || renderer_ == nullptr) return;
+
+    std::vector<double> solveTimes;
+    solveTimes.reserve(256U);
+    std::size_t solveChecksum = 0U;
+    for (int iteration = 0; iteration < 256; ++iteration) {
+        const auto startedAt = std::chrono::steady_clock::now();
+        const PrismDemoSolution solution = solvePrismDemo(prismParameters_);
+        const auto finishedAt = std::chrono::steady_clock::now();
+        solveTimes.push_back(std::chrono::duration<double, std::milli>(
+            finishedAt - startedAt
+        ).count());
+        solveChecksum += solution.spectrum.samples.size();
+    }
+
+    if (!benchmarkOutputPath_.parent_path().empty()) {
+        std::filesystem::create_directories(benchmarkOutputPath_.parent_path());
+    }
+    std::ofstream report(benchmarkOutputPath_);
+    if (!report) {
+        std::cerr << "Cannot write benchmark report: " << benchmarkOutputPath_ << '\n';
+        return;
+    }
+    const std::size_t geometryMemoryBytes = loadedVertexCount_ * sizeof(Vertex)
+        + loadedTriangleCount_ * 3U * sizeof(std::uint32_t);
+    report << std::fixed << std::setprecision(6)
+           << "{\n"
+           << "  \"schemaVersion\": 1,\n"
+           << "  \"gpu\": " << std::quoted(gpuDescription_) << ",\n"
+           << "  \"width\": " << renderer_->renderWidth() << ",\n"
+           << "  \"height\": " << renderer_->renderHeight() << ",\n"
+           << "  \"msaaSamples\": " << renderer_->activeMsaaSamples() << ",\n"
+           << "  \"spectralSamples\": " << rendererSettings_.prismSpectrum.samples.size() << ",\n"
+           << "  \"drawCalls\": " << renderer_->drawCallCount() << ",\n"
+           << "  \"cpuOpticsP50Ms\": " << percentile(solveTimes, 0.50) << ",\n"
+           << "  \"cpuOpticsP95Ms\": " << percentile(solveTimes, 0.95) << ",\n"
+           << "  \"cpuFrameP50Ms\": " << percentile(benchmarkCpuFrameTimes_, 0.50) << ",\n"
+           << "  \"cpuFrameP95Ms\": " << percentile(benchmarkCpuFrameTimes_, 0.95) << ",\n"
+           << "  \"gpuFrameP50Ms\": " << percentile(benchmarkGpuFrameTimes_, 0.50) << ",\n"
+           << "  \"gpuFrameP95Ms\": " << percentile(benchmarkGpuFrameTimes_, 0.95) << ",\n"
+           << "  \"gpuBeamP50Ms\": " << percentile(benchmarkBeamGpuTimes_, 0.50) << ",\n"
+           << "  \"gpuBeamP95Ms\": " << percentile(benchmarkBeamGpuTimes_, 0.95) << ",\n"
+           << "  \"cpuFrameMeasurements\": " << benchmarkCpuFrameTimes_.size() << ",\n"
+           << "  \"gpuFrameMeasurements\": " << benchmarkGpuFrameTimes_.size() << ",\n"
+           << "  \"gpuBeamMeasurements\": " << benchmarkBeamGpuTimes_.size() << ",\n"
+           << "  \"renderMemoryBytes\": " << renderer_->estimatedRenderMemoryBytes() << ",\n"
+           << "  \"textureMemoryBytes\": " << loadedTextureMemoryBytes_ << ",\n"
+           << "  \"geometryMemoryBytes\": " << geometryMemoryBytes << ",\n"
+           << "  \"totalMeasuredMemoryBytes\": "
+           << renderer_->estimatedRenderMemoryBytes()
+                + loadedTextureMemoryBytes_ + geometryMemoryBytes << ",\n"
+           << "  \"solveChecksum\": " << solveChecksum << "\n"
+           << "}\n";
+    std::cout << "Saved Prism benchmark: " << benchmarkOutputPath_ << '\n';
+}
+
+void Application::updatePrismReelFrame() {
+    const float t = prismReelFrameCount_ > 1
+        ? static_cast<float>(prismReelFrameIndex_)
+            / static_cast<float>(prismReelFrameCount_ - 1)
+        : 1.0f;
+    prismParameters_ = prismOpticalPresetParameters(PrismOpticalPreset::CrownGlass);
+    prismOpticalPreset_ = PrismOpticalPreset::CrownGlass;
+    rendererSettings_.showPrismOpticalPathDebug = false;
+    rendererSettings_.showPrismIncidentBeam = true;
+
+    if (t < 0.20f) {
+        prismParameters_.dispersion = 0.0f;
+    } else if (t < 0.55f) {
+        const float local = std::clamp((t - 0.20f) / 0.35f, 0.0f, 1.0f);
+        const float smooth = local * local * (3.0f - 2.0f * local);
+        prismParameters_.dispersion = 0.55f * smooth;
+    } else if (t < 0.80f) {
+        const float local = std::clamp((t - 0.55f) / 0.25f, 0.0f, 1.0f);
+        prismParameters_.dispersion = 0.55f;
+        prismParameters_.beamAngleDegrees = 2.0f + 10.0f * local;
+    } else {
+        const float local = std::clamp((t - 0.80f) / 0.20f, 0.0f, 1.0f);
+        prismOpticalPreset_ = PrismOpticalPreset::ExaggeratedCover;
+        prismParameters_ = prismOpticalPresetParameters(prismOpticalPreset_);
+        prismParameters_.beamAngleDegrees = 12.0f + (7.65f - 12.0f) * local;
+        rendererSettings_.prismBeamBloomContribution = 0.35f + 0.30f * local;
+    }
+    updatePrismDemoOptics();
+    restorePrismHeroShot();
 }

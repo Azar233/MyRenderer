@@ -224,6 +224,49 @@ if(BUILD_TESTING)
         target_compile_options(MyRendererPrismOpticsTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME prism-optics COMMAND MyRendererPrismOpticsTests)
+
+    add_executable(MyRendererImageComparison tests/ImageComparison.cpp)
+    target_link_libraries(MyRendererImageComparison PRIVATE zlibstatic)
+    if(MSVC)
+        target_compile_options(MyRendererImageComparison PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererImageComparison PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_custom_target(prism5-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/prism5-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/Prism5VisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing and comparing the Prism-5 visual regression matrix"
+    )
+
+    add_custom_target(prism5-reel-frames
+        COMMAND ${CMAKE_COMMAND} -E env
+                MYRENDERER_PRISM_REEL_DIR=${CMAKE_CURRENT_BINARY_DIR}/prism5-reel-frames
+                MYRENDERER_PRISM_REEL_FRAMES=360
+                MYRENDERER_RENDER_WIDTH=1280
+                MYRENDERER_RENDER_HEIGHT=720
+                $<TARGET_FILE:MyRenderer>
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing 15 seconds of deterministic Prism-5 reel frames at 24 fps"
+    )
+
+    add_custom_target(prism5-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/prism5-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/Prism5Benchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Benchmarking Prism-5 at 1920x1080, 4x MSAA, and four spectral tiers"
+    )
 endif()
 
 add_custom_target(gpu-smoke

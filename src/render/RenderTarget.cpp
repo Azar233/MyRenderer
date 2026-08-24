@@ -108,6 +108,28 @@ RenderTarget::~RenderTarget() {
     destroy();
 }
 
+std::size_t RenderTarget::estimatedBytes() const {
+    if (width_ <= 0 || height_ <= 0) return 0U;
+    const std::size_t pixels = static_cast<std::size_t>(width_)
+        * static_cast<std::size_t>(height_);
+    std::size_t opaqueMipPixels = 0U;
+    int mipWidth = width_;
+    int mipHeight = height_;
+    for (int level = 0; level < opaqueColorMipLevels_; ++level) {
+        opaqueMipPixels += static_cast<std::size_t>(mipWidth)
+            * static_cast<std::size_t>(mipHeight);
+        mipWidth = std::max(mipWidth / 2, 1);
+        mipHeight = std::max(mipHeight / 2, 1);
+    }
+    // Opaque RGBA16F mip chain + resolved depth/stencil + scene RGBA16F
+    // + refractive depth/stencil + final RGBA8.
+    std::size_t bytes = opaqueMipPixels * 8U + pixels * (4U + 8U + 4U + 4U);
+    if (samples_ > 1) {
+        bytes += pixels * static_cast<std::size_t>(samples_) * (8U + 4U);
+    }
+    return bytes;
+}
+
 void RenderTarget::resize(int width, int height, int samples) {
     width = std::max(width, 1);
     height = std::max(height, 1);

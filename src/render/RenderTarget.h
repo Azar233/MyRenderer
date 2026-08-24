@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstddef>
 #include <string>
 
 class RenderTarget {
@@ -28,6 +29,7 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
     int samples() const { return samples_; }
+    std::size_t estimatedBytes() const;
     int opaqueColorMaximumMipLevel() const { return opaqueColorMipLevels_ - 1; }
 
 private:

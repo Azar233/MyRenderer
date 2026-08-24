@@ -55,10 +55,14 @@ Renderer::Renderer(
     renderTarget_(std::make_unique<RenderTarget>()),
     textureCache_(std::make_unique<TextureCache>()) {
     glGenQueries(static_cast<GLsizei>(timingQueries_.size()), timingQueries_.data());
+    glGenQueries(static_cast<GLsizei>(beamStartQueries_.size()), beamStartQueries_.data());
+    glGenQueries(static_cast<GLsizei>(beamEndQueries_.size()), beamEndQueries_.data());
 }
 
 Renderer::~Renderer() {
     glDeleteQueries(static_cast<GLsizei>(timingQueries_.size()), timingQueries_.data());
+    glDeleteQueries(static_cast<GLsizei>(beamStartQueries_.size()), beamStartQueries_.data());
+    glDeleteQueries(static_cast<GLsizei>(beamEndQueries_.size()), beamEndQueries_.data());
 }
 
 void Renderer::render(
@@ -82,11 +86,36 @@ void Renderer::render(
             GLuint64 elapsedNanoseconds = 0U;
             glGetQueryObjectui64v(timingQueries_[index], GL_QUERY_RESULT, &elapsedNanoseconds);
             const double measured = static_cast<double>(elapsedNanoseconds) / 1'000'000.0;
+            latestGpuFrameMeasurementMilliseconds_ = measured;
             gpuFrameTimeMilliseconds_ = hasGpuFrameTime_
                 ? gpuFrameTimeMilliseconds_ * 0.9 + measured * 0.1
                 : measured;
             hasGpuFrameTime_ = true;
+            ++gpuFrameMeasurementSerial_;
             timingQueryPending_[index] = false;
+        }
+    }
+    for (std::size_t index = 0; index < beamTimingPending_.size(); ++index) {
+        if (!beamTimingPending_[index]) continue;
+        GLint startAvailable = GL_FALSE;
+        GLint endAvailable = GL_FALSE;
+        glGetQueryObjectiv(beamStartQueries_[index], GL_QUERY_RESULT_AVAILABLE, &startAvailable);
+        glGetQueryObjectiv(beamEndQueries_[index], GL_QUERY_RESULT_AVAILABLE, &endAvailable);
+        if (startAvailable == GL_TRUE && endAvailable == GL_TRUE) {
+            GLuint64 startTimestamp = 0U;
+            GLuint64 endTimestamp = 0U;
+            glGetQueryObjectui64v(beamStartQueries_[index], GL_QUERY_RESULT, &startTimestamp);
+            glGetQueryObjectui64v(beamEndQueries_[index], GL_QUERY_RESULT, &endTimestamp);
+            const double measured = endTimestamp >= startTimestamp
+                ? static_cast<double>(endTimestamp - startTimestamp) / 1'000'000.0
+                : 0.0;
+            latestPrismBeamMeasurementMilliseconds_ = measured;
+            prismBeamGpuTimeMilliseconds_ = hasPrismBeamGpuTime_
+                ? prismBeamGpuTimeMilliseconds_ * 0.9 + measured * 0.1
+                : measured;
+            hasPrismBeamGpuTime_ = true;
+            ++prismBeamMeasurementSerial_;
+            beamTimingPending_[index] = false;
         }
     }
 
@@ -188,6 +217,17 @@ void Renderer::render(
     drawCallCount_ = 0U;
     const bool spectralBeamVisible = settings.showPrismIncidentBeam
         && settings.prismOpticalPathValid;
+    std::size_t beamTimingQuery = beamTimingPending_.size();
+    if (spectralBeamVisible) {
+        for (std::size_t offset = 0; offset < beamTimingPending_.size(); ++offset) {
+            const std::size_t candidate = (nextBeamTimingQuery_ + offset)
+                % beamTimingPending_.size();
+            if (!beamTimingPending_[candidate]) {
+                beamTimingQuery = candidate;
+                break;
+            }
+        }
+    }
     RenderPassSequence sequence;
     if (settings.shadowsEnabled && hasShadowCasters) {
         sequence.add("Shadow map", [&] {
@@ -274,6 +314,9 @@ void Renderer::render(
             glEnable(GL_BLEND);
             glBlendEquation(GL_FUNC_ADD);
             glBlendFunc(GL_ONE, GL_ONE);
+            if (beamTimingQuery < beamTimingPending_.size()) {
+                glQueryCounter(beamStartQueries_[beamTimingQuery], GL_TIMESTAMP);
+            }
             drawCallCount_ += spectralBeamRenderer_->draw(
                 settings.prismSpectrum,
                 camera.position(),
@@ -286,6 +329,11 @@ void Renderer::render(
                 settings.prismBeamBloomContribution,
                 settings.prismBeamWhitePoint
             );
+            if (beamTimingQuery < beamTimingPending_.size()) {
+                glQueryCounter(beamEndQueries_[beamTimingQuery], GL_TIMESTAMP);
+                beamTimingPending_[beamTimingQuery] = true;
+                nextBeamTimingQuery_ = (beamTimingQuery + 1U) % beamTimingPending_.size();
+            }
             glDisable(GL_BLEND);
             glDepthMask(GL_TRUE);
             renderTarget_->resolveOpaqueScene();
@@ -392,4 +440,20 @@ int Renderer::activeMsaaSamples() const {
 
 int Renderer::shadowResolution() const {
     return shadowMap_->resolution();
+}
+
+int Renderer::renderWidth() const {
+    return renderTarget_->width();
+}
+
+int Renderer::renderHeight() const {
+    return renderTarget_->height();
+}
+
+std::size_t Renderer::estimatedRenderMemoryBytes() const {
+    return renderTarget_->estimatedBytes()
+        + postProcessor_->estimatedBytes()
+        + environmentMap_->estimatedBytes()
+        + shadowMap_->estimatedBytes()
+        + spectralBeamRenderer_->vertexBufferBytes();
 }

@@ -125,6 +125,17 @@ Prism-4 在 Inspector 中提供实时 Beam Direction、IOR、Dispersion/Abbe、�
 cmake --build build-mingw --target gpu-smoke
 ```
 
+Prism-5 提供三组可重复的作品集验收目标：
+
+```powershell
+cmake --build build-release --target prism5-visual-regression
+cmake --build build-release --target prism5-benchmark
+cmake --build build-release --target prism5-reel-frames
+python tools/encode_prism5_reel.py build-release/prism5-reel-frames docs/media/prism5_demo_reel.mp4 --fps 24
+```
+
+视觉目标会重拍并比较 10 张 1920×1080 固定镜头图片；Benchmark 在关闭 VSync 后预热 60 帧、采样 180 帧，分别输出 7/15/21/31 光谱档位的 CPU/GPU P50/P95、Draw Call 与显存估算。参考结果见 `docs/prism5-validation.md`。
+
 ## 代码结构
 
 ```text

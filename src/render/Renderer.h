@@ -113,9 +113,18 @@ public:
     int activeMsaaSamples() const;
     bool hasGpuFrameTime() const { return hasGpuFrameTime_; }
     double gpuFrameTimeMilliseconds() const { return gpuFrameTimeMilliseconds_; }
+    double latestGpuFrameMeasurementMilliseconds() const { return latestGpuFrameMeasurementMilliseconds_; }
+    std::size_t gpuFrameMeasurementSerial() const { return gpuFrameMeasurementSerial_; }
+    bool hasPrismBeamGpuTime() const { return hasPrismBeamGpuTime_; }
+    double prismBeamGpuTimeMilliseconds() const { return prismBeamGpuTimeMilliseconds_; }
+    double latestPrismBeamMeasurementMilliseconds() const { return latestPrismBeamMeasurementMilliseconds_; }
+    std::size_t prismBeamMeasurementSerial() const { return prismBeamMeasurementSerial_; }
     std::size_t drawCallCount() const { return drawCallCount_; }
     const std::vector<std::string>& activePassNames() const { return activePassNames_; }
     int shadowResolution() const;
+    int renderWidth() const;
+    int renderHeight() const;
+    std::size_t estimatedRenderMemoryBytes() const;
     TextureCache& textureCache();
 
 private:
@@ -131,9 +140,19 @@ private:
     std::unique_ptr<TextureCache> textureCache_;
     std::array<unsigned int, 4> timingQueries_{};
     std::array<bool, 4> timingQueryPending_{};
+    std::array<unsigned int, 4> beamStartQueries_{};
+    std::array<unsigned int, 4> beamEndQueries_{};
+    std::array<bool, 4> beamTimingPending_{};
     std::size_t nextTimingQuery_{0};
+    std::size_t nextBeamTimingQuery_{0};
     double gpuFrameTimeMilliseconds_{0.0};
+    double prismBeamGpuTimeMilliseconds_{0.0};
+    double latestGpuFrameMeasurementMilliseconds_{0.0};
+    double latestPrismBeamMeasurementMilliseconds_{0.0};
+    std::size_t gpuFrameMeasurementSerial_{0};
+    std::size_t prismBeamMeasurementSerial_{0};
     std::size_t drawCallCount_{0};
     bool hasGpuFrameTime_{false};
+    bool hasPrismBeamGpuTime_{false};
     std::vector<std::string> activePassNames_;
 };

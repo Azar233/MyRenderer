@@ -24,6 +24,12 @@ PostProcessor::~PostProcessor() {
     if (vertexArray_ != 0U) glDeleteVertexArrays(1, &vertexArray_);
 }
 
+std::size_t PostProcessor::estimatedBytes() const {
+    if (width_ <= 0 || height_ <= 0) return 0U;
+    return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_)
+        * 8U * 2U;
+}
+
 void PostProcessor::resize(int width, int height) {
     if (width == width_ && height == height_) return;
     width_ = width;

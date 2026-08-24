@@ -1,6 +1,6 @@
 # Prism Spectrum 技术说明
 
-本文记录 MyRenderer 棱镜分光 Demo 的光学模型、工程边界和可重复运行方式。当前实现进度为 Prism-4，已经包含连续光谱求解、柔边 HDR 光束、实时参数控制、光学 Preset 与完整光路调试视图。
+本文记录 MyRenderer 棱镜分光 Demo 的光学模型、工程边界和可重复运行方式。当前 Prism-5 已完成：连续光谱求解、柔边 HDR 光束、实时参数控制、光学 Preset、光路调试、视觉回归、1080p Benchmark 与 Demo Reel 均已形成可重复证据。
 
 ## 1. 数据流
 
@@ -125,7 +125,15 @@ Prism-4 还支持 `MYRENDERER_PRISM_PRESET=0|1|2|3`、`MYRENDERER_PRISM_BEAM_ANG
 ## 8. 当前边界
 
 - 当前可见 Ribbon 是光路可视化，不是真实空气体积散射；干净空气中的光束从侧面通常不可见。
-- Ribbon 已解决 OpenGL Line 的宽度和柔边限制，但属于透明发光几何，极端相机角度仍需在 Prism-5 视觉回归中覆盖。
+- Ribbon 已解决 OpenGL Line 的宽度和柔边限制，但属于透明发光几何；Prism-5 已覆盖固定角度与 MSAA 回归，接近沿光束方向观察的退化视角仍属于已知边界。
 - White Point 当前使用 Kelvin 到线性 sRGB 的显示近似，不是黑体辐射谱的逐波长积分；作品集说明中需保持这一工程边界。
-- Optical Path Debug 是可读性优先的 Overlay，关闭后不进入最终作品集画面；Prism-5 再建立固定截图差异与性能验收。
+- Optical Path Debug 是可读性优先的 Overlay，关闭后不进入最终作品集画面；Prism-5 已用独立 TIR 基线保留该调试证据。
+
+## 9. Prism-5 验收入口
+
+- 完整视觉矩阵、性能表、显存统计、失败边界与复现命令：`docs/prism5-validation.md`。
+- 版本化基线：`docs/images/prism5_*.png`。
+- 原始性能 JSON：`docs/performance/prism5_samples_*.json`。
+- 15 秒作品集片段：`docs/media/prism5_demo_reel.mp4`。
+- 自动目标：`prism5-visual-regression`、`prism5-benchmark`、`prism5-reel-frames`。
 - CIE 解析函数是标准曲线的高质量近似，不是逐纳米查表；文档与代码均明确保留这一近似边界。

@@ -445,11 +445,13 @@ Shadow / Depth
 
 ##### Prism-5：验收与作品集证据
 
-- [ ] 视觉验收：Dispersion=0 时出射束保持白色或完全重合；开启后红到紫顺序稳定，旋转光束/棱镜时出射方向连续变化，没有屏幕空间粘连。
-- [ ] 建立固定相机视觉回归，覆盖 No Prism、No Dispersion、7-band、Continuous、TIR 与 1x/4x MSAA。
-- [ ] 在 1920×1080、4x MSAA 下分别记录 7/15/21/31 波长的 CPU 更新耗时、GPU Beam Pass 时间、Draw Call 和显存；若新增 Beam Pass 超过 2 ms，先分析 Fill-rate/Bloom/几何开销再优化。
-- [ ] 输出同机位的 `White Beam → Prism → Spectrum` 分阶段图、调试光路图和最终 Hero Shot；录制 15～30 秒参数变化片段作为 Demo Reel 的一个章节。
-- [~] `docs/prism-spectrum.md` 已记录 Prism-2 公式、数据流、物理近似、运行参数与 Khronos 映射；Prism-5 继续补完整 Pass 顺序、失败案例和性能数据。
+- [x] 视觉验收：Dispersion=0 时出射束保持白色或完全重合；开启后红到紫顺序稳定，旋转光束/棱镜时出射方向连续变化，没有屏幕空间粘连。
+- [x] 建立固定相机视觉回归，覆盖 No Prism、No Dispersion、7-band、Continuous、TIR 与 1x/4x MSAA。
+- [x] 在 1920×1080、4x MSAA 下分别记录 7/15/21/31 波长的 CPU 更新耗时、GPU Beam Pass 时间、Draw Call 和显存；若新增 Beam Pass 超过 2 ms，先分析 Fill-rate/Bloom/几何开销再优化。
+- [x] 输出同机位的 `White Beam → Prism → Spectrum` 分阶段图、调试光路图和最终 Hero Shot；录制 15～30 秒参数变化片段作为 Demo Reel 的一个章节。
+- [x] `docs/prism-spectrum.md` 与 `docs/prism5-validation.md` 已记录公式、完整 Pass 顺序、物理近似、运行参数、失败边界、视觉矩阵和性能数据。
+
+> Prism-5 完成（2026-08-24）：新增固定 RenderTarget 分辨率与无 VSync Benchmark 模式，使用 60 帧预热和 180 帧采样输出 JSON；Renderer 以独立 GPU Timestamp Query 测量 Beam Pass，并统计整帧、Draw Call 与 RenderTarget/Bloom/MSAA/Shadow/Cubemap/Beam/几何/纹理显存估算。在 RTX 4060 Laptop、1920×1080、4x MSAA 下，7/15/21/31 样本的 Beam P95 分别为 0.0205/0.0287/0.0317/0.0328 ms，均远低于 2 ms 阈值，31 样本整帧 GPU P95 为 2.8324 ms。新增 10 场景视觉回归目标和轻量 PNG MAE/Changed-pixel 比较器，覆盖 No Prism、No Dispersion、Continuous、Seven-band、TIR、角度、1x/4x MSAA 与最终 Hero Shot；同机重拍 10/10 为零差异。CPU 测试新增 2°～12° 连续角度扫描和红/紫顺序断言。生成 `White Beam → Prism → Spectrum` 1920×1080 分阶段图，以及 360 帧、24 fps、15 秒的 `docs/media/prism5_demo_reel.mp4`。原始数据和方法记录在 `docs/prism5-validation.md`；Prism Spectrum 专项至此完成，后续转入 Glass-3 彩色焦散与透射阴影。
 
 Prism Demo 验收：出射光谱必须由世界空间入射光经过两个棱镜界面求解得到，而不是固定在屏幕上的彩虹贴图；关闭色散时各波长光路重合，改变 IOR / Abbe / 入射角时结果符合预期；最终画面同时提供“物理连续光谱”和“七色美术模式”作为图形程序与 TA 两种叙事证据。
 

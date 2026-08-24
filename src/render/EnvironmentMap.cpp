@@ -42,7 +42,7 @@ EnvironmentMap::EnvironmentMap(
     const std::filesystem::path& vertexShaderPath,
     const std::filesystem::path& fragmentShaderPath
 ) : shader_(std::make_unique<Shader>(vertexShaderPath, fragmentShaderPath)) {
-    constexpr int size = 64;
+    const int size = faceSize_;
     maximumMipLevel_ = static_cast<int>(std::log2(size));
     glGenTextures(1, &texture_);
     glBindTexture(GL_TEXTURE_CUBE_MAP, texture_);
@@ -79,6 +79,16 @@ EnvironmentMap::EnvironmentMap(
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
     glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
     glGenVertexArrays(1, &vertexArray_);
+}
+
+std::size_t EnvironmentMap::estimatedBytes() const {
+    std::size_t pixels = 0U;
+    int size = faceSize_;
+    for (int level = 0; level <= maximumMipLevel_; ++level) {
+        pixels += static_cast<std::size_t>(size) * static_cast<std::size_t>(size) * 6U;
+        size = std::max(size / 2, 1);
+    }
+    return pixels * 6U; // RGB16F
 }
 
 EnvironmentMap::~EnvironmentMap() {

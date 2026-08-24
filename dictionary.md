@@ -224,25 +224,31 @@
 | 术语 | 通俗解释 | 在 MyRenderer 中的作用 | 状态 |
 | --- | --- | --- | --- |
 | KHR_debug | OpenGL 驱动提供的调试消息与对象标记扩展。 | Debug 构建可接收 API 错误和性能提示。 | 已实现 |
-| GPU Timer Query | 让 GPU 测量一段命令实际执行时间，避免只看 CPU 提交时间。 | 使用四槽 `GL_TIME_ELAPSED` Query 环降低阻塞。 | 已实现 |
+| GPU Timer Query | 让 GPU 测量一段命令实际执行时间，避免只看 CPU 提交时间。 | 整帧使用四槽 `GL_TIME_ELAPSED` Query 环；Prism-5 用成对 Timestamp Query 单独测 Beam Pass。 | 已实现 |
+| GPU Timestamp Query（GPU 时间戳查询） | 让 GPU 在命令流某一点写下自己的时钟值；两个时间戳相减可测量中间一小段 Pass。 | Beam Pass 的开始/结束各写一个时间戳，不与整帧计时互相嵌套。 | 已实现 |
 | CPU-bound | 帧率主要受 CPU、驱动提交或逻辑限制，GPU 还有空闲。 | Benchmark 与 Nsight 分析时需要先判断。 | 概念 |
 | GPU-bound | 帧率主要受 Shader、像素、带宽或 GPU 工作量限制。 | 高分辨率、玻璃色散和焦散可能增加 GPU 压力。 | 概念 |
 | GPU Capture | 把一帧的 Draw Call、资源和管线状态保存下来逐步检查。 | 计划使用 RenderDoc/Nsight 留下可复现证据。 | 计划 |
 | RenderDoc | 跨 API 帧调试工具，可查看事件、纹理、Buffer、Shader 输入输出。 | 作品集性能/正确性报告计划使用。 | 计划 |
 | Nsight Graphics | NVIDIA 的 GPU 调试、Trace 和 Shader Profiling 工具。 | 计划用于定位 GPU 瓶颈并记录优化前后数据。 | 计划 |
-| Benchmark（基准测试） | 在固定场景、参数和硬件下重复测量，便于比较改动。 | 计划加入预热、固定帧数、P50/P95 输出。 | 计划 |
-| P50 / P95 | 50%/95% 样本不超过的耗时；P95 更能反映偶发卡顿。 | 计划用于 CPU/GPU 帧时间报告。 | 计划 |
+| Benchmark（基准测试） | 在固定场景、参数和硬件下重复测量，便于比较改动。 | Prism-5 固定 1080p/4x MSAA，关闭 VSync，预热 60 帧并采样 180 帧。 | 已实现 |
+| Warm-up（预热） | 正式计时前先运行若干帧，让 Shader 变体、缓存、资源上传和驱动状态稳定。 | Prism-5 丢弃前 60 帧，避免首次运行成本污染 P50/P95。 | 已实现 |
+| P50 / P95 | 50%/95% 样本不超过的耗时；P50 表示典型水平，P95 更能反映较慢尾部。 | Benchmark JSON 同时保存 CPU Optics、CPU Frame、GPU Frame 和 GPU Beam 的两个分位数。 | 已实现 |
 | Smoke Test（冒烟测试） | 用最短流程确认程序能启动、加载和渲染，不保证所有细节正确。 | `gpu-smoke` 使用真实隐藏 OpenGL 窗口渲染 5 帧。 | 已实现 |
-| Regression Test（回归测试） | 验证新改动没有破坏此前正常功能。 | 资产导入 CTest 已实现；视觉回归仍在计划中。 | 部分实现 |
-| Visual Regression（视觉回归） | 固定场景输出图片并与基准图比较，发现渲染结果变化。 | 计划使用误差阈值和差异热图。 | 计划 |
+| Regression Test（回归测试） | 验证新改动没有破坏此前正常功能。 | CTest 覆盖资产、排序和光学；Prism-5 另有真实 GPU 视觉矩阵。 | 已实现 |
+| Visual Regression（视觉回归） | 固定场景输出图片并与基准图比较，发现渲染结果变化。 | Prism-5 自动重拍 10 个 1080p 场景并与版本化基线比较。 | 已实现 |
 | Baseline Image（基准图） | 在固定场景、镜头和参数下保存的参考画面，后续改动都与它比较。 | `docs/images/prism0_baseline.png` 记录色散光路接入前的 Prism-0 构图。 | 已建立 |
+| MAE（平均绝对误差） | 把对应像素通道的绝对差取平均；0 表示两张图完全相同，越大表示整体偏差越明显。 | PNG 比较器使用归一化 RGBA MAE，并结合 Changed-pixel Fraction 避免局部大变化被平均掩盖。 | 已实现 |
+| Changed-pixel Fraction（变化像素比例） | 统计有明显通道变化的像素占整张图多少。 | 任一通道差超过 8/255 就算变化像素；跨驱动默认阈值为 8%。 | 已实现 |
+| Deterministic Capture（确定性录制） | 固定镜头、参数时间线、帧数和输出分辨率，使每次录制可重复。 | Prism-5 输出 360 帧固定时间线，再编码为 15 秒 Demo Reel。 | 已实现 |
+| Demo Reel | 用短视频集中展示作品中最有代表性的视觉效果与技术变化。 | `prism5_demo_reel.mp4` 依次展示零色散、色散渐变、角度扫描和七色 Hero Shot。 | 已实现 |
 | SSIM | 比逐像素相等更关注结构相似度的图像比较指标。 | 计划用于容忍不同 GPU 的微小浮点差异。 | 计划 |
 | Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 已支持 Reflection、Refraction、IOR、Refracted UV、Thickness、Transmittance 与 RGB Dispersion；完整 GBuffer/材质视图仍在 P0 路线。 | 部分实现 |
 | Overlay Pass（叠加 Pass） | 在主体画面之后再绘制一层辅助内容，通常用于轮廓、Gizmo、调试线或 HUD。 | Optical Path Debug 在 Glass 之后、Tone Mapping 之前写入同一个 HDR Scene。 | 已实现 |
 | Camera Lock（镜头锁定） | 暂时禁止鼠标改变相机，避免录屏或回归截图因误操作改变机位。 | Prism-4 默认锁定 Hero Camera，取消勾选后恢复 Orbit 操作。 | 已实现 |
 | Hero Shot（主视觉镜头） | 专门为展示效果设计、参数固定且可重复恢复的代表性构图。 | Prism Demo 可一键恢复固定目标、方位、距离与 FOV。 | 已实现 |
 | Overdraw | 同一像素在一帧内被重复绘制多次，透明与粒子常导致高 Overdraw。 | TA/性能调试视图计划覆盖。 | 计划 |
-| GPU Memory / VRAM | GPU 用于纹理、Buffer 和 RenderTarget 的显存。 | 当前统计纹理估算值；完整 RenderTarget/Buffer 预算待补。 | 部分实现 |
+| GPU Memory / VRAM | GPU 用于纹理、Buffer 和 RenderTarget 的显存。 | Prism-5 统计 RenderTarget、Bloom、MSAA、Shadow、Cubemap、Beam、几何与纹理的可解释估算；不含驱动内部开销。 | 已实现（估算） |
 
 ## 11. 路线图中的现代渲染术语
 
@@ -328,4 +334,5 @@
 | UI、加载与主循环 | `src/app/Application.*` |
 | CPU 资产回归测试 | `tests/AssetImportTests.cpp` |
 | Prism 公式、数据流与近似边界 | `docs/prism-spectrum.md` |
+| Prism 视觉回归、性能与作品集证据 | `docs/prism5-validation.md`、`tests/ImageComparison.cpp`、`tools/Prism5*.cmake` |
 | 后续阶段与验收标准 | `todolist.md` |

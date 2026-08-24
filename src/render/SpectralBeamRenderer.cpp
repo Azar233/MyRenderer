@@ -91,6 +91,7 @@ std::size_t SpectralBeamRenderer::draw(
         incidentWhitePoint
     );
     if (mesh.vertices.empty()) {
+        vertexBufferBytes_ = 0U;
         return 0U;
     }
 
@@ -107,6 +108,7 @@ std::size_t SpectralBeamRenderer::draw(
         mesh.vertices.data(),
         GL_DYNAMIC_DRAW
     );
+    vertexBufferBytes_ = mesh.vertices.size() * sizeof(SpectralBeamVertex);
     glBindVertexArray(vao_);
 
     const bool hasDebugGroups = GLAD_GL_KHR_debug != 0

@@ -21,3 +21,13 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
   fixed hero camera, seven-band spectrum, white-point tint, and beam bloom.
 - `prism4_optical_debug.png`: Prism-4 optical-path overlay showing wavelength
   paths, interface points, and entry/exit surface normals.
+- `prism5_white_beam_no_prism.png`: white-beam presentation stage with the
+  prism hidden and all wavelength paths coincident.
+- `prism5_prism_no_dispersion.png`: visible prism with dispersion disabled.
+- `prism5_continuous_21.png` / `prism5_seven_band.png`: physical continuous
+  and art-directed spectrum modes.
+- `prism5_tir_debug.png`: high-IOR total-internal-reflection debug evidence.
+- `prism5_angle_minus_8.png` / `prism5_angle_plus_12.png`: world-space angle
+  and prism-face topology coverage.
+- `prism5_msaa1.png` / `prism5_msaa4.png`: fixed-camera edge-sampling pair.
+- `prism5_hero_exaggerated.png`: final portfolio Hero Shot.

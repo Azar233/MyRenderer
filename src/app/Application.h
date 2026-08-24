@@ -59,6 +59,8 @@ private:
     void updatePrismDemoOptics();
     void applyPrismOpticalPreset(PrismOpticalPreset preset);
     void restorePrismHeroShot();
+    void writePrismBenchmarkReport();
+    void updatePrismReelFrame();
 
     GLFWwindow* window_{nullptr};
     bool guiInitialized_{false};
@@ -75,6 +77,8 @@ private:
     std::filesystem::path currentModelPath_;
     std::filesystem::path pendingScreenshotPath_;
     int pendingScreenshotWarmupFrames_{0};
+    std::filesystem::path benchmarkOutputPath_;
+    std::filesystem::path prismReelFramesDirectory_;
     std::vector<std::filesystem::path> availableModels_;
     std::array<char, 1024> modelPathBuffer_{};
     std::string statusMessage_{"Ready"};
@@ -112,6 +116,19 @@ private:
     double lastCpuImportMilliseconds_{0.0};
     double lastGpuUploadMilliseconds_{0.0};
     double lastLoadTotalMilliseconds_{0.0};
+    std::vector<double> benchmarkCpuFrameTimes_;
+    std::vector<double> benchmarkGpuFrameTimes_;
+    std::vector<double> benchmarkBeamGpuTimes_;
+    std::size_t lastBenchmarkGpuFrameSerial_{0};
+    std::size_t lastBenchmarkBeamSerial_{0};
+    int renderWidthOverride_{0};
+    int renderHeightOverride_{0};
+    int benchmarkWarmupFrames_{60};
+    int benchmarkMeasurementFrames_{180};
+    int benchmarkRenderedFrames_{0};
+    int prismReelFrameIndex_{0};
+    int prismReelFrameCount_{360};
+    int prismReelWarmupFrames_{8};
 
     bool showAbout_{false};
     bool showImGuiDemo_{false};
@@ -122,6 +139,9 @@ private:
     bool lastLoadFailed_{false};
     bool prismDemoEnabled_{false};
     bool prismCameraLocked_{true};
+    bool prismModelVisible_{true};
+    bool benchmarkMode_{false};
+    bool prismReelMode_{false};
     PrismOpticalPreset prismOpticalPreset_{PrismOpticalPreset::CrownGlass};
     PrismDemoParameters prismParameters_{};
     double previousFrameTime_{0.0};
