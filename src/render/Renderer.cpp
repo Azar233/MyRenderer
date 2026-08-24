@@ -9,6 +9,7 @@
 #include <glm/vec4.hpp>
 
 #include "render/Camera.h"
+#include "render/CausticsMap.h"
 #include "render/DebugGrid.h"
 #include "render/EnvironmentMap.h"
 #include "render/GpuModel.h"
@@ -28,6 +29,7 @@ Renderer::Renderer(
     const std::filesystem::path& debugVertexShaderPath,
     const std::filesystem::path& debugFragmentShaderPath
 ) : shader_(std::make_unique<Shader>(vertexShaderPath, fragmentShaderPath)),
+    causticsMap_(std::make_unique<CausticsMap>(vertexShaderPath.parent_path())),
     debugGrid_(std::make_unique<DebugGrid>(debugVertexShaderPath, debugFragmentShaderPath)),
     environmentMap_(std::make_unique<EnvironmentMap>(
         vertexShaderPath.parent_path() / "fullscreen.vert",
@@ -46,6 +48,10 @@ Renderer::Renderer(
         vertexShaderPath.parent_path() / "shadow_depth.vert",
         vertexShaderPath.parent_path() / "shadow_depth.frag"
     )),
+    transmissionShadowShader_(std::make_unique<Shader>(
+        vertexShaderPath.parent_path() / "transmission_shadow.vert",
+        vertexShaderPath.parent_path() / "transmission_shadow.frag"
+    )),
     glassThicknessShader_(std::make_unique<Shader>(
         vertexShaderPath.parent_path() / "glass_thickness.vert",
         vertexShaderPath.parent_path() / "glass_thickness.frag"
@@ -61,12 +67,16 @@ Renderer::Renderer(
     glGenQueries(static_cast<GLsizei>(timingQueries_.size()), timingQueries_.data());
     glGenQueries(static_cast<GLsizei>(beamStartQueries_.size()), beamStartQueries_.data());
     glGenQueries(static_cast<GLsizei>(beamEndQueries_.size()), beamEndQueries_.data());
+    glGenQueries(static_cast<GLsizei>(causticsStartQueries_.size()), causticsStartQueries_.data());
+    glGenQueries(static_cast<GLsizei>(causticsEndQueries_.size()), causticsEndQueries_.data());
 }
 
 Renderer::~Renderer() {
     glDeleteQueries(static_cast<GLsizei>(timingQueries_.size()), timingQueries_.data());
     glDeleteQueries(static_cast<GLsizei>(beamStartQueries_.size()), beamStartQueries_.data());
     glDeleteQueries(static_cast<GLsizei>(beamEndQueries_.size()), beamEndQueries_.data());
+    glDeleteQueries(static_cast<GLsizei>(causticsStartQueries_.size()), causticsStartQueries_.data());
+    glDeleteQueries(static_cast<GLsizei>(causticsEndQueries_.size()), causticsEndQueries_.data());
 }
 
 void Renderer::render(
@@ -122,6 +132,29 @@ void Renderer::render(
             beamTimingPending_[index] = false;
         }
     }
+    for (std::size_t index = 0; index < causticsTimingPending_.size(); ++index) {
+        if (!causticsTimingPending_[index]) continue;
+        GLint startAvailable = GL_FALSE;
+        GLint endAvailable = GL_FALSE;
+        glGetQueryObjectiv(causticsStartQueries_[index], GL_QUERY_RESULT_AVAILABLE, &startAvailable);
+        glGetQueryObjectiv(causticsEndQueries_[index], GL_QUERY_RESULT_AVAILABLE, &endAvailable);
+        if (startAvailable == GL_TRUE && endAvailable == GL_TRUE) {
+            GLuint64 startTimestamp = 0U;
+            GLuint64 endTimestamp = 0U;
+            glGetQueryObjectui64v(causticsStartQueries_[index], GL_QUERY_RESULT, &startTimestamp);
+            glGetQueryObjectui64v(causticsEndQueries_[index], GL_QUERY_RESULT, &endTimestamp);
+            const double measured = endTimestamp >= startTimestamp
+                ? static_cast<double>(endTimestamp - startTimestamp) / 1'000'000.0
+                : 0.0;
+            latestCausticsMeasurementMilliseconds_ = measured;
+            causticsGpuTimeMilliseconds_ = hasCausticsGpuTime_
+                ? causticsGpuTimeMilliseconds_ * 0.9 + measured * 0.1
+                : measured;
+            hasCausticsGpuTime_ = true;
+            ++causticsMeasurementSerial_;
+            causticsTimingPending_[index] = false;
+        }
+    }
 
     std::size_t timingQuery = timingQueries_.size();
     for (std::size_t offset = 0; offset < timingQueries_.size(); ++offset) {
@@ -143,7 +176,7 @@ void Renderer::render(
     lightDirection = glm::normalize(lightDirection);
     glm::vec3 sceneCenter(0.0f);
     bool hasVisibleItems = false;
-    bool hasShadowCasters = false;
+    bool hasTransmissiveCasters = false;
     for (const RenderItem& item : renderItems) {
         if (!item.visible || item.model == nullptr) {
             continue;
@@ -152,7 +185,8 @@ void Renderer::render(
             sceneCenter = glm::vec3(item.modelMatrix[3]);
             hasVisibleItems = true;
         }
-        hasShadowCasters |= item.castsShadow && item.model->opaqueSubmeshCount() > 0U;
+        hasTransmissiveCasters |= item.castsShadow
+            && item.model->transmissiveSubmeshCount() > 0U;
     }
     glm::vec3 lightUp(0.0f, 1.0f, 0.0f);
     if (std::abs(glm::dot(lightDirection, lightUp)) > 0.96f) lightUp = glm::vec3(0.0f, 0.0f, 1.0f);
@@ -181,6 +215,8 @@ void Renderer::render(
         }
     }
     sortTransparentBackToFront(transparentDraws, camera.position());
+    const bool causticsActive = settings.causticsEnabled
+        && (settings.causticsMode == CausticsMode::Projector || hasTransmissiveCasters);
 
     const auto bindSceneShader = [&] {
         shader_->use();
@@ -197,6 +233,11 @@ void Renderer::render(
         shader_->setBool("uPbrEnabled", settings.pbrEnabled);
         shader_->setBool("uIblEnabled", settings.iblEnabled);
         shader_->setBool("uShadowsEnabled", settings.shadowsEnabled);
+        shader_->setBool(
+            "uColoredTransmissionShadowsEnabled",
+            settings.coloredTransmissionShadowsEnabled
+        );
+        shader_->setBool("uCausticsEnabled", causticsActive);
         shader_->setBool("uTransmissionEnabled", settings.transmissionEnabled);
         shader_->setFloat("uRefractionScale", settings.refractionScale);
         shader_->setInt("uRefractionSteps", settings.refractionSteps);
@@ -237,6 +278,8 @@ void Renderer::render(
         shader_->setInt("uIrradianceMap", 12);
         shader_->setInt("uPrefilteredEnvironmentMap", 13);
         shader_->setInt("uBrdfLut", 14);
+        shader_->setInt("uCausticsMap", 15);
+        shader_->setInt("uTransmissionShadowMap", 16);
         shader_->setBool("uHasGlassBackfaceData", false);
         shader_->setInt("uGlassObjectId", 0);
         environmentMap_->bind(3U);
@@ -244,6 +287,8 @@ void Renderer::render(
         environmentMap_->bindPrefiltered(13U);
         environmentMap_->bindBrdfLut(14U);
         shadowMap_->bindTexture(4U);
+        causticsMap_->bindTexture(15U);
+        shadowMap_->bindTransmissionTexture(16U);
     };
 
     drawCallCount_ = 0U;
@@ -260,8 +305,19 @@ void Renderer::render(
             }
         }
     }
+    std::size_t causticsTimingQuery = causticsTimingPending_.size();
+    if (causticsActive) {
+        for (std::size_t offset = 0; offset < causticsTimingPending_.size(); ++offset) {
+            const std::size_t candidate = (nextCausticsTimingQuery_ + offset)
+                % causticsTimingPending_.size();
+            if (!causticsTimingPending_[candidate]) {
+                causticsTimingQuery = candidate;
+                break;
+            }
+        }
+    }
     RenderPassSequence sequence;
-    if (settings.shadowsEnabled && hasShadowCasters) {
+    if (settings.shadowsEnabled) {
         sequence.add("Shadow map", [&] {
             shadowMap_->bindForWriting();
             glViewport(0, 0, shadowMap_->resolution(), shadowMap_->resolution());
@@ -282,6 +338,127 @@ void Renderer::render(
             glCullFace(GL_BACK);
             glDisable(GL_CULL_FACE);
         });
+    }
+    if (settings.shadowsEnabled && settings.coloredTransmissionShadowsEnabled) {
+        sequence.add("Colored transmission shadow", [&] {
+            shadowMap_->bindTransmissionForWriting();
+            glViewport(0, 0, shadowMap_->resolution(), shadowMap_->resolution());
+            const std::array<float, 4> white{1.0f, 1.0f, 1.0f, 1.0f};
+            glClearBufferfv(GL_COLOR, 0, white.data());
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glEnable(GL_BLEND);
+            glBlendEquation(GL_FUNC_ADD);
+            glBlendFunc(GL_ZERO, GL_SRC_COLOR);
+            transmissionShadowShader_->use();
+            transmissionShadowShader_->setMat4("uLightViewProjection", lightViewProjection);
+            transmissionShadowShader_->setFloat(
+                "uVolumeThicknessScale", settings.volumeThicknessScale
+            );
+            transmissionShadowShader_->setBool(
+                "uVolumeGlassOverrideEnabled", settings.volumeGlassOverrideEnabled
+            );
+            transmissionShadowShader_->setFloat(
+                "uVolumeGlassTransmission", settings.volumeGlassTransmission
+            );
+            transmissionShadowShader_->setVec3(
+                "uVolumeGlassAttenuationColor", settings.volumeGlassAttenuationColor
+            );
+            transmissionShadowShader_->setFloat(
+                "uVolumeGlassAttenuationDistance",
+                settings.volumeGlassAttenuationDistance
+            );
+            for (const RenderItem& item : renderItems) {
+                if (!item.visible || !item.castsShadow || item.model == nullptr) continue;
+                transmissionShadowShader_->setMat4("uModel", item.modelMatrix);
+                item.model->drawTransmissive(*transmissionShadowShader_, item.tint);
+                drawCallCount_ += item.model->transmissiveSubmeshCount();
+            }
+            glDisable(GL_BLEND);
+        });
+    }
+    if (causticsActive) {
+        sequence.add(
+            settings.causticsMode == CausticsMode::Projector
+                ? "Caustics projector HDR"
+                : "Light-space RGB caustics",
+            [&] {
+                if (causticsTimingQuery < causticsTimingPending_.size()) {
+                    glQueryCounter(causticsStartQueries_[causticsTimingQuery], GL_TIMESTAMP);
+                }
+                causticsMap_->bindRawForWriting();
+                glViewport(0, 0, causticsMap_->resolution(), causticsMap_->resolution());
+                const std::array<float, 4> black{0.0f, 0.0f, 0.0f, 0.0f};
+                glClearBufferfv(GL_COLOR, 0, black.data());
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_CULL_FACE);
+                glEnable(GL_BLEND);
+                glBlendEquation(GL_FUNC_ADD);
+                glBlendFunc(GL_ONE, GL_ONE);
+                if (settings.causticsMode == CausticsMode::Projector) {
+                    causticsMap_->drawProjector(
+                        settings.causticsStrength,
+                        settings.causticsScale,
+                        settings.causticsDirection,
+                        settings.causticsSharpness,
+                        settings.causticsAnimationPhase
+                    );
+                    ++drawCallCount_;
+                } else {
+                    Shader& causticsShader = causticsMap_->lightSpaceShader();
+                    causticsShader.use();
+                    causticsShader.setMat4("uLightViewProjection", lightViewProjection);
+                    causticsShader.setVec3("uLightDirection", lightDirection);
+                    causticsShader.setFloat(
+                        "uReceiverPlaneY", settings.causticsReceiverPlaneY
+                    );
+                    causticsShader.setFloat("uCausticStrength", settings.causticsStrength);
+                    causticsShader.setFloat("uCausticScale", settings.causticsScale);
+                    causticsShader.setVec3("uCausticDirection", settings.causticsDirection);
+                    causticsShader.setFloat(
+                        "uDispersionStrength", settings.dispersionStrength
+                    );
+                    causticsShader.setFloat(
+                        "uIndexOfRefractionOverride", settings.indexOfRefractionOverride
+                    );
+                    causticsShader.setFloat(
+                        "uVolumeThicknessScale", settings.volumeThicknessScale
+                    );
+                    causticsShader.setBool(
+                        "uVolumeGlassOverrideEnabled", settings.volumeGlassOverrideEnabled
+                    );
+                    causticsShader.setVec3(
+                        "uVolumeGlassAttenuationColor",
+                        settings.volumeGlassAttenuationColor
+                    );
+                    causticsShader.setFloat(
+                        "uVolumeGlassTransmission", settings.volumeGlassTransmission
+                    );
+                    causticsShader.setFloat(
+                        "uVolumeGlassAttenuationDistance",
+                        settings.volumeGlassAttenuationDistance
+                    );
+                    for (int channel = 0; channel < 3; ++channel) {
+                        causticsShader.setInt("uCausticChannel", channel);
+                        for (const RenderItem& item : renderItems) {
+                            if (!item.visible || !item.castsShadow || item.model == nullptr) continue;
+                            causticsShader.setMat4("uModel", item.modelMatrix);
+                            item.model->drawTransmissive(causticsShader, item.tint);
+                            drawCallCount_ += item.model->transmissiveSubmeshCount();
+                        }
+                    }
+                }
+                glDisable(GL_BLEND);
+                causticsMap_->filter(settings.causticsSharpness);
+                drawCallCount_ += 2U;
+                if (causticsTimingQuery < causticsTimingPending_.size()) {
+                    glQueryCounter(causticsEndQueries_[causticsTimingQuery], GL_TIMESTAMP);
+                    causticsTimingPending_[causticsTimingQuery] = true;
+                    nextCausticsTimingQuery_ =
+                        (causticsTimingQuery + 1U) % causticsTimingPending_.size();
+                }
+            }
+        );
     }
     sequence.add("Opaque HDR scene", [&] {
         renderTarget_->bindOpaqueScene();
@@ -592,5 +769,6 @@ std::size_t Renderer::estimatedRenderMemoryBytes() const {
         + postProcessor_->estimatedBytes()
         + environmentMap_->estimatedBytes()
         + shadowMap_->estimatedBytes()
+        + causticsMap_->estimatedBytes()
         + spectralBeamRenderer_->vertexBufferBytes();
 }

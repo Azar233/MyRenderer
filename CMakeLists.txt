@@ -106,6 +106,7 @@ add_executable(MyRenderer
     src/optics/PrismDemo.cpp
     src/optics/SpectralBeamMesh.cpp
     src/render/Camera.cpp
+    src/render/CausticsMap.cpp
     src/render/DebugGrid.cpp
     src/render/EnvironmentMap.cpp
     src/render/GpuModel.cpp
@@ -289,6 +290,29 @@ if(BUILD_TESTING)
         DEPENDS MyRenderer
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "Benchmarking Glass-2C at 1920x1080 with 1x/4x MSAA"
+    )
+
+    add_custom_target(glass3-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/glass3-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/Glass3VisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing and comparing the Glass-3 caustics regression matrix"
+    )
+
+    add_custom_target(glass3-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/glass3-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/Glass3Benchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Benchmarking Glass-3 Off, Projector, and Light-space modes"
     )
 endif()
 

@@ -14,6 +14,8 @@ uniform samplerCube uIrradianceMap;
 uniform samplerCube uPrefilteredEnvironmentMap;
 uniform sampler2D uBrdfLut;
 uniform sampler2D uShadowMap;
+uniform sampler2D uCausticsMap;
+uniform sampler2D uTransmissionShadowMap;
 uniform sampler2D uOpaqueColorTexture;
 uniform sampler2D uSceneDepthTexture;
 uniform sampler2D uThicknessTexture;
@@ -34,6 +36,8 @@ uniform bool uNormalMappingEnabled;
 uniform bool uPbrEnabled;
 uniform bool uIblEnabled;
 uniform bool uShadowsEnabled;
+uniform bool uColoredTransmissionShadowsEnabled;
+uniform bool uCausticsEnabled;
 uniform bool uTransmissionEnabled;
 uniform vec3 uLightDirection;
 uniform vec3 uCameraPosition;
@@ -89,11 +93,17 @@ vec3 fresnelSchlick(float cosine, vec3 f0) {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
 }
 
-float shadowVisibility(vec3 normal, vec3 lightDirection) {
-    if (!uShadowsEnabled) return 1.0;
+vec3 lightProjectionCoordinates() {
     vec3 projected = vShadowPosition.xyz / max(vShadowPosition.w, 0.0001);
-    projected = projected * 0.5 + 0.5;
-    if (projected.z > 1.0) return 1.0;
+    return projected * 0.5 + 0.5;
+}
+
+vec3 shadowVisibility(vec3 normal, vec3 lightDirection) {
+    if (!uShadowsEnabled) return vec3(1.0);
+    vec3 projected = lightProjectionCoordinates();
+    if (projected.z > 1.0 || projected.z < 0.0
+        || any(lessThan(projected.xy, vec2(0.0)))
+        || any(greaterThan(projected.xy, vec2(1.0)))) return vec3(1.0);
     float bias = max(0.0015 * (1.0 - dot(normal, lightDirection)), 0.00035);
     vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
     float visible = 0.0;
@@ -103,7 +113,19 @@ float shadowVisibility(vec3 normal, vec3 lightDirection) {
             visible += projected.z - bias <= depth ? 1.0 : 0.0;
         }
     }
-    return visible / 9.0;
+    vec3 transmission = uColoredTransmissionShadowsEnabled
+        ? texture(uTransmissionShadowMap, projected.xy).rgb
+        : vec3(1.0);
+    return transmission * (visible / 9.0);
+}
+
+vec3 causticRadiance() {
+    if (!uCausticsEnabled) return vec3(0.0);
+    vec3 projected = lightProjectionCoordinates();
+    if (projected.z > 1.0 || projected.z < 0.0
+        || any(lessThan(projected.xy, vec2(0.0)))
+        || any(greaterThan(projected.xy, vec2(1.0)))) return vec3(0.0);
+    return texture(uCausticsMap, projected.xy).rgb;
 }
 
 float estimateSurfaceNormalThickness(vec3 geometricNormal, vec3 viewDirection) {
@@ -374,7 +396,17 @@ void main() {
     vec3 halfDirection = normalize(lightDirection + viewDirection);
     float nDotL = max(dot(normal, lightDirection), 0.0);
     float nDotV = max(dot(normal, viewDirection), 0.001);
-    float visibility = shadowVisibility(normal, lightDirection);
+    vec3 visibility = shadowVisibility(normal, lightDirection);
+    vec3 caustics = causticRadiance();
+
+    if (uGlassDebugView == 11) {
+        fragmentColor = vec4(caustics, 1.0);
+        return;
+    }
+    if (uGlassDebugView == 12) {
+        fragmentColor = vec4(visibility, 1.0);
+        return;
+    }
 
     if (!uPbrEnabled) {
         float specular = nDotL > 0.0
@@ -382,7 +414,8 @@ void main() {
             : 0.0;
         fragmentColor = vec4(
             uAmbientStrength * albedo
-            + visibility * (uDiffuseStrength * nDotL * albedo + uSpecularStrength * specular),
+            + visibility * (uDiffuseStrength * nDotL * albedo + uSpecularStrength * specular)
+            + caustics * albedo,
             outputAlpha
         );
         return;
@@ -426,7 +459,7 @@ void main() {
             * uEnvironmentIntensity;
     }
 
-    vec3 diffuseLighting = ambientDiffuse + visibility * directDiffuse;
+    vec3 diffuseLighting = ambientDiffuse + visibility * directDiffuse + caustics * albedo;
     vec3 specularLighting = ambientSpecular + visibility * directSpecular;
     float transmission = uTransmissionEnabled
         ? clamp(

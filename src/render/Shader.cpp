@@ -40,6 +40,42 @@ Shader::Shader(const std::filesystem::path& vertexPath, const std::filesystem::p
     glDeleteShader(fragmentShader);
 }
 
+Shader::Shader(
+    const std::filesystem::path& vertexPath,
+    const std::filesystem::path& geometryPath,
+    const std::filesystem::path& fragmentPath
+) {
+    const unsigned int vertexShader = compile(GL_VERTEX_SHADER, readFile(vertexPath), vertexPath);
+    const unsigned int geometryShader = compile(GL_GEOMETRY_SHADER, readFile(geometryPath), geometryPath);
+    const unsigned int fragmentShader = compile(GL_FRAGMENT_SHADER, readFile(fragmentPath), fragmentPath);
+
+    program_ = glCreateProgram();
+    glAttachShader(program_, vertexShader);
+    glAttachShader(program_, geometryShader);
+    glAttachShader(program_, fragmentShader);
+    glLinkProgram(program_);
+    int linked = GL_FALSE;
+    glGetProgramiv(program_, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        int logLength = 0;
+        glGetProgramiv(program_, GL_INFO_LOG_LENGTH, &logLength);
+        std::vector<char> log(static_cast<std::size_t>(std::max(logLength, 1)));
+        glGetProgramInfoLog(program_, logLength, nullptr, log.data());
+        glDeleteProgram(program_);
+        program_ = 0;
+        glDeleteShader(vertexShader);
+        glDeleteShader(geometryShader);
+        glDeleteShader(fragmentShader);
+        throw std::runtime_error("Shader link failed:\n" + std::string(log.data()));
+    }
+    glDetachShader(program_, vertexShader);
+    glDetachShader(program_, geometryShader);
+    glDetachShader(program_, fragmentShader);
+    glDeleteShader(vertexShader);
+    glDeleteShader(geometryShader);
+    glDeleteShader(fragmentShader);
+}
+
 Shader::~Shader() {
     if (program_ != 0U) {
         glDeleteProgram(program_);

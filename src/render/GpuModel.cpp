@@ -279,3 +279,12 @@ void GpuModel::drawTransmissiveDepth() const {
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
 }
+
+void GpuModel::drawTransmissive(const Shader& shader, const glm::vec3& tint) const {
+    const glm::vec3 linearTint = srgbToLinear(tint);
+    for (const DrawCommand& command : transmissiveDrawCommands_) {
+        bindMaterial(shader, linearTint, command.materialIndex);
+        glDisable(GL_CULL_FACE);
+        meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
+    }
+}

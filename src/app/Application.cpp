@@ -253,8 +253,22 @@ int Application::run(const std::filesystem::path& initialModel) {
     }
     if (const char* value = std::getenv("MYRENDERER_GLASS_DEBUG")) {
         rendererSettings_.glassDebugView = static_cast<GlassDebugView>(
-            std::clamp(std::atoi(value), 0, 10)
+            std::clamp(std::atoi(value), 0, 12)
         );
+    }
+    if (const char* value = std::getenv("MYRENDERER_CAUSTICS")) {
+        rendererSettings_.causticsEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_CAUSTICS_MODE")) {
+        rendererSettings_.causticsMode = std::atoi(value) == 0
+            ? CausticsMode::Projector
+            : CausticsMode::LightSpace;
+    }
+    if (const char* value = std::getenv("MYRENDERER_TRANSMISSION_SHADOWS")) {
+        rendererSettings_.coloredTransmissionShadowsEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_GLASS3_DEMO")) {
+        glassCausticsDemoEnabled_ = std::atoi(value) != 0;
     }
     if (const char* value = std::getenv("MYRENDERER_SCENE_DEMO")) showComparisonObject_ = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_PRISM_DEMO")) {
@@ -269,7 +283,9 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (modelToLoad.empty()) {
         const auto defaultModel = prismDemoEnabled_
             ? sourceRoot_ / "assets" / "models" / "prism_spectrum.gltf"
-            : sourceRoot_ / "assets" / "models" / "cube.obj";
+            : (glassCausticsDemoEnabled_
+                ? sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf"
+                : sourceRoot_ / "assets" / "models" / "cube.obj");
         modelToLoad = std::filesystem::exists(defaultModel)
             ? defaultModel
             : (availableModels_.empty() ? std::filesystem::path{} : availableModels_.front());
@@ -366,6 +382,12 @@ int Application::run(const std::filesystem::path& initialModel) {
                     lastBenchmarkBeamSerial_ = renderer_->prismBeamMeasurementSerial();
                     benchmarkBeamGpuTimes_.push_back(
                         renderer_->latestPrismBeamMeasurementMilliseconds()
+                    );
+                }
+                if (renderer_->causticsMeasurementSerial() != lastBenchmarkCausticsSerial_) {
+                    lastBenchmarkCausticsSerial_ = renderer_->causticsMeasurementSerial();
+                    benchmarkCausticsGpuTimes_.push_back(
+                        renderer_->latestCausticsMeasurementMilliseconds()
                     );
                 }
             }
@@ -584,7 +606,11 @@ void Application::drawMainMenu() {
             activatePrismDemoPreset(true);
         }
         if (ImGui::MenuItem("Volume glass preset")) {
+            glassCausticsDemoEnabled_ = false;
             loadModel(sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf");
+        }
+        if (ImGui::MenuItem("Glass caustics preset")) {
+            activateGlassCausticsPreset();
         }
         ImGui::MenuItem("Wireframe", nullptr, &rendererSettings_.wireframe);
         ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
@@ -771,6 +797,57 @@ void Application::drawInspectorPanel() {
             ImGui::Checkbox("Image-based lighting", &rendererSettings_.iblEnabled);
             ImGui::Checkbox("Skybox", &rendererSettings_.skyboxEnabled);
             ImGui::Checkbox("Shadow mapping", &rendererSettings_.shadowsEnabled);
+            ImGui::Checkbox(
+                "Colored transmission shadows",
+                &rendererSettings_.coloredTransmissionShadowsEnabled
+            );
+            ImGui::Checkbox("HDR caustics", &rendererSettings_.causticsEnabled);
+            if (rendererSettings_.causticsEnabled) {
+                int causticsMode = static_cast<int>(rendererSettings_.causticsMode);
+                const char* causticsModes[] = {"Projector / decal", "Light-space RGB"};
+                if (ImGui::Combo("Caustics mode", &causticsMode, causticsModes, 2)) {
+                    rendererSettings_.causticsMode = static_cast<CausticsMode>(causticsMode);
+                }
+                ImGui::SliderFloat(
+                    "Caustics strength",
+                    &rendererSettings_.causticsStrength,
+                    0.0f,
+                    8.0f,
+                    "%.2f"
+                );
+                ImGui::SliderFloat(
+                    "Caustics scale",
+                    &rendererSettings_.causticsScale,
+                    0.1f,
+                    3.0f,
+                    "%.2f"
+                );
+                ImGui::SliderFloat3(
+                    "Caustics direction",
+                    &rendererSettings_.causticsDirection.x,
+                    -1.5f,
+                    1.5f,
+                    "%.2f"
+                );
+                ImGui::SliderFloat(
+                    "Caustics sharpness",
+                    &rendererSettings_.causticsSharpness,
+                    0.0f,
+                    1.0f,
+                    "%.2f"
+                );
+                ImGui::BeginDisabled(
+                    rendererSettings_.causticsMode != CausticsMode::Projector
+                );
+                ImGui::Checkbox("Animate caustics", &rendererSettings_.causticsAnimated);
+                ImGui::EndDisabled();
+                ImGui::TextDisabled(
+                    "Caustics map: 1024 x 1024 | GPU %.3f ms",
+                    renderer_->hasCausticsGpuTime()
+                        ? renderer_->causticsGpuTimeMilliseconds()
+                        : 0.0
+                );
+            }
             ImGui::Checkbox("Dielectric transmission", &rendererSettings_.transmissionEnabled);
             ImGui::Checkbox("Geometric glass thickness", &rendererSettings_.geometricThicknessEnabled);
             if (ImGui::IsItemHovered()) {
@@ -1054,9 +1131,11 @@ void Application::drawInspectorPanel() {
                 "RGB dispersion",
                 "Front/back thickness data",
                 "Exit surface normal",
-                "Object ID"
+                "Object ID",
+                "Caustics map",
+                "Transmission shadow"
             };
-            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 11)) {
+            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 13)) {
                 rendererSettings_.glassDebugView = static_cast<GlassDebugView>(glassDebugView);
             }
             ImGui::SliderFloat("Environment", &rendererSettings_.environmentIntensity, 0.0f, 2.0f, "%.2f");
@@ -1230,7 +1309,8 @@ void Application::drawViewportPanel() {
             });
         }
     }
-    if (glassVolumeDemoEnabled_ && glassBackdropModel_ != nullptr) {
+    if (glassVolumeDemoEnabled_ && !glassCausticsDemoEnabled_
+        && glassBackdropModel_ != nullptr) {
         renderItems.push_back(RenderItem{
             glassBackdropModel_.get(),
             glm::mat4(1.0f),
@@ -1252,6 +1332,11 @@ void Application::drawViewportPanel() {
             false
         });
     }
+    rendererSettings_.causticsReceiverPlaneY =
+        modelPosition_.y + groundOffset_ * modelScale_ + 0.002f;
+    rendererSettings_.causticsAnimationPhase = rendererSettings_.causticsAnimated
+        ? static_cast<float>(std::fmod(glfwGetTime() * 0.16, 1.0))
+        : 0.0f;
     renderer_->render(renderItems, camera_, rendererSettings_, width, height);
 
     if (prismReelMode_ && model_ != nullptr && !pendingModelImport_.has_value()) {
@@ -1601,20 +1686,57 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
         deactivatePrismDemoPreset();
         glassVolumeDemoEnabled_ = loadedGlassVolumeFixture;
         if (loadedGlassVolumeFixture) {
-            modelPosition_ = glm::vec3(-0.46f, 0.0f, 0.0f);
-            showComparisonObject_ = true;
-            showGroundPlane_ = false;
+            modelPosition_ = glassCausticsDemoEnabled_
+                ? glm::vec3(0.0f, 0.0f, 0.0f)
+                : glm::vec3(-0.46f, 0.0f, 0.0f);
+            showComparisonObject_ = !glassCausticsDemoEnabled_;
+            showGroundPlane_ = glassCausticsDemoEnabled_;
             rendererSettings_.showGrid = false;
             rendererSettings_.showAxes = false;
-            rendererSettings_.backgroundColor = glm::vec3(0.018f, 0.022f, 0.03f);
-            rendererSettings_.environmentIntensity = 0.85f;
+            rendererSettings_.backgroundColor = glassCausticsDemoEnabled_
+                ? glm::vec3(0.0015f, 0.0020f, 0.0030f)
+                : glm::vec3(0.018f, 0.022f, 0.03f);
+            rendererSettings_.environmentIntensity = glassCausticsDemoEnabled_ ? 0.38f : 0.85f;
+            rendererSettings_.skyboxEnabled = !glassCausticsDemoEnabled_;
             rendererSettings_.volumeGlassOverrideEnabled = true;
             rendererSettings_.volumeGlassTransmission = 1.0f;
             rendererSettings_.volumeGlassRoughness = 0.06f;
-            rendererSettings_.volumeGlassAttenuationColor = glm::vec3(0.68f, 0.86f, 0.22f);
-            rendererSettings_.volumeGlassAttenuationDistance = 0.85f;
-            rendererSettings_.dispersionStrength = 0.0f;
-            camera_.setOrbitPose(glm::vec3(0.0f), 0.0f, 0.0f, 3.35f, 38.0f);
+            rendererSettings_.volumeGlassAttenuationColor = glassCausticsDemoEnabled_
+                ? glm::vec3(0.78f, 0.92f, 1.0f)
+                : glm::vec3(0.68f, 0.86f, 0.22f);
+            rendererSettings_.volumeGlassAttenuationDistance =
+                glassCausticsDemoEnabled_ ? 2.0f : 0.85f;
+            rendererSettings_.dispersionStrength = glassCausticsDemoEnabled_ ? 2.0f : 0.0f;
+            rendererSettings_.causticsEnabled = glassCausticsDemoEnabled_;
+            rendererSettings_.causticsMode = CausticsMode::LightSpace;
+            rendererSettings_.causticsStrength = 2.4f;
+            rendererSettings_.causticsScale = 1.15f;
+            rendererSettings_.causticsDirection = glassCausticsDemoEnabled_
+                ? glm::vec3(-0.62f, 0.0f, 0.18f)
+                : glm::vec3(0.0f);
+            rendererSettings_.causticsSharpness = 0.78f;
+            rendererSettings_.coloredTransmissionShadowsEnabled = true;
+            if (const char* value = std::getenv("MYRENDERER_CAUSTICS")) {
+                rendererSettings_.causticsEnabled = std::atoi(value) != 0;
+            }
+            if (const char* value = std::getenv("MYRENDERER_CAUSTICS_MODE")) {
+                rendererSettings_.causticsMode = std::atoi(value) == 0
+                    ? CausticsMode::Projector
+                    : CausticsMode::LightSpace;
+            }
+            if (const char* value = std::getenv("MYRENDERER_TRANSMISSION_SHADOWS")) {
+                rendererSettings_.coloredTransmissionShadowsEnabled = std::atoi(value) != 0;
+            }
+            groundColor_ = glassCausticsDemoEnabled_
+                ? glm::vec3(0.82f, 0.84f, 0.88f)
+                : groundColor_;
+            camera_.setOrbitPose(
+                glm::vec3(0.0f, -0.12f, 0.0f),
+                glassCausticsDemoEnabled_ ? -12.0f : 0.0f,
+                glassCausticsDemoEnabled_ ? 30.0f : 0.0f,
+                glassCausticsDemoEnabled_ ? 3.4f : 3.35f,
+                38.0f
+            );
         } else {
             if (wasGlassVolumeDemo) {
                 showComparisonObject_ = false;
@@ -1622,7 +1744,10 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
                 rendererSettings_.showGrid = true;
                 rendererSettings_.showAxes = true;
                 rendererSettings_.volumeGlassOverrideEnabled = false;
+                rendererSettings_.causticsEnabled = false;
+                rendererSettings_.skyboxEnabled = true;
             }
+            glassCausticsDemoEnabled_ = false;
             camera_.reset();
         }
     }
@@ -1712,6 +1837,13 @@ void Application::resetObjectTransform() {
     modelPosition_ = glm::vec3(0.0f);
     modelRotationDegrees_ = glm::vec3(0.0f);
     modelScale_ = 1.0f;
+}
+
+void Application::activateGlassCausticsPreset() {
+    glassCausticsDemoEnabled_ = true;
+    if (!loadModel(sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf")) {
+        glassCausticsDemoEnabled_ = false;
+    }
 }
 
 void Application::activatePrismDemoPreset(bool loadFixture) {
@@ -1945,9 +2077,12 @@ void Application::writePrismBenchmarkReport() {
            << "  \"gpuFrameP95Ms\": " << percentile(benchmarkGpuFrameTimes_, 0.95) << ",\n"
            << "  \"gpuBeamP50Ms\": " << percentile(benchmarkBeamGpuTimes_, 0.50) << ",\n"
            << "  \"gpuBeamP95Ms\": " << percentile(benchmarkBeamGpuTimes_, 0.95) << ",\n"
+           << "  \"gpuCausticsP50Ms\": " << percentile(benchmarkCausticsGpuTimes_, 0.50) << ",\n"
+           << "  \"gpuCausticsP95Ms\": " << percentile(benchmarkCausticsGpuTimes_, 0.95) << ",\n"
            << "  \"cpuFrameMeasurements\": " << benchmarkCpuFrameTimes_.size() << ",\n"
            << "  \"gpuFrameMeasurements\": " << benchmarkGpuFrameTimes_.size() << ",\n"
            << "  \"gpuBeamMeasurements\": " << benchmarkBeamGpuTimes_.size() << ",\n"
+           << "  \"gpuCausticsMeasurements\": " << benchmarkCausticsGpuTimes_.size() << ",\n"
            << "  \"renderMemoryBytes\": " << renderer_->estimatedRenderMemoryBytes() << ",\n"
            << "  \"textureMemoryBytes\": " << loadedTextureMemoryBytes_ << ",\n"
            << "  \"geometryMemoryBytes\": " << geometryMemoryBytes << ",\n"
@@ -1956,7 +2091,7 @@ void Application::writePrismBenchmarkReport() {
                 + loadedTextureMemoryBytes_ + geometryMemoryBytes << ",\n"
            << "  \"solveChecksum\": " << solveChecksum << "\n"
            << "}\n";
-    std::cout << "Saved Prism benchmark: " << benchmarkOutputPath_ << '\n';
+    std::cout << "Saved renderer benchmark: " << benchmarkOutputPath_ << '\n';
 }
 
 void Application::updatePrismReelFrame() {

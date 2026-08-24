@@ -153,7 +153,7 @@
 | Shadow Acne（阴影痤疮） | 精度误差造成表面出现条纹或自阴影噪点。 | 当前通过 Bias 和阴影 Pass 剔除策略减轻。 | 部分实现 |
 | Peter Panning | 阴影 Bias 过大导致阴影看起来与物体分离。 | 后续阴影调试视图需要同时平衡它与 Acne。 | 计划 |
 | CSM（Cascaded Shadow Maps） | 按相机距离分多级阴影范围，让近处保持更高精度。 | P0 阴影质量路线。 | 计划 |
-| Transmissive Shadow（透射阴影） | 光穿过透明物体后形成带颜色和衰减的阴影。 | Glass-3 计划，普通 Shadow Map 当前只处理不透明遮挡。 | 计划 |
+| Transmissive Shadow（透射阴影） | 光穿过透明物体后形成带颜色和衰减的阴影。 | RGBA16F Light-space 纹理以乘法混合累积 Beer-Lambert 透射率，再与 PCF 可见度相乘。 | 已实现 |
 
 ## 8. 后处理与显示
 
@@ -213,10 +213,12 @@
 | Camera-facing Ribbon（相机朝向带） | 根据光束方向和相机视线计算带宽方向，使窄面始终大致朝向镜头，避免侧看时消失。 | 每帧根据 Camera Position 重建轻量光束顶点；光路中心仍保持世界空间位置。 | 已实现 |
 | Volumetric Scattering（体积散射） | 光被空气、雾或尘埃散射后，观察者才会从侧面看到光柱。 | Prism 第一版用 Ribbon 明确作为光路可视化；真实体积散射是可选高质量模式。 | 计划 |
 | Thin-film Iridescence（薄膜虹彩） | 薄层内部多次反射产生干涉，随角度呈现彩色表面。 | 可作为参考效果的可选表面增强，不等同于体积色散。 | 计划 |
-| Caustics（焦散） | 光经过反射或折射后聚集，在接收表面形成明亮花纹。 | 参考图地面的彩虹亮斑；Glass-3 目标。 | 计划 |
-| Caustics Projector / Decal | 把预制或程序化焦散图案投射到地面，以较低成本控制视觉效果。 | Glass-3 的第一版 TA 友好方案。 | 计划 |
-| Light-space Caustics | 从光源方向计算折射光落点并累积能量的实时焦散近似。 | Glass-3 图形程序进阶方案。 | 计划 |
-| Additive Blending（加法混合） | 把新颜色直接加到已有颜色上，适合表示光和能量叠加；重叠越多通常越亮。 | Prism Beam Pass 使用 `GL_ONE + GL_ONE` 写入 RGBA16F，再由 Bloom 提取高亮；未来焦散也可复用。 | 已实现 |
+| Caustics（焦散） | 光经过反射或折射后聚集，在接收表面形成明亮花纹。 | Glass-3 同时提供可控 Projector 和几何驱动 Light-space RGB 路线。 | 已实现 |
+| Caustics Projector / Decal | 把预制或程序化焦散图案投射到地面，以较低成本控制视觉效果。 | 程序化 RGB 环带写入 1024² HDR 焦散纹理，支持强度、尺度、方向、锐度与动画。 | 已实现 |
+| Light-space Caustics | 从光源方向计算折射光落点并累积能量的实时焦散近似。 | 方向光下按 R/G/B IOR 计算接收平面落点并加法累积。 | 已实现 |
+| Photon Splat（光子样本光斑） | 把一条光能样本落点画成一个很小的柔边光斑，大量样本重叠后形成焦散。 | Geometry Shader 为每个入射三角形生成 Light-space 小四边形，避免拉伸三角形尖刺。 | 已实现 |
+| Spatial Filtering（空间滤波） | 在同一帧相邻像素间平滑信号，降低锯齿和高频闪烁。 | 焦散纹理使用横向/纵向两次可调 Gaussian Filter。 | 已实现 |
+| Additive Blending（加法混合） | 把新颜色直接加到已有颜色上，适合表示光和能量叠加；重叠越多通常越亮。 | Prism Beam 与 Glass-3 Caustics 都用 `GL_ONE + GL_ONE` 写入 RGBA16F。 | 已实现 |
 | Edge Softness（边缘柔度） | 控制光束从亮核心到透明边缘的过渡宽度，值越大过渡越柔和。 | Beam Fragment Shader 根据 Ribbon 横向坐标执行 `smoothstep`，Inspector 可实时调节。 | 已实现 |
 | White Point（白点） | 定义“什么颜色应被看作白色”；改变它会让同一束白光偏暖或偏冷。 | Prism-4 以 Kelvin 参数生成线性 sRGB 调制色，同时作用于入射、内部和出射光束。 | 已实现（显示近似） |
 | Color Temperature / Kelvin（色温 / 开尔文） | 用温度近似描述光源颜色；较低数值偏暖黄，较高数值偏冷蓝。它描述颜色倾向，不等于光源实际温度测量。 | Inspector 的 White Point 范围为 2000～12000 K，自动化也可由环境变量覆盖。 | 已实现 |
@@ -329,6 +331,7 @@
 | 顶点变换与切线空间输入 | `shaders/basic.vert` |
 | 环境 Cubemap 与天空盒 | `src/render/EnvironmentMap.*`、`shaders/skybox.frag` |
 | Shadow Map | `src/render/ShadowMap.*`、`shaders/shadow_depth.*` |
+| 彩色透射阴影与焦散 | `src/render/ShadowMap.*`、`src/render/CausticsMap.*`、`shaders/caustics_*`、`shaders/transmission_shadow.*` |
 | GPU Mesh 与材质绑定 | `src/render/Mesh.*`、`src/render/GpuModel.*` |
 | 纹理解码、缓存和回退 | `src/render/Texture2D.*` |
 | 格式无关资产结构 | `src/asset/ModelData.h` |
@@ -343,4 +346,5 @@
 | CPU 资产回归测试 | `tests/AssetImportTests.cpp` |
 | Prism 公式、数据流与近似边界 | `docs/prism-spectrum.md` |
 | Prism 视觉回归、性能与作品集证据 | `docs/prism5-validation.md`、`tests/ImageComparison.cpp`、`tools/Prism5*.cmake` |
+| Glass-3 焦散算法、边界与性能 | `docs/glass3-caustics.md`、`tools/Glass3*.cmake` |
 | 后续阶段与验收标准 | `todolist.md` |

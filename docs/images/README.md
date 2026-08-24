@@ -48,3 +48,11 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
   documented screen-space fallback region.
 - `glass2c_object_id.png`: stable per-RenderItem pairing colors for overlapping
   glass instances.
+- `glass3_lightspace_msaa1.png` / `glass3_lightspace_msaa4.png`: fixed crystal,
+  white receiver, RGB Photon Splat focus, and spatial filtering baseline.
+- `glass3_caustics_off.png`: same camera with caustics disabled while glass and
+  colored transmission shadows remain active.
+- `glass3_projector.png`: art-directed HDR Projector / Decal mode.
+- `glass3_caustics_debug.png`: raw receiver sampling of the filtered caustics map.
+- `glass3_transmission_shadow.png`: RGB transmission visibility after PCF and
+  multiplicative Beer-Lambert shadow composition.

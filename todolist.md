@@ -477,11 +477,13 @@ Prism Demo 验收：出射光谱必须由世界空间入射光经过两个棱镜
 
 #### Glass-3：彩色焦散与透射阴影
 
-- [ ] 第一版实现可控 Caustics Projector / Decal，以 HDR 浮点纹理和 Additive Blend 快速复现地面彩虹。
-- [ ] 增加彩色透射阴影，避免高透射玻璃继续投射纯黑阴影。
-- [ ] 图形程序进阶版实现 Light-space Caustics：折射入射光并把 RGB 能量累积到接收表面。
-- [ ] 为焦散增加强度、尺度、方向、锐度和动画控制，并测试漏光、离屏失败、低采样密度与闪烁。
-- [ ] 增加时序稳定或空间过滤，并记录画质、GPU 时间和显存代价。
+- [x] 第一版实现可控 Caustics Projector / Decal，以 HDR 浮点纹理和 Additive Blend 快速复现地面彩虹。
+- [x] 增加彩色透射阴影，避免高透射玻璃继续投射纯黑阴影。
+- [x] 图形程序进阶版实现 Light-space Caustics：折射入射光并把 RGB 能量累积到接收表面。
+- [x] 为焦散增加强度、尺度、方向、锐度和动画控制，并测试漏光、离屏失败、低采样密度与闪烁。
+- [x] 增加时序稳定或空间过滤，并记录画质、GPU 时间和显存代价。
+
+> Glass-3 完成（2026-08-24）：新增 1024² RGBA16F `CausticsMap`，Projector/Decal 模式以程序化 RGB 环带提供 TA 快速定向；Light-space 模式从方向光折射玻璃入射三角形，按 R/G/B IOR 将 Photon Splat 加法累积到水平接收面。2048² RGBA16F Transmission Shadow 以乘法混合累积 Beer-Lambert 透射率，并与不透明 PCF 可见度合成，透明玻璃不再产生纯黑阴影。Inspector 提供模式、强度、尺度、方向、锐度、动画和独立开关，Debug 11/12 显示焦散与透射阴影。两次空间滤波替代历史缓冲，降低低采样网格闪烁；文档明确单接收平面、单次入射折射、离屏与低面数边界。6 张 1080p 固定回归覆盖 1x/4x、On/Off、两种模式和调试图。RTX 4060 Laptop 4x MSAA 下 Projector GPU P50/P95 为 0.071/0.072 ms，Light-space 为 0.091/0.091 ms；新增预分配显存为 48 MiB。详细记录见 `docs/glass3-caustics.md`。下一阶段进入 Glass-4 最终展示、对照矩阵与 Capture 验收。
 
 #### Glass-4：展示、测试与验收
 

@@ -39,6 +39,7 @@ public:
     ) const;
     void drawDepth() const;
     void drawTransmissiveDepth() const;
+    void drawTransmissive(const Shader& shader, const glm::vec3& tint) const;
     const glm::vec3& transparentSubmeshCenter(std::size_t transparentSubmeshIndex) const;
 
     std::size_t meshCount() const { return meshes_.size(); }

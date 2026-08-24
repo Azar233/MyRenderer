@@ -26,15 +26,51 @@ ShadowMap::ShadowMap(int resolution) : resolution_(resolution) {
         throw std::runtime_error("Failed to create shadow framebuffer");
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glGenFramebuffers(1, &transmissionFramebuffer_);
+    glGenTextures(1, &transmissionTexture_);
+    glBindTexture(GL_TEXTURE_2D, transmissionTexture_);
+    glTexImage2D(
+        GL_TEXTURE_2D, 0, GL_RGBA16F, resolution_, resolution_, 0,
+        GL_RGBA, GL_FLOAT, nullptr
+    );
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+    glBindFramebuffer(GL_FRAMEBUFFER, transmissionFramebuffer_);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D,
+        transmissionTexture_,
+        0
+    );
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        throw std::runtime_error("Failed to create transmission shadow framebuffer");
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 ShadowMap::~ShadowMap() {
+    if (transmissionTexture_ != 0U) glDeleteTextures(1, &transmissionTexture_);
+    if (transmissionFramebuffer_ != 0U) glDeleteFramebuffers(1, &transmissionFramebuffer_);
     if (depthTexture_ != 0U) glDeleteTextures(1, &depthTexture_);
     if (framebuffer_ != 0U) glDeleteFramebuffers(1, &framebuffer_);
 }
 
+void ShadowMap::bindTransmissionForWriting() const {
+    glBindFramebuffer(GL_FRAMEBUFFER, transmissionFramebuffer_);
+}
+
 void ShadowMap::bindForWriting() const {
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer_);
+}
+
+void ShadowMap::bindTransmissionTexture(unsigned int unit) const {
+    glActiveTexture(GL_TEXTURE0 + unit);
+    glBindTexture(GL_TEXTURE_2D, transmissionTexture_);
 }
 
 void ShadowMap::bindTexture(unsigned int unit) const {

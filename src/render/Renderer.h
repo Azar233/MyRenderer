@@ -13,6 +13,7 @@
 #include "optics/PrismOptics.h"
 
 class Camera;
+class CausticsMap;
 class DebugGrid;
 class EnvironmentMap;
 class GpuModel;
@@ -35,7 +36,14 @@ enum class GlassDebugView {
     RgbDispersion = 7,
     BackfaceThickness = 8,
     ExitSurfaceNormal = 9,
-    ObjectId = 10
+    ObjectId = 10,
+    Caustics = 11,
+    TransmissionShadow = 12
+};
+
+enum class CausticsMode {
+    Projector = 0,
+    LightSpace = 1
 };
 
 struct RendererSettings {
@@ -55,6 +63,16 @@ struct RendererSettings {
     bool pbrEnabled{true};
     bool iblEnabled{true};
     bool shadowsEnabled{true};
+    bool coloredTransmissionShadowsEnabled{true};
+    bool causticsEnabled{false};
+    CausticsMode causticsMode{CausticsMode::LightSpace};
+    float causticsStrength{1.8f};
+    float causticsScale{1.0f};
+    glm::vec3 causticsDirection{0.0f};
+    float causticsSharpness{0.72f};
+    bool causticsAnimated{false};
+    float causticsAnimationPhase{0.0f};
+    float causticsReceiverPlaneY{-0.72f};
     bool transmissionEnabled{true};
     bool skyboxEnabled{true};
     bool toneMapping{true};
@@ -129,6 +147,10 @@ public:
     double prismBeamGpuTimeMilliseconds() const { return prismBeamGpuTimeMilliseconds_; }
     double latestPrismBeamMeasurementMilliseconds() const { return latestPrismBeamMeasurementMilliseconds_; }
     std::size_t prismBeamMeasurementSerial() const { return prismBeamMeasurementSerial_; }
+    bool hasCausticsGpuTime() const { return hasCausticsGpuTime_; }
+    double causticsGpuTimeMilliseconds() const { return causticsGpuTimeMilliseconds_; }
+    double latestCausticsMeasurementMilliseconds() const { return latestCausticsMeasurementMilliseconds_; }
+    std::size_t causticsMeasurementSerial() const { return causticsMeasurementSerial_; }
     std::size_t drawCallCount() const { return drawCallCount_; }
     const std::vector<std::string>& activePassNames() const { return activePassNames_; }
     int shadowResolution() const;
@@ -139,12 +161,14 @@ public:
 
 private:
     std::unique_ptr<Shader> shader_;
+    std::unique_ptr<CausticsMap> causticsMap_;
     std::unique_ptr<DebugGrid> debugGrid_;
     std::unique_ptr<EnvironmentMap> environmentMap_;
     std::unique_ptr<OpticalPathDebugRenderer> opticalPathDebugRenderer_;
     std::unique_ptr<ShadowMap> shadowMap_;
     std::unique_ptr<SpectralBeamRenderer> spectralBeamRenderer_;
     std::unique_ptr<Shader> shadowShader_;
+    std::unique_ptr<Shader> transmissionShadowShader_;
     std::unique_ptr<Shader> glassThicknessShader_;
     std::unique_ptr<PostProcessor> postProcessor_;
     std::unique_ptr<RenderTarget> renderTarget_;
@@ -154,16 +178,24 @@ private:
     std::array<unsigned int, 4> beamStartQueries_{};
     std::array<unsigned int, 4> beamEndQueries_{};
     std::array<bool, 4> beamTimingPending_{};
+    std::array<unsigned int, 4> causticsStartQueries_{};
+    std::array<unsigned int, 4> causticsEndQueries_{};
+    std::array<bool, 4> causticsTimingPending_{};
     std::size_t nextTimingQuery_{0};
     std::size_t nextBeamTimingQuery_{0};
+    std::size_t nextCausticsTimingQuery_{0};
     double gpuFrameTimeMilliseconds_{0.0};
     double prismBeamGpuTimeMilliseconds_{0.0};
+    double causticsGpuTimeMilliseconds_{0.0};
     double latestGpuFrameMeasurementMilliseconds_{0.0};
     double latestPrismBeamMeasurementMilliseconds_{0.0};
+    double latestCausticsMeasurementMilliseconds_{0.0};
     std::size_t gpuFrameMeasurementSerial_{0};
     std::size_t prismBeamMeasurementSerial_{0};
+    std::size_t causticsMeasurementSerial_{0};
     std::size_t drawCallCount_{0};
     bool hasGpuFrameTime_{false};
     bool hasPrismBeamGpuTime_{false};
+    bool hasCausticsGpuTime_{false};
     std::vector<std::string> activePassNames_;
 };

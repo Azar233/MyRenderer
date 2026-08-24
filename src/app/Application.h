@@ -56,6 +56,7 @@ private:
     std::filesystem::path nextScreenshotPath() const;
     void resetObjectTransform();
     void activatePrismDemoPreset(bool loadFixture);
+    void activateGlassCausticsPreset();
     void deactivatePrismDemoPreset();
     void updatePrismDemoOptics();
     void applyPrismOpticalPreset(PrismOpticalPreset preset);
@@ -129,8 +130,10 @@ private:
     std::vector<double> benchmarkCpuFrameTimes_;
     std::vector<double> benchmarkGpuFrameTimes_;
     std::vector<double> benchmarkBeamGpuTimes_;
+    std::vector<double> benchmarkCausticsGpuTimes_;
     std::size_t lastBenchmarkGpuFrameSerial_{0};
     std::size_t lastBenchmarkBeamSerial_{0};
+    std::size_t lastBenchmarkCausticsSerial_{0};
     int renderWidthOverride_{0};
     int renderHeightOverride_{0};
     int benchmarkWarmupFrames_{60};
@@ -149,6 +152,7 @@ private:
     bool lastLoadFailed_{false};
     bool prismDemoEnabled_{false};
     bool glassVolumeDemoEnabled_{false};
+    bool glassCausticsDemoEnabled_{false};
     bool prismCameraLocked_{true};
     bool prismModelVisible_{true};
     bool benchmarkMode_{false};
