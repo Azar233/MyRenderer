@@ -117,6 +117,8 @@ Prism-2 可通过 `MYRENDERER_PRISM_SAMPLES=7|15|21|31` 选择光谱采样档位
 
 Prism-3 光束参数可通过 `MYRENDERER_PRISM_BEAM_WIDTH`、`MYRENDERER_PRISM_BEAM_INTENSITY` 与 `MYRENDERER_PRISM_BEAM_SOFTNESS` 覆盖，也可在 Inspector 的 `Spectral beam ribbons` 下实时调整；整体曝光与 Bloom 继续使用通用后处理控件。
 
+Prism-4 在 Inspector 中提供实时 Beam Direction、IOR、Dispersion/Abbe、光谱采样、连续/七色模式、White Point、Bloom Contribution、四个光学 Preset、完整 Optical Path Debug，以及镜头锁定/恢复。自动化可使用 `MYRENDERER_PRISM_PRESET=0|1|2|3`、`MYRENDERER_PRISM_BEAM_ANGLE`、`MYRENDERER_PRISM_IOR`、`MYRENDERER_PRISM_DISPERSION`、`MYRENDERER_PRISM_WHITE_POINT`、`MYRENDERER_PRISM_BLOOM_CONTRIBUTION` 与 `MYRENDERER_PRISM_DEBUG=1`。
+
 `gpu-smoke` 目标会运行材质场景以及“成功场景后加载错误资产”的恢复测试，确保 GPU 路径使用真实上下文且失败导入保留当前场景：
 
 ```powershell
@@ -133,12 +135,14 @@ src/io/ModelImporter.h   统一模型导入接口与导入结果
 src/io/AssimpImporter.*  DAE 与 glTF/GLB 静态模型导入适配
 src/io/ObjLoader.*       OBJ 导入器：统一索引、UV、法线与 AABB
 src/optics/PrismOptics.* 无 OpenGL 依赖的三棱镜求交、双界面折射、Fresnel 与 TIR
+src/optics/PrismDemo.*   Prism 参数、四组光学 Preset、White Point 与实时求解入口
 src/render/Camera.*      轨道相机
 src/render/DebugGrid.*   世界网格、XYZ 轴线与 Debug Line GPU 绘制
 src/render/EnvironmentMap.* 程序化 HDR Cubemap、IBL 采样与天空盒
 src/render/GpuModel.*    一个模型所拥有的 GPU Mesh 集合与统计
 src/render/Mesh.*        VAO/VBO/EBO、顶点布局与子网格 Draw Call
 src/render/OpenGlDebug.* Debug 构建的 OpenGL 驱动诊断
+src/render/OpticalPathDebugRenderer.* 世界空间光路、交点、法线、TIR 与能量调试层
 src/render/PostProcessor.* HDR Bloom、ACES Tone Mapping 与最终 sRGB 输出
 src/render/RenderTarget.*Opaque/HDR/MSAA 场景、可采样深度与最终 LDR 离屏 Framebuffer
 src/render/Renderer.*    渲染状态、轻量 Pass 编排、相机参数与离屏绘制

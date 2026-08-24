@@ -16,6 +16,7 @@ class Camera;
 class DebugGrid;
 class EnvironmentMap;
 class GpuModel;
+class OpticalPathDebugRenderer;
 class PostProcessor;
 class RenderTarget;
 class Shader;
@@ -72,6 +73,10 @@ struct RendererSettings {
     float prismBeamWidth{0.045f};
     float prismBeamIntensity{5.0f};
     float prismBeamEdgeSoftness{0.65f};
+    float prismBeamBloomContribution{0.35f};
+    glm::vec3 prismBeamWhitePoint{1.0f};
+    float indexOfRefractionOverride{0.0f};
+    bool showPrismOpticalPathDebug{false};
 };
 
 struct RenderItem {
@@ -117,6 +122,7 @@ private:
     std::unique_ptr<Shader> shader_;
     std::unique_ptr<DebugGrid> debugGrid_;
     std::unique_ptr<EnvironmentMap> environmentMap_;
+    std::unique_ptr<OpticalPathDebugRenderer> opticalPathDebugRenderer_;
     std::unique_ptr<ShadowMap> shadowMap_;
     std::unique_ptr<SpectralBeamRenderer> spectralBeamRenderer_;
     std::unique_ptr<Shader> shadowShader_;

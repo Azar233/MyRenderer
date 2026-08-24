@@ -34,5 +34,6 @@ SpectralBeamMeshData buildSpectralBeamMesh(
     const SpectralBeamData& spectrum,
     const glm::vec3& cameraPosition,
     float outputLength,
-    float beamWidth
+    float beamWidth,
+    glm::vec3 incidentWhitePoint = glm::vec3(1.0f)
 );

@@ -1,6 +1,6 @@
 # Prism Spectrum 技术说明
 
-本文记录 MyRenderer 棱镜分光 Demo 的光学模型、工程边界和可重复运行方式。当前实现进度为 Prism-3，已经包含连续光谱求解和柔边 HDR 光束几何。
+本文记录 MyRenderer 棱镜分光 Demo 的光学模型、工程边界和可重复运行方式。当前实现进度为 Prism-4，已经包含连续光谱求解、柔边 HDR 光束、实时参数控制、光学 Preset 与完整光路调试视图。
 
 ## 1. 数据流
 
@@ -9,7 +9,9 @@ glTF KHR_materials_ior / dispersion / volume
                     ↓
 MaterialData → GpuMaterial → Glass Shader
                     ↓
-PrismOptics CPU 光谱采样 → SpectralBeamData → SpectralBeamMesh → SpectralBeamRenderer
+PrismDemo 参数/Preset → PrismOptics CPU 光谱采样 → SpectralBeamData
+                                              ├→ SpectralBeamMesh → SpectralBeamRenderer
+                                              └→ OpticalPathDebugRenderer
 ```
 
 `DebugGrid` 只继续负责地面网格与坐标轴。
@@ -63,12 +65,30 @@ Shadow Map
 → Spectral Beam HDR（Depth Test + Additive Blend）
 → Resolve Opaque HDR + 生成 Mip
 → Forward Transparent / Refractive（采样含光束的 Opaque HDR）
+→ Optical Path Debug Overlay（可选）
 → Bloom + Tone Mapping
 ```
 
 Beam Pass 不采样当前颜色附件，只向它加光，因此没有 Framebuffer Feedback。随后才 Resolve 成独立纹理供 Glass Pass 读取。Incident / Internal / Exit 三个批次分别放入 OpenGL `KHR_debug` Debug Group，便于 RenderDoc 或驱动调试器定位。
 
-## 6. 可重复运行
+## 6. Prism-4 参数、Preset 与调试
+
+`PrismDemoParameters` 是控制层的唯一光学参数源。修改 Beam Direction、Central IOR、Dispersion、Spectral Samples、Spectrum Mode 或 White Point 后，CPU 会立即重新调用 `tracePrismSpectrum`；Renderer 只消费求解结果，不在绘制阶段重复做求交。Central IOR 和 Dispersion 也会覆盖测试棱镜的 Glass Shader 参数，使玻璃外观和光线路径保持一致。
+
+四个内置 Preset 共用同一套 Shader 与 Pass，只保存参数：
+
+| Preset | 用途 |
+| --- | --- |
+| Crown Glass | 低到中等色散的默认物理基线 |
+| Water-like | 较低 IOR、轻微冷色吸收的对照材料 |
+| Diamond-like | 高 IOR 与 TIR 压力场景 |
+| Exaggerated Cover | 七色模式和增强色散的美术化封面构图 |
+
+White Point 使用 Kelvin 色温近似转换到线性 sRGB，并调制入射、内部和出射光束。Bloom Contribution 只控制 Beam HDR 增益，独立于全局 Bloom Threshold / Intensity，方便美术调整发光感而不改变光路。
+
+`Optical path debug` 在 Glass Pass 之后叠加世界空间线：白色是中心入射线，光谱色线显示各波长的内部与出射路径，黄色/洋红短线分别表示入射/出射界面法线，橙色表示 TIR。交点以 Point 标记，Inspector 的折叠表格逐波长显示 IOR、Entry T、Exit T 和 Total Transmittance。
+
+## 7. 可重复运行
 
 ```powershell
 $env:MYRENDERER_PRISM_DEMO = "1"
@@ -88,7 +108,10 @@ $env:MYRENDERER_PRISM_SPECTRUM_MODE = "seven"
 $env:MYRENDERER_PRISM_BEAM_WIDTH = "0.055"
 $env:MYRENDERER_PRISM_BEAM_INTENSITY = "5.0"
 $env:MYRENDERER_PRISM_BEAM_SOFTNESS = "0.72"
+$env:MYRENDERER_PRISM_BLOOM_CONTRIBUTION = "0.35"
 ```
+
+Prism-4 还支持 `MYRENDERER_PRISM_PRESET=0|1|2|3`、`MYRENDERER_PRISM_BEAM_ANGLE`、`MYRENDERER_PRISM_IOR`、`MYRENDERER_PRISM_DISPERSION`、`MYRENDERER_PRISM_WHITE_POINT` 与 `MYRENDERER_PRISM_DEBUG=1`。Preset 编号依次对应 Crown / Water / Diamond / Exaggerated，后续单项环境变量会覆盖 Preset 中的对应参数。
 
 固定结果见：
 
@@ -96,10 +119,13 @@ $env:MYRENDERER_PRISM_BEAM_SOFTNESS = "0.72"
 - `images/prism2_seven_band.png`
 - `images/prism3_continuous_ribbon.png`
 - `images/prism3_seven_band_ribbon.png`
+- `images/prism4_exaggerated_cover.png`
+- `images/prism4_optical_debug.png`
 
-## 7. 当前边界
+## 8. 当前边界
 
 - 当前可见 Ribbon 是光路可视化，不是真实空气体积散射；干净空气中的光束从侧面通常不可见。
 - Ribbon 已解决 OpenGL Line 的宽度和柔边限制，但属于透明发光几何，极端相机角度仍需在 Prism-5 视觉回归中覆盖。
-- 当前 Prism Preset 的 CPU 光学参数与测试资产保持一致；Prism-4 再把 IOR、Dispersion、采样档位和光束方向统一接入 Inspector。
+- White Point 当前使用 Kelvin 到线性 sRGB 的显示近似，不是黑体辐射谱的逐波长积分；作品集说明中需保持这一工程边界。
+- Optical Path Debug 是可读性优先的 Overlay，关闭后不进入最终作品集画面；Prism-5 再建立固定截图差异与性能验收。
 - CIE 解析函数是标准曲线的高质量近似，不是逐纳米查表；文档与代码均明确保留这一近似边界。

@@ -8,6 +8,7 @@
 #include <glm/vec3.hpp>
 
 #include "optics/PrismOptics.h"
+#include "optics/PrismDemo.h"
 #include "optics/SpectralBeamMesh.h"
 
 namespace {
@@ -230,6 +231,57 @@ int main() {
         require(
             sevenBandMesh.batches[2].vertexCount == sevenBand.samples.size() * 6U,
             "seven-band exits should use one ribbon per wavelength"
+        );
+
+        for (const PrismOpticalPreset preset : {
+                 PrismOpticalPreset::CrownGlass,
+                 PrismOpticalPreset::WaterLike,
+                 PrismOpticalPreset::DiamondLike,
+                 PrismOpticalPreset::ExaggeratedCover
+             }) {
+            const PrismDemoParameters parameters = prismOpticalPresetParameters(preset);
+            const PrismDemoSolution solution = solvePrismDemo(parameters);
+            require(solution.valid, "every Prism-4 preset should produce a traceable optical path");
+            require(finite(solution.linearWhitePoint), "preset white points should remain finite");
+            require(
+                solution.spectrum.samples.size()
+                    == (parameters.spectrumMode == PrismSpectrumMode::SevenBand
+                        ? 7U
+                        : static_cast<std::size_t>(parameters.spectralSampleCount)),
+                "preset spectrum mode should select the expected sample count"
+            );
+            require(prismOpticalPresetName(preset)[0] != '\0', "every preset should have a UI label");
+        }
+
+        PrismDemoParameters angledParameters = prismOpticalPresetParameters(
+            PrismOpticalPreset::CrownGlass
+        );
+        const PrismDemoSolution originalAngle = solvePrismDemo(angledParameters);
+        angledParameters.beamAngleDegrees -= 4.0f;
+        const PrismDemoSolution changedAngle = solvePrismDemo(angledParameters);
+        require(originalAngle.valid && changedAngle.valid, "interactive beam angles should remain traceable");
+        require(
+            angularDifference(
+                originalAngle.spectrum.samples.front().path.exitDirection,
+                changedAngle.spectrum.samples.front().path.exitDirection
+            ) > 1.0e-3f,
+            "changing the beam angle should immediately change the solved optical path"
+        );
+
+        const glm::vec3 warmWhite = colorTemperatureToLinearSrgb(3000.0f);
+        const glm::vec3 daylightWhite = colorTemperatureToLinearSrgb(6500.0f);
+        require(finite(warmWhite) && finite(daylightWhite), "white-point conversion should stay finite");
+        require(warmWhite.r > warmWhite.b, "a 3000 K white point should be warmer than blue");
+        const SpectralBeamMeshData warmMesh = buildSpectralBeamMesh(
+            continuous,
+            glm::vec3(0.0f, 0.0f, 4.8f),
+            2.4f,
+            0.055f,
+            warmWhite
+        );
+        require(
+            warmMesh.vertices.front().linearColor.r > warmMesh.vertices.front().linearColor.b,
+            "the incident ribbon should receive the selected white point"
         );
 
         std::cout << "Prism optics tests passed\n";

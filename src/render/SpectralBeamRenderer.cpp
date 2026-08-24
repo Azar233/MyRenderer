@@ -79,13 +79,16 @@ std::size_t SpectralBeamRenderer::draw(
     float outputLength,
     float width,
     float intensity,
-    float edgeSoftness
+    float edgeSoftness,
+    float bloomContribution,
+    const glm::vec3& incidentWhitePoint
 ) const {
     const SpectralBeamMeshData mesh = buildSpectralBeamMesh(
         spectrum,
         cameraPosition,
         std::max(outputLength, 0.01f),
-        std::max(width, 0.001f)
+        std::max(width, 0.001f),
+        incidentWhitePoint
     );
     if (mesh.vertices.empty()) {
         return 0U;
@@ -96,6 +99,7 @@ std::size_t SpectralBeamRenderer::draw(
     shader_->setMat4("uProjection", projection);
     shader_->setFloat("uIntensity", std::max(intensity, 0.0f));
     shader_->setFloat("uEdgeSoftness", std::clamp(edgeSoftness, 0.01f, 1.0f));
+    shader_->setFloat("uBloomContribution", std::clamp(bloomContribution, 0.0f, 2.0f));
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     glBufferData(
         GL_ARRAY_BUFFER,

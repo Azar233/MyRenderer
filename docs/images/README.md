@@ -17,3 +17,7 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
   camera-facing, soft-edged HDR ribbon mesh.
 - `prism3_seven_band_ribbon.png`: Prism-3 art-directed discrete ribbons with
   additive HDR blending and bloom.
+- `prism4_exaggerated_cover.png`: Prism-4 Exaggerated Cover preset with the
+  fixed hero camera, seven-band spectrum, white-point tint, and beam bloom.
+- `prism4_optical_debug.png`: Prism-4 optical-path overlay showing wavelength
+  paths, interface points, and entry/exit surface normals.

@@ -12,6 +12,7 @@
 #include <glm/vec3.hpp>
 
 #include "io/ModelImporter.h"
+#include "optics/PrismDemo.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
 
@@ -55,6 +56,9 @@ private:
     std::filesystem::path nextScreenshotPath() const;
     void resetObjectTransform();
     void activatePrismDemoPreset(bool loadFixture);
+    void updatePrismDemoOptics();
+    void applyPrismOpticalPreset(PrismOpticalPreset preset);
+    void restorePrismHeroShot();
 
     GLFWwindow* window_{nullptr};
     bool guiInitialized_{false};
@@ -117,5 +121,8 @@ private:
     bool vsync_{true};
     bool lastLoadFailed_{false};
     bool prismDemoEnabled_{false};
+    bool prismCameraLocked_{true};
+    PrismOpticalPreset prismOpticalPreset_{PrismOpticalPreset::CrownGlass};
+    PrismDemoParameters prismParameters_{};
     double previousFrameTime_{0.0};
 };

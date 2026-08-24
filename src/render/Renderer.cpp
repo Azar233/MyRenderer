@@ -12,6 +12,7 @@
 #include "render/DebugGrid.h"
 #include "render/EnvironmentMap.h"
 #include "render/GpuModel.h"
+#include "render/OpticalPathDebugRenderer.h"
 #include "render/PostProcessor.h"
 #include "render/RenderPassSequence.h"
 #include "render/RenderTarget.h"
@@ -31,6 +32,10 @@ Renderer::Renderer(
     environmentMap_(std::make_unique<EnvironmentMap>(
         vertexShaderPath.parent_path() / "fullscreen.vert",
         vertexShaderPath.parent_path() / "skybox.frag"
+    )),
+    opticalPathDebugRenderer_(std::make_unique<OpticalPathDebugRenderer>(
+        debugVertexShaderPath,
+        debugFragmentShaderPath
     )),
     shadowMap_(std::make_unique<ShadowMap>()),
     spectralBeamRenderer_(std::make_unique<SpectralBeamRenderer>(
@@ -164,6 +169,7 @@ void Renderer::render(
         shader_->setInt("uRefractionSteps", settings.refractionSteps);
         shader_->setFloat("uVolumeThicknessScale", settings.volumeThicknessScale);
         shader_->setFloat("uDispersionStrength", settings.dispersionStrength);
+        shader_->setFloat("uIndexOfRefractionOverride", settings.indexOfRefractionOverride);
         shader_->setInt("uGlassDebugView", static_cast<int>(settings.glassDebugView));
         shader_->setFloat(
             "uOpaqueColorMaxMip",
@@ -276,7 +282,9 @@ void Renderer::render(
                 settings.prismBeamOutputLength,
                 settings.prismBeamWidth,
                 settings.prismBeamIntensity,
-                settings.prismBeamEdgeSoftness
+                settings.prismBeamEdgeSoftness,
+                settings.prismBeamBloomContribution,
+                settings.prismBeamWhitePoint
             );
             glDisable(GL_BLEND);
             glDepthMask(GL_TRUE);
@@ -326,6 +334,27 @@ void Renderer::render(
             glBindTexture(GL_TEXTURE_2D, 0);
         }
     });
+    if (settings.showPrismOpticalPathDebug && settings.prismOpticalPathValid) {
+        sequence.add("Optical path debug", [&] {
+            renderTarget_->bindHdrSceneForOverlay();
+            glViewport(0, 0, width, height);
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glDisable(GL_CULL_FACE);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            drawCallCount_ += opticalPathDebugRenderer_->draw(
+                settings.prismSpectrum,
+                view,
+                projection,
+                settings.prismBeamOutputLength
+            );
+            glDisable(GL_BLEND);
+            glDepthMask(GL_TRUE);
+            glEnable(GL_DEPTH_TEST);
+        });
+    }
     sequence.add(settings.bloom ? "Bloom + tone map" : "Tone map", [&] {
         postProcessor_->process(*renderTarget_, PostProcessSettings{
             settings.toneMapping,

@@ -211,6 +211,12 @@
 | Light-space Caustics | 从光源方向计算折射光落点并累积能量的实时焦散近似。 | Glass-3 图形程序进阶方案。 | 计划 |
 | Additive Blending（加法混合） | 把新颜色直接加到已有颜色上，适合表示光和能量叠加；重叠越多通常越亮。 | Prism Beam Pass 使用 `GL_ONE + GL_ONE` 写入 RGBA16F，再由 Bloom 提取高亮；未来焦散也可复用。 | 已实现 |
 | Edge Softness（边缘柔度） | 控制光束从亮核心到透明边缘的过渡宽度，值越大过渡越柔和。 | Beam Fragment Shader 根据 Ribbon 横向坐标执行 `smoothstep`，Inspector 可实时调节。 | 已实现 |
+| White Point（白点） | 定义“什么颜色应被看作白色”；改变它会让同一束白光偏暖或偏冷。 | Prism-4 以 Kelvin 参数生成线性 sRGB 调制色，同时作用于入射、内部和出射光束。 | 已实现（显示近似） |
+| Color Temperature / Kelvin（色温 / 开尔文） | 用温度近似描述光源颜色；较低数值偏暖黄，较高数值偏冷蓝。它描述颜色倾向，不等于光源实际温度测量。 | Inspector 的 White Point 范围为 2000～12000 K，自动化也可由环境变量覆盖。 | 已实现 |
+| Optical Preset（光学预设） | 一组可复用参数快照；切换材料风格时改变 IOR、色散、采样和吸收等数据，而不是复制一份 Shader。 | Prism-4 提供 Crown Glass、Water-like、Diamond-like、Exaggerated Cover 四组。 | 已实现 |
+| Bloom Contribution（Bloom 贡献） | 控制某个效果向 HDR 高亮额外贡献多少能量，从而影响它产生光晕的程度。 | Beam Shader 在进入全局 Bloom 提取前独立增加光束 HDR 增益，不改变求解方向。 | 已实现 |
+| IOR Override（折射率覆盖） | 临时用一个统一 IOR 替代资产材质中的 IOR，常用于调试或交互演示。 | Prism-4 把 Preset/Inspector 的 Central IOR 同时用于 CPU 光路和玻璃 Shader，防止两边参数不一致。 | 已实现 |
+| Optical Path Debug View（光路调试视图） | 把不可见的数学射线、交点、法线和能量画到场景上，帮助判断折射方向为何变化。 | 独立 HDR Overlay Pass 绘制逐波长路径；表格显示 Entry/Exit/Total Transmittance，TIR 使用橙色。 | 已实现 |
 | GPU Debug Group | 给一组 GPU 命令加可读名称，便于在 RenderDoc、Nsight 或驱动回调中定位。 | Beam Pass 将 Incident、Internal、Exit 三批绘制分别标记。 | 已实现 |
 
 ## 10. 调试、性能与测试
@@ -232,6 +238,9 @@
 | Baseline Image（基准图） | 在固定场景、镜头和参数下保存的参考画面，后续改动都与它比较。 | `docs/images/prism0_baseline.png` 记录色散光路接入前的 Prism-0 构图。 | 已建立 |
 | SSIM | 比逐像素相等更关注结构相似度的图像比较指标。 | 计划用于容忍不同 GPU 的微小浮点差异。 | 计划 |
 | Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 已支持 Reflection、Refraction、IOR、Refracted UV、Thickness、Transmittance 与 RGB Dispersion；完整 GBuffer/材质视图仍在 P0 路线。 | 部分实现 |
+| Overlay Pass（叠加 Pass） | 在主体画面之后再绘制一层辅助内容，通常用于轮廓、Gizmo、调试线或 HUD。 | Optical Path Debug 在 Glass 之后、Tone Mapping 之前写入同一个 HDR Scene。 | 已实现 |
+| Camera Lock（镜头锁定） | 暂时禁止鼠标改变相机，避免录屏或回归截图因误操作改变机位。 | Prism-4 默认锁定 Hero Camera，取消勾选后恢复 Orbit 操作。 | 已实现 |
+| Hero Shot（主视觉镜头） | 专门为展示效果设计、参数固定且可重复恢复的代表性构图。 | Prism Demo 可一键恢复固定目标、方位、距离与 FOV。 | 已实现 |
 | Overdraw | 同一像素在一帧内被重复绘制多次，透明与粒子常导致高 Overdraw。 | TA/性能调试视图计划覆盖。 | 计划 |
 | GPU Memory / VRAM | GPU 用于纹理、Buffer 和 RenderTarget 的显存。 | 当前统计纹理估算值；完整 RenderTarget/Buffer 预算待补。 | 部分实现 |
 
@@ -313,7 +322,9 @@
 | DAE/glTF/GLB 导入 | `src/io/AssimpImporter.*` |
 | glTF/GLB 色散扩展适配 | `src/io/GltfMaterialExtensions.*` |
 | 棱镜求交与连续光谱 | `src/optics/PrismOptics.*` |
+| Prism 参数、Preset 与 White Point | `src/optics/PrismDemo.*` |
 | 光束 Ribbon 网格与 HDR 绘制 | `src/optics/SpectralBeamMesh.*`、`src/render/SpectralBeamRenderer.*`、`shaders/spectral_beam.*` |
+| 光路、交点、法线与能量调试层 | `src/render/OpticalPathDebugRenderer.*` |
 | UI、加载与主循环 | `src/app/Application.*` |
 | CPU 资产回归测试 | `tests/AssetImportTests.cpp` |
 | Prism 公式、数据流与近似边界 | `docs/prism-spectrum.md` |

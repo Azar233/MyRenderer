@@ -5,34 +5,27 @@
 #include <memory>
 
 #include <glm/mat4x4.hpp>
-#include <glm/vec3.hpp>
 
 #include "optics/PrismOptics.h"
 
 class Shader;
 
-class SpectralBeamRenderer {
+class OpticalPathDebugRenderer {
 public:
-    SpectralBeamRenderer(
+    OpticalPathDebugRenderer(
         const std::filesystem::path& vertexShaderPath,
         const std::filesystem::path& fragmentShaderPath
     );
-    ~SpectralBeamRenderer();
+    ~OpticalPathDebugRenderer();
 
-    SpectralBeamRenderer(const SpectralBeamRenderer&) = delete;
-    SpectralBeamRenderer& operator=(const SpectralBeamRenderer&) = delete;
+    OpticalPathDebugRenderer(const OpticalPathDebugRenderer&) = delete;
+    OpticalPathDebugRenderer& operator=(const OpticalPathDebugRenderer&) = delete;
 
     std::size_t draw(
         const SpectralBeamData& spectrum,
-        const glm::vec3& cameraPosition,
         const glm::mat4& view,
         const glm::mat4& projection,
-        float outputLength,
-        float width,
-        float intensity,
-        float edgeSoftness,
-        float bloomContribution,
-        const glm::vec3& incidentWhitePoint
+        float outputLength
     ) const;
 
 private:

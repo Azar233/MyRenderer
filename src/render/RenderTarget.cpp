@@ -270,6 +270,10 @@ void RenderTarget::bindRefractiveScene() const {
     glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
 }
 
+void RenderTarget::bindHdrSceneForOverlay() const {
+    glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
+}
+
 void RenderTarget::bindFinal() const {
     glBindFramebuffer(GL_FRAMEBUFFER, finalFramebuffer_);
 }

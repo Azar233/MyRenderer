@@ -15,6 +15,7 @@ public:
     void bindOpaqueScene() const;
     void resolveOpaqueScene() const;
     void bindRefractiveScene() const;
+    void bindHdrSceneForOverlay() const;
     void bindFinal() const;
     void unbind() const;
     bool savePng(const std::filesystem::path& path, std::string& error) const;

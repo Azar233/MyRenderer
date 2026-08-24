@@ -436,10 +436,12 @@ Shadow / Depth
 
 ##### Prism-4：控制、调试与可复用性
 
-- [ ] Inspector 增加 Beam Direction、Width、Intensity、White Point、Central IOR、Dispersion/Abbe、Spectral Samples、Spectrum Mode、Edge Softness 与 Bloom Contribution。
-- [ ] 增加 `Optical Path` 调试视图：显示入射/出射交点、表面法线、每个波长的世界空间路径、TIR 状态和每段能量。
-- [ ] 至少提供 Crown Glass、Water-like、Diamond-like、Exaggerated Cover 四个 Preset；Preset 只保存参数，不复制 Shader。
-- [ ] 支持暂停自动旋转、锁定镜头和一键恢复 Hero Shot，保证录屏与截图可重复。
+- [x] Inspector 增加 Beam Direction、Width、Intensity、White Point、Central IOR、Dispersion/Abbe、Spectral Samples、Spectrum Mode、Edge Softness 与 Bloom Contribution。
+- [x] 增加 `Optical Path` 调试视图：显示入射/出射交点、表面法线、每个波长的世界空间路径、TIR 状态和每段能量。
+- [x] 至少提供 Crown Glass、Water-like、Diamond-like、Exaggerated Cover 四个 Preset；Preset 只保存参数，不复制 Shader。
+- [x] 支持暂停自动旋转、锁定镜头和一键恢复 Hero Shot，保证录屏与截图可重复。
+
+> Prism-4 完成（2026-08-24）：新增无 OpenGL 依赖的 `PrismDemo` 参数/求解层，Inspector 的入射角、中心 IOR、色散/Abbe、7/15/21/31 采样、连续/七色模式与 White Point 修改后会立即重算同一份光谱数据；Beam Width / Intensity / Edge Softness / Bloom Contribution 继续作为实时绘制参数。Crown Glass、Water-like、Diamond-like 与 Exaggerated Cover 四个 Preset 只保存参数并复用同一套 Shader；中心 IOR 同时覆盖玻璃 Shader，避免可见玻璃与 CPU 光路使用不同介质。新增独立 `Optical path debug` HDR Overlay Pass，用彩色世界空间线、界面交点、入射/出射法线和 TIR 橙色标记显示路径，Inspector 表格逐波长列出 Entry / Exit / Total Transmittance。Prism 模式支持锁定镜头、暂停旋转和一键恢复 Hero Shot，并提供环境变量用于自动截图。3 项 CTest、完整 GPU smoke 与 4x MSAA 成果图均通过；`docs/images/prism4_exaggerated_cover.png` 和 `prism4_optical_debug.png` 保存本阶段结果。下一阶段进入 Prism-5，重点是视觉回归矩阵、1080p 性能数据、On/Off 证据和作品集素材。
 
 ##### Prism-5：验收与作品集证据
 

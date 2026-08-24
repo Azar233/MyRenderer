@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
 namespace {
@@ -72,18 +73,27 @@ void appendRibbonSegment(
     appendTriangle(vertices, fromLeft, toRight, fromRight);
 }
 
-glm::vec3 weightedColor(const PrismSpectralSample& sample, float sampleCount) {
-    return sample.linearRgb * std::max(sample.normalizedEnergy * sampleCount, 0.0f);
+glm::vec3 weightedColor(
+    const PrismSpectralSample& sample,
+    float sampleCount,
+    const glm::vec3& whitePoint
+) {
+    return sample.linearRgb * glm::max(whitePoint, glm::vec3(0.0f))
+        * std::max(sample.normalizedEnergy * sampleCount, 0.0f);
 }
 
-glm::vec3 sevenBandColor(const PrismSpectralSample& sample, float sampleCount) {
+glm::vec3 sevenBandColor(
+    const PrismSpectralSample& sample,
+    float sampleCount,
+    const glm::vec3& whitePoint
+) {
     const float maximumChannel = std::max({
         sample.linearRgb.r,
         sample.linearRgb.g,
         sample.linearRgb.b,
         epsilon
     });
-    return sample.linearRgb / maximumChannel
+    return sample.linearRgb / maximumChannel * glm::max(whitePoint, glm::vec3(0.0f))
         * std::max(sample.normalizedEnergy * sampleCount, 0.0f);
 }
 
@@ -107,7 +117,8 @@ void appendContinuousFan(
     float endFraction,
     float startPadding,
     float endPadding,
-    const glm::vec3& cameraPosition
+    const glm::vec3& cameraPosition,
+    const glm::vec3& whitePoint
 ) {
     if (samples.size() < 2U) {
         return;
@@ -128,7 +139,7 @@ void appendContinuousFan(
         ends.push_back(internal
             ? entry + (exit - entry) * endFraction
             : exit + toWorld(sample->path.exitDirection) * (outputLength * endFraction));
-        colors.push_back(weightedColor(*sample, sampleCount));
+        colors.push_back(weightedColor(*sample, sampleCount, whitePoint));
     }
 
     std::vector<glm::vec3> startBoundaries(samples.size() + 1U);
@@ -210,7 +221,8 @@ SpectralBeamMeshData buildSpectralBeamMesh(
     const SpectralBeamData& spectrum,
     const glm::vec3& cameraPosition,
     float outputLength,
-    float beamWidth
+    float beamWidth,
+    glm::vec3 incidentWhitePoint
 ) {
     SpectralBeamMeshData mesh;
     const std::vector<const PrismSpectralSample*> samples = validSamples(spectrum);
@@ -234,7 +246,7 @@ SpectralBeamMeshData buildSpectralBeamMesh(
         mesh.vertices,
         toWorld(spectrum.incidentRay.origin),
         toWorld(centerSample->path.entryPoint),
-        glm::vec3(1.0f),
+        glm::max(incidentWhitePoint, glm::vec3(0.0f)),
         cameraPosition,
         halfWidth,
         halfWidth * 0.65f
@@ -246,6 +258,7 @@ SpectralBeamMeshData buildSpectralBeamMesh(
     const glm::vec3 internalExit = toWorld(centerSample->path.exitPoint);
     const glm::vec3 internalMidpoint = 0.5f * (internalEntry + internalExit);
     const glm::vec3 internalColor = glm::vec3(0.82f, 0.92f, 1.0f)
+        * glm::max(incidentWhitePoint, glm::vec3(0.0f))
         * std::max(centerSample->path.entryTransmittance, 0.1f);
     appendRibbonSegment(
         mesh.vertices,
@@ -271,7 +284,7 @@ SpectralBeamMeshData buildSpectralBeamMesh(
     if (spectrum.mode == PrismSpectrumMode::Continuous && samples.size() >= 2U) {
         appendContinuousFan(
             mesh.vertices, samples, false, outputLength,
-            0.0f, 1.0f, 0.0f, halfWidth * 0.55f, cameraPosition
+            0.0f, 1.0f, 0.0f, halfWidth * 0.55f, cameraPosition, incidentWhitePoint
         );
     } else {
         const float sampleCount = static_cast<float>(samples.size());
@@ -281,7 +294,7 @@ SpectralBeamMeshData buildSpectralBeamMesh(
                 mesh.vertices,
                 exit,
                 toWorld(sample->path.exitPoint + sample->path.exitDirection * outputLength),
-                sevenBandColor(*sample, sampleCount),
+                sevenBandColor(*sample, sampleCount, incidentWhitePoint),
                 cameraPosition,
                 0.0f,
                 halfWidth * 0.28f

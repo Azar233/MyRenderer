@@ -103,6 +103,7 @@ add_executable(MyRenderer
     src/io/GltfMaterialExtensions.cpp
     src/io/ObjLoader.cpp
     src/optics/PrismOptics.cpp
+    src/optics/PrismDemo.cpp
     src/optics/SpectralBeamMesh.cpp
     src/render/Camera.cpp
     src/render/DebugGrid.cpp
@@ -110,6 +111,7 @@ add_executable(MyRenderer
     src/render/GpuModel.cpp
     src/render/Mesh.cpp
     src/render/OpenGlDebug.cpp
+    src/render/OpticalPathDebugRenderer.cpp
     src/render/PostProcessor.cpp
     src/render/RenderTarget.cpp
     src/render/Renderer.cpp
@@ -211,6 +213,7 @@ if(BUILD_TESTING)
     add_executable(MyRendererPrismOpticsTests
         tests/PrismOpticsTests.cpp
         src/optics/PrismOptics.cpp
+        src/optics/PrismDemo.cpp
         src/optics/SpectralBeamMesh.cpp
     )
     target_include_directories(MyRendererPrismOpticsTests PRIVATE src)

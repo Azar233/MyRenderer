@@ -35,6 +35,7 @@ uniform float uEnvironmentIntensity;
 uniform float uEnvironmentMaxMip;
 uniform float uTransmissionFactor;
 uniform float uIndexOfRefraction;
+uniform float uIndexOfRefractionOverride;
 uniform float uThicknessFactor;
 uniform vec3 uAttenuationColor;
 uniform float uAttenuationDistance;
@@ -216,7 +217,12 @@ void main() {
         return;
     }
 
-    float ior = max(uIndexOfRefraction, 1.0);
+    float ior = max(
+        uIndexOfRefractionOverride > 0.0
+            ? uIndexOfRefractionOverride
+            : uIndexOfRefraction,
+        1.0
+    );
     float dielectricF0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
     vec3 f0 = mix(vec3(dielectricF0), albedo, metallic);
     float distribution = distributionGGX(normal, halfDirection, roughness);

@@ -24,6 +24,7 @@
 #include "io/AssimpImporter.h"
 #include "io/ModelImporter.h"
 #include "io/ObjLoader.h"
+#include "optics/PrismDemo.h"
 #include "optics/PrismOptics.h"
 #include "render/GpuModel.h"
 #include "render/OpenGlDebug.h"
@@ -629,26 +630,99 @@ void Application::drawInspectorPanel() {
                 4.0f,
                 "%.2f"
             );
-            ImGui::SliderFloat(
-                "Dispersion override",
-                &rendererSettings_.dispersionStrength,
-                0.0f,
-                2.5f,
-                "%.2f"
-            );
-            if (rendererSettings_.dispersionStrength > 0.0f) {
-                ImGui::TextDisabled(
-                    "Abbe number: %.2f",
-                    20.0f / rendererSettings_.dispersionStrength
+            if (!prismDemoEnabled_) {
+                ImGui::SliderFloat(
+                    "Dispersion override",
+                    &rendererSettings_.dispersionStrength,
+                    0.0f,
+                    2.5f,
+                    "%.2f"
                 );
-            } else {
-                ImGui::TextDisabled("Abbe number: material-driven");
+                if (rendererSettings_.dispersionStrength > 0.0f) {
+                    ImGui::TextDisabled(
+                        "Abbe number: %.2f",
+                        20.0f / rendererSettings_.dispersionStrength
+                    );
+                } else {
+                    ImGui::TextDisabled("Abbe number: material-driven");
+                }
             }
-            ImGui::Checkbox(
-                "Spectral beam ribbons",
-                &rendererSettings_.showPrismIncidentBeam
-            );
-            if (rendererSettings_.showPrismIncidentBeam) {
+            if (prismDemoEnabled_) {
+                ImGui::SeparatorText("Prism spectrum");
+                int presetIndex = static_cast<int>(prismOpticalPreset_);
+                const char* presetNames[] = {
+                    prismOpticalPresetName(PrismOpticalPreset::CrownGlass),
+                    prismOpticalPresetName(PrismOpticalPreset::WaterLike),
+                    prismOpticalPresetName(PrismOpticalPreset::DiamondLike),
+                    prismOpticalPresetName(PrismOpticalPreset::ExaggeratedCover)
+                };
+                if (ImGui::Combo("Optical preset", &presetIndex, presetNames, 4)) {
+                    applyPrismOpticalPreset(static_cast<PrismOpticalPreset>(presetIndex));
+                }
+
+                bool opticsChanged = false;
+                opticsChanged |= ImGui::SliderFloat(
+                    "Beam direction",
+                    &prismParameters_.beamAngleDegrees,
+                    -20.0f,
+                    20.0f,
+                    "%.2f deg"
+                );
+                opticsChanged |= ImGui::SliderFloat(
+                    "Central IOR",
+                    &prismParameters_.centralIndexOfRefraction,
+                    1.0f,
+                    2.6f,
+                    "%.3f"
+                );
+                opticsChanged |= ImGui::SliderFloat(
+                    "Dispersion",
+                    &prismParameters_.dispersion,
+                    0.0f,
+                    2.5f,
+                    "%.3f"
+                );
+                if (prismParameters_.dispersion > 0.0f) {
+                    ImGui::TextDisabled(
+                        "Abbe number: %.2f",
+                        20.0f / prismParameters_.dispersion
+                    );
+                } else {
+                    ImGui::TextDisabled("Abbe number: infinite (no dispersion)");
+                }
+                static constexpr std::array<int, 4> sampleTiers{7, 15, 21, 31};
+                int sampleTierIndex = 0;
+                for (std::size_t index = 0; index < sampleTiers.size(); ++index) {
+                    if (prismParameters_.spectralSampleCount == sampleTiers[index]) {
+                        sampleTierIndex = static_cast<int>(index);
+                    }
+                }
+                const char* sampleLabels[] = {"7", "15", "21", "31"};
+                if (ImGui::Combo("Spectral samples", &sampleTierIndex, sampleLabels, 4)) {
+                    prismParameters_.spectralSampleCount = sampleTiers[static_cast<std::size_t>(sampleTierIndex)];
+                    opticsChanged = true;
+                }
+                int spectrumMode = static_cast<int>(prismParameters_.spectrumMode);
+                const char* spectrumModes[] = {"Continuous", "Seven-band"};
+                if (ImGui::Combo("Spectrum mode", &spectrumMode, spectrumModes, 2)) {
+                    prismParameters_.spectrumMode = static_cast<PrismSpectrumMode>(spectrumMode);
+                    opticsChanged = true;
+                }
+                opticsChanged |= ImGui::SliderFloat(
+                    "White point",
+                    &prismParameters_.whitePointKelvin,
+                    2000.0f,
+                    12000.0f,
+                    "%.0f K"
+                );
+                if (opticsChanged) {
+                    updatePrismDemoOptics();
+                }
+
+                ImGui::Checkbox(
+                    "Spectral beam ribbons",
+                    &rendererSettings_.showPrismIncidentBeam
+                );
                 ImGui::SliderFloat(
                     "Beam width",
                     &rendererSettings_.prismBeamWidth,
@@ -664,19 +738,83 @@ void Application::drawInspectorPanel() {
                     "%.2f"
                 );
                 ImGui::SliderFloat(
-                    "Beam edge softness",
+                    "Edge softness",
                     &rendererSettings_.prismBeamEdgeSoftness,
                     0.01f,
                     1.0f,
                     "%.2f"
                 );
-                ImGui::TextDisabled(
-                    rendererSettings_.prismOpticalPathValid
-                        ? (rendererSettings_.prismTotalInternalReflection
-                            ? "Optical path: total internal reflection"
-                            : "Optical path: entry + internal + exit")
-                        : "Optical path: no prism intersection"
+                ImGui::SliderFloat(
+                    "Bloom contribution",
+                    &rendererSettings_.prismBeamBloomContribution,
+                    0.0f,
+                    2.0f,
+                    "%.2f"
                 );
+                ImGui::Checkbox(
+                    "Optical path debug",
+                    &rendererSettings_.showPrismOpticalPathDebug
+                );
+
+                float minimumEnergy = 1.0f;
+                float maximumEnergy = 0.0f;
+                int validPathCount = 0;
+                int tirPathCount = 0;
+                for (const PrismSpectralSample& sample : rendererSettings_.prismSpectrum.samples) {
+                    if (!sample.path.valid) {
+                        continue;
+                    }
+                    ++validPathCount;
+                    tirPathCount += sample.path.totalInternalReflection ? 1 : 0;
+                    minimumEnergy = std::min(minimumEnergy, sample.transmittance);
+                    maximumEnergy = std::max(maximumEnergy, sample.transmittance);
+                }
+                ImGui::TextDisabled(
+                    "Paths: %d valid / %d TIR | energy %.3f..%.3f",
+                    validPathCount,
+                    tirPathCount,
+                    validPathCount > 0 ? minimumEnergy : 0.0f,
+                    maximumEnergy
+                );
+                if (ImGui::TreeNode("Optical path details")) {
+                    if (ImGui::BeginTable(
+                            "PrismOpticalPathTable",
+                            5,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
+                        )) {
+                        ImGui::TableSetupColumn("nm");
+                        ImGui::TableSetupColumn("IOR");
+                        ImGui::TableSetupColumn("Entry T");
+                        ImGui::TableSetupColumn("Exit T");
+                        ImGui::TableSetupColumn("Total / state");
+                        ImGui::TableHeadersRow();
+                        for (const PrismSpectralSample& sample : rendererSettings_.prismSpectrum.samples) {
+                            if (!sample.path.valid) continue;
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%.0f", sample.wavelengthNanometers);
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%.4f", sample.indexOfRefraction);
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::Text("%.3f", sample.path.entryTransmittance);
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%.3f", sample.path.exitTransmittance);
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::Text(
+                                "%.3f%s",
+                                sample.path.totalTransmittance,
+                                sample.path.totalInternalReflection ? " / TIR" : ""
+                            );
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TreePop();
+                }
+                ImGui::Checkbox("Lock hero camera", &prismCameraLocked_);
+                ImGui::Checkbox("Auto rotate prism", &autoRotate_);
+                if (ImGui::Button("Restore prism hero shot", ImVec2(-1.0f, 0.0f))) {
+                    restorePrismHeroShot();
+                }
             }
             int glassDebugView = static_cast<int>(rendererSettings_.glassDebugView);
             const char* glassDebugViews[] = {
@@ -883,7 +1021,7 @@ void Application::drawViewportPanel() {
         ImVec2(1.0f, 0.0f)
     );
 
-    if (ImGui::IsItemHovered()) {
+    if (ImGui::IsItemHovered() && !(prismDemoEnabled_ && prismCameraLocked_)) {
         ImGuiIO& io = ImGui::GetIO();
         if (io.MouseWheel != 0.0f) {
             camera_.zoom(io.MouseWheel);
@@ -1273,6 +1411,9 @@ void Application::resetObjectTransform() {
 
 void Application::activatePrismDemoPreset(bool loadFixture) {
     prismDemoEnabled_ = true;
+    prismCameraLocked_ = true;
+    prismOpticalPreset_ = PrismOpticalPreset::CrownGlass;
+    prismParameters_ = prismOpticalPresetParameters(prismOpticalPreset_);
     autoRotate_ = false;
     showGroundPlane_ = false;
     showComparisonObject_ = false;
@@ -1292,8 +1433,6 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     rendererSettings_.refractionScale = 0.28f;
     rendererSettings_.refractionSteps = 20;
     rendererSettings_.volumeThicknessScale = 1.0f;
-    // The prism fixture owns KHR_materials_dispersion; zero means no global override.
-    rendererSettings_.dispersionStrength = 0.0f;
     rendererSettings_.glassDebugView = GlassDebugView::Final;
     rendererSettings_.exposure = 1.20f;
     rendererSettings_.bloomThreshold = 0.75f;
@@ -1302,6 +1441,13 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
     rendererSettings_.prismBeamWidth = 0.055f;
     rendererSettings_.prismBeamIntensity = 5.0f;
     rendererSettings_.prismBeamEdgeSoftness = 0.72f;
+    rendererSettings_.prismBeamBloomContribution = 0.35f;
+    rendererSettings_.showPrismOpticalPathDebug = false;
+    if (const char* value = std::getenv("MYRENDERER_PRISM_PRESET")) {
+        const int requestedPreset = std::clamp(std::atoi(value), 0, 3);
+        prismOpticalPreset_ = static_cast<PrismOpticalPreset>(requestedPreset);
+        prismParameters_ = prismOpticalPresetParameters(prismOpticalPreset_);
+    }
     if (const char* value = std::getenv("MYRENDERER_PRISM_BEAM_WIDTH")) {
         rendererSettings_.prismBeamWidth = std::clamp(
             std::strtof(value, nullptr),
@@ -1323,21 +1469,17 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
             1.0f
         );
     }
-
-    const std::array<glm::vec2, 3> prismCrossSection{
-        glm::vec2(-0.70f, -0.48125f),
-        glm::vec2(0.70f, -0.48125f),
-        glm::vec2(0.0f, 0.74375f)
-    };
-    const PrismRay2D incidentRay{
-        glm::vec2(-2.4f, -0.15f),
-        glm::normalize(glm::vec2(-0.39f, 0.12f) - glm::vec2(-2.4f, -0.15f))
-    };
-    int spectralSampleCount = 21;
+    if (const char* value = std::getenv("MYRENDERER_PRISM_BLOOM_CONTRIBUTION")) {
+        rendererSettings_.prismBeamBloomContribution = std::clamp(
+            std::strtof(value, nullptr),
+            0.0f,
+            2.0f
+        );
+    }
     if (const char* value = std::getenv("MYRENDERER_PRISM_SAMPLES")) {
         static constexpr std::array<int, 4> qualityTiers{7, 15, 21, 31};
         const int requestedSamples = std::atoi(value);
-        spectralSampleCount = *std::min_element(
+        prismParameters_.spectralSampleCount = *std::min_element(
             qualityTiers.begin(),
             qualityTiers.end(),
             [requestedSamples](int left, int right) {
@@ -1345,32 +1487,67 @@ void Application::activatePrismDemoPreset(bool loadFixture) {
             }
         );
     }
-    PrismSpectrumMode spectrumMode = PrismSpectrumMode::Continuous;
     if (const char* value = std::getenv("MYRENDERER_PRISM_SPECTRUM_MODE")) {
         const std::string requestedMode = lowercase(value);
         if (requestedMode == "7" || requestedMode == "seven" || requestedMode == "seven-band") {
-            spectrumMode = PrismSpectrumMode::SevenBand;
+            prismParameters_.spectrumMode = PrismSpectrumMode::SevenBand;
         }
     }
-    rendererSettings_.prismSpectrum = tracePrismSpectrum(
-        prismCrossSection,
-        incidentRay,
-        1.52f,
-        0.33f,
-        spectralSampleCount,
-        spectrumMode,
-        8.0f,
-        glm::vec3(0.88f, 0.96f, 1.0f)
-    );
-    rendererSettings_.prismOpticalPathValid = false;
-    rendererSettings_.prismTotalInternalReflection = false;
-    for (const PrismSpectralSample& sample : rendererSettings_.prismSpectrum.samples) {
-        rendererSettings_.prismOpticalPathValid |= sample.path.valid;
-        rendererSettings_.prismTotalInternalReflection |= sample.path.totalInternalReflection;
+    if (const char* value = std::getenv("MYRENDERER_PRISM_BEAM_ANGLE")) {
+        prismParameters_.beamAngleDegrees = std::clamp(
+            std::strtof(value, nullptr),
+            -30.0f,
+            30.0f
+        );
     }
-    camera_.setOrbitPose(glm::vec3(0.0f), 0.0f, 0.0f, 4.8f, 35.0f);
+    if (const char* value = std::getenv("MYRENDERER_PRISM_IOR")) {
+        prismParameters_.centralIndexOfRefraction = std::clamp(
+            std::strtof(value, nullptr),
+            1.0f,
+            3.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_PRISM_DISPERSION")) {
+        prismParameters_.dispersion = std::clamp(
+            std::strtof(value, nullptr),
+            0.0f,
+            2.5f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_PRISM_WHITE_POINT")) {
+        prismParameters_.whitePointKelvin = std::clamp(
+            std::strtof(value, nullptr),
+            1000.0f,
+            12000.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_PRISM_DEBUG")) {
+        rendererSettings_.showPrismOpticalPathDebug = std::atoi(value) != 0;
+    }
+    updatePrismDemoOptics();
+    restorePrismHeroShot();
 
     if (loadFixture) {
         loadModel(sourceRoot_ / "assets" / "models" / "prism_spectrum.gltf");
     }
+}
+
+void Application::updatePrismDemoOptics() {
+    const PrismDemoSolution solution = solvePrismDemo(prismParameters_);
+    rendererSettings_.prismSpectrum = solution.spectrum;
+    rendererSettings_.prismOpticalPathValid = solution.valid;
+    rendererSettings_.prismTotalInternalReflection = solution.totalInternalReflection;
+    rendererSettings_.prismBeamWhitePoint = solution.linearWhitePoint;
+    rendererSettings_.indexOfRefractionOverride = prismParameters_.centralIndexOfRefraction;
+    rendererSettings_.dispersionStrength = prismParameters_.dispersion;
+}
+
+void Application::applyPrismOpticalPreset(PrismOpticalPreset preset) {
+    prismOpticalPreset_ = preset;
+    prismParameters_ = prismOpticalPresetParameters(preset);
+    updatePrismDemoOptics();
+}
+
+void Application::restorePrismHeroShot() {
+    camera_.setOrbitPose(glm::vec3(0.0f), 0.0f, 0.0f, 4.8f, 35.0f);
 }
