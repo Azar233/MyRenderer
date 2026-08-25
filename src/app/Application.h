@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -20,6 +21,13 @@ struct GLFWwindow;
 class GpuModel;
 class ModelImporter;
 class Renderer;
+
+enum class VolumeGlassPreset {
+    Clear = 0,
+    Olive,
+    Amber,
+    Crystal
+};
 
 class Application {
 public:
@@ -57,6 +65,7 @@ private:
     void resetObjectTransform();
     void activatePrismDemoPreset(bool loadFixture);
     void activateGlassCausticsPreset();
+    void applyVolumeGlassPreset(VolumeGlassPreset preset);
     void deactivatePrismDemoPreset();
     void updatePrismDemoOptics();
     void applyPrismOpticalPreset(PrismOpticalPreset preset);
@@ -131,6 +140,8 @@ private:
     std::vector<double> benchmarkGpuFrameTimes_;
     std::vector<double> benchmarkBeamGpuTimes_;
     std::vector<double> benchmarkCausticsGpuTimes_;
+    std::map<std::string, std::vector<double>> benchmarkPassGpuTimes_;
+    std::map<std::string, std::size_t> lastBenchmarkPassSerials_;
     std::size_t lastBenchmarkGpuFrameSerial_{0};
     std::size_t lastBenchmarkBeamSerial_{0};
     std::size_t lastBenchmarkCausticsSerial_{0};
@@ -157,6 +168,7 @@ private:
     bool prismModelVisible_{true};
     bool benchmarkMode_{false};
     bool prismReelMode_{false};
+    VolumeGlassPreset volumeGlassPreset_{VolumeGlassPreset::Olive};
     PrismOpticalPreset prismOpticalPreset_{PrismOpticalPreset::CrownGlass};
     PrismDemoParameters prismParameters_{};
     double previousFrameTime_{0.0};

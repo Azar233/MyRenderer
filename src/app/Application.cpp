@@ -251,6 +251,19 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_DISPERSION")) {
         rendererSettings_.dispersionStrength = std::clamp(std::strtof(value, nullptr), 0.0f, 2.5f);
     }
+    if (const char* value = std::getenv("MYRENDERER_DISPERSION_ENABLED")) {
+        rendererSettings_.dispersionEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_IOR")) {
+        rendererSettings_.indexOfRefractionOverride = std::clamp(
+            std::strtof(value, nullptr), 1.0f, 3.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_GLASS_PRESET")) {
+        volumeGlassPreset_ = static_cast<VolumeGlassPreset>(
+            std::clamp(std::atoi(value), 0, 3)
+        );
+    }
     if (const char* value = std::getenv("MYRENDERER_GLASS_DEBUG")) {
         rendererSettings_.glassDebugView = static_cast<GlassDebugView>(
             std::clamp(std::atoi(value), 0, 12)
@@ -269,6 +282,9 @@ int Application::run(const std::filesystem::path& initialModel) {
     }
     if (const char* value = std::getenv("MYRENDERER_GLASS3_DEMO")) {
         glassCausticsDemoEnabled_ = std::atoi(value) != 0;
+        if (glassCausticsDemoEnabled_ && std::getenv("MYRENDERER_GLASS_PRESET") == nullptr) {
+            volumeGlassPreset_ = VolumeGlassPreset::Crystal;
+        }
     }
     if (const char* value = std::getenv("MYRENDERER_SCENE_DEMO")) showComparisonObject_ = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_PRISM_DEMO")) {
@@ -388,6 +404,14 @@ int Application::run(const std::filesystem::path& initialModel) {
                     lastBenchmarkCausticsSerial_ = renderer_->causticsMeasurementSerial();
                     benchmarkCausticsGpuTimes_.push_back(
                         renderer_->latestCausticsMeasurementMilliseconds()
+                    );
+                }
+                for (const GpuPassTiming& timing : renderer_->gpuPassTimings()) {
+                    std::size_t& lastSerial = lastBenchmarkPassSerials_[timing.name];
+                    if (timing.measurementSerial == lastSerial) continue;
+                    lastSerial = timing.measurementSerial;
+                    benchmarkPassGpuTimes_[timing.name].push_back(
+                        timing.latestMilliseconds
                     );
                 }
             }
@@ -607,6 +631,7 @@ void Application::drawMainMenu() {
         }
         if (ImGui::MenuItem("Volume glass preset")) {
             glassCausticsDemoEnabled_ = false;
+            volumeGlassPreset_ = VolumeGlassPreset::Olive;
             loadModel(sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf");
         }
         if (ImGui::MenuItem("Glass caustics preset")) {
@@ -848,7 +873,9 @@ void Application::drawInspectorPanel() {
                         : 0.0
                 );
             }
-            ImGui::Checkbox("Dielectric transmission", &rendererSettings_.transmissionEnabled);
+            ImGui::SeparatorText("Glass feature toggles");
+            ImGui::Checkbox("Glass transmission", &rendererSettings_.transmissionEnabled);
+            ImGui::Checkbox("Dispersion", &rendererSettings_.dispersionEnabled);
             ImGui::Checkbox("Geometric glass thickness", &rendererSettings_.geometricThicknessEnabled);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
@@ -886,6 +913,11 @@ void Application::drawInspectorPanel() {
                 &rendererSettings_.volumeGlassOverrideEnabled
             );
             if (rendererSettings_.volumeGlassOverrideEnabled) {
+                int presetIndex = static_cast<int>(volumeGlassPreset_);
+                const char* presetNames[] = {"Clear", "Olive", "Amber", "Crystal"};
+                if (ImGui::Combo("Glass preset", &presetIndex, presetNames, 4)) {
+                    applyVolumeGlassPreset(static_cast<VolumeGlassPreset>(presetIndex));
+                }
                 ImGui::SliderFloat(
                     "Glass transmission",
                     &rendererSettings_.volumeGlassTransmission,
@@ -913,27 +945,19 @@ void Application::drawInspectorPanel() {
                     ImGuiSliderFlags_Logarithmic
                 );
                 if (ImGui::Button("Clear")) {
-                    rendererSettings_.volumeGlassAttenuationColor = glm::vec3(1.0f);
-                    rendererSettings_.volumeGlassAttenuationDistance = 8.0f;
-                    rendererSettings_.volumeGlassRoughness = 0.04f;
-                    rendererSettings_.dispersionStrength = 0.0f;
+                    applyVolumeGlassPreset(VolumeGlassPreset::Clear);
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Olive")) {
-                    rendererSettings_.volumeGlassAttenuationColor = glm::vec3(0.68f, 0.86f, 0.22f);
-                    rendererSettings_.volumeGlassAttenuationDistance = 0.85f;
-                    rendererSettings_.volumeGlassRoughness = 0.06f;
-                    rendererSettings_.dispersionStrength = 0.0f;
+                    applyVolumeGlassPreset(VolumeGlassPreset::Olive);
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Amber")) {
-                    rendererSettings_.volumeGlassAttenuationColor = glm::vec3(1.0f, 0.48f, 0.12f);
-                    rendererSettings_.volumeGlassAttenuationDistance = 0.72f;
-                    rendererSettings_.volumeGlassRoughness = 0.08f;
-                    rendererSettings_.dispersionStrength = 0.0f;
+                    applyVolumeGlassPreset(VolumeGlassPreset::Amber);
                 }
             }
             if (!prismDemoEnabled_) {
+                ImGui::BeginDisabled(!rendererSettings_.dispersionEnabled);
                 ImGui::SliderFloat(
                     "Dispersion override",
                     &rendererSettings_.dispersionStrength,
@@ -949,6 +973,7 @@ void Application::drawInspectorPanel() {
                 } else {
                     ImGui::TextDisabled("Abbe number: material-driven");
                 }
+                ImGui::EndDisabled();
             }
             if (prismDemoEnabled_) {
                 ImGui::SeparatorText("Prism spectrum");
@@ -1192,7 +1217,18 @@ void Application::drawInspectorPanel() {
             ImGui::Text("Draw calls: %zu", renderer_->drawCallCount());
             ImGui::Text("Active passes: %zu", renderer_->activePassNames().size());
             for (const auto& passName : renderer_->activePassNames()) {
-                ImGui::BulletText("%s", passName.c_str());
+                const auto timing = std::find_if(
+                    renderer_->gpuPassTimings().begin(),
+                    renderer_->gpuPassTimings().end(),
+                    [&](const GpuPassTiming& candidate) {
+                        return candidate.name == passName;
+                    }
+                );
+                if (timing != renderer_->gpuPassTimings().end()) {
+                    ImGui::BulletText("%s: %.3f ms", passName.c_str(), timing->milliseconds);
+                } else {
+                    ImGui::BulletText("%s: collecting...", passName.c_str());
+                }
             }
             ImGui::Text("Triangles: %zu", model_ ? loadedTriangleCount_ : 0U);
             ImGui::Text(
@@ -1699,14 +1735,7 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
             rendererSettings_.environmentIntensity = glassCausticsDemoEnabled_ ? 0.38f : 0.85f;
             rendererSettings_.skyboxEnabled = !glassCausticsDemoEnabled_;
             rendererSettings_.volumeGlassOverrideEnabled = true;
-            rendererSettings_.volumeGlassTransmission = 1.0f;
-            rendererSettings_.volumeGlassRoughness = 0.06f;
-            rendererSettings_.volumeGlassAttenuationColor = glassCausticsDemoEnabled_
-                ? glm::vec3(0.78f, 0.92f, 1.0f)
-                : glm::vec3(0.68f, 0.86f, 0.22f);
-            rendererSettings_.volumeGlassAttenuationDistance =
-                glassCausticsDemoEnabled_ ? 2.0f : 0.85f;
-            rendererSettings_.dispersionStrength = glassCausticsDemoEnabled_ ? 2.0f : 0.0f;
+            applyVolumeGlassPreset(volumeGlassPreset_);
             rendererSettings_.causticsEnabled = glassCausticsDemoEnabled_;
             rendererSettings_.causticsMode = CausticsMode::LightSpace;
             rendererSettings_.causticsStrength = 2.4f;
@@ -1727,11 +1756,29 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
             if (const char* value = std::getenv("MYRENDERER_TRANSMISSION_SHADOWS")) {
                 rendererSettings_.coloredTransmissionShadowsEnabled = std::atoi(value) != 0;
             }
+            if (const char* value = std::getenv("MYRENDERER_TRANSMISSION")) {
+                rendererSettings_.transmissionEnabled = std::atoi(value) != 0;
+            }
+            if (const char* value = std::getenv("MYRENDERER_DISPERSION_ENABLED")) {
+                rendererSettings_.dispersionEnabled = std::atoi(value) != 0;
+            }
+            if (const char* value = std::getenv("MYRENDERER_DISPERSION")) {
+                rendererSettings_.dispersionStrength = std::clamp(
+                    std::strtof(value, nullptr), 0.0f, 2.5f
+                );
+            }
+            if (const char* value = std::getenv("MYRENDERER_IOR")) {
+                rendererSettings_.indexOfRefractionOverride = std::clamp(
+                    std::strtof(value, nullptr), 1.0f, 3.0f
+                );
+            }
             groundColor_ = glassCausticsDemoEnabled_
                 ? glm::vec3(0.82f, 0.84f, 0.88f)
                 : groundColor_;
             camera_.setOrbitPose(
-                glm::vec3(0.0f, -0.12f, 0.0f),
+                glassCausticsDemoEnabled_
+                    ? glm::vec3(0.0f, -0.12f, 0.0f)
+                    : glm::vec3(0.0f),
                 glassCausticsDemoEnabled_ ? -12.0f : 0.0f,
                 glassCausticsDemoEnabled_ ? 30.0f : 0.0f,
                 glassCausticsDemoEnabled_ ? 3.4f : 3.35f,
@@ -1841,8 +1888,43 @@ void Application::resetObjectTransform() {
 
 void Application::activateGlassCausticsPreset() {
     glassCausticsDemoEnabled_ = true;
+    volumeGlassPreset_ = VolumeGlassPreset::Crystal;
     if (!loadModel(sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf")) {
         glassCausticsDemoEnabled_ = false;
+    }
+}
+
+void Application::applyVolumeGlassPreset(VolumeGlassPreset preset) {
+    volumeGlassPreset_ = preset;
+    rendererSettings_.volumeGlassOverrideEnabled = true;
+    rendererSettings_.volumeGlassTransmission = 1.0f;
+    rendererSettings_.dispersionEnabled = true;
+
+    switch (preset) {
+    case VolumeGlassPreset::Clear:
+        rendererSettings_.volumeGlassAttenuationColor = glm::vec3(1.0f);
+        rendererSettings_.volumeGlassAttenuationDistance = 8.0f;
+        rendererSettings_.volumeGlassRoughness = 0.04f;
+        rendererSettings_.dispersionStrength = 0.0f;
+        break;
+    case VolumeGlassPreset::Olive:
+        rendererSettings_.volumeGlassAttenuationColor = glm::vec3(0.68f, 0.86f, 0.22f);
+        rendererSettings_.volumeGlassAttenuationDistance = 0.85f;
+        rendererSettings_.volumeGlassRoughness = 0.06f;
+        rendererSettings_.dispersionStrength = 0.0f;
+        break;
+    case VolumeGlassPreset::Amber:
+        rendererSettings_.volumeGlassAttenuationColor = glm::vec3(1.0f, 0.48f, 0.12f);
+        rendererSettings_.volumeGlassAttenuationDistance = 0.72f;
+        rendererSettings_.volumeGlassRoughness = 0.08f;
+        rendererSettings_.dispersionStrength = 0.0f;
+        break;
+    case VolumeGlassPreset::Crystal:
+        rendererSettings_.volumeGlassAttenuationColor = glm::vec3(0.78f, 0.92f, 1.0f);
+        rendererSettings_.volumeGlassAttenuationDistance = 2.0f;
+        rendererSettings_.volumeGlassRoughness = 0.06f;
+        rendererSettings_.dispersionStrength = 2.0f;
+        break;
     }
 }
 
@@ -2021,6 +2103,7 @@ void Application::updatePrismDemoOptics() {
     rendererSettings_.prismTotalInternalReflection = solution.totalInternalReflection;
     rendererSettings_.prismBeamWhitePoint = solution.linearWhitePoint;
     rendererSettings_.indexOfRefractionOverride = prismParameters_.centralIndexOfRefraction;
+    rendererSettings_.dispersionEnabled = prismParameters_.dispersion > 0.0f;
     rendererSettings_.dispersionStrength = prismParameters_.dispersion;
 }
 
@@ -2083,6 +2166,17 @@ void Application::writePrismBenchmarkReport() {
            << "  \"gpuFrameMeasurements\": " << benchmarkGpuFrameTimes_.size() << ",\n"
            << "  \"gpuBeamMeasurements\": " << benchmarkBeamGpuTimes_.size() << ",\n"
            << "  \"gpuCausticsMeasurements\": " << benchmarkCausticsGpuTimes_.size() << ",\n"
+           << "  \"gpuPasses\": {\n";
+    std::size_t passIndex = 0U;
+    for (const auto& [name, samples] : benchmarkPassGpuTimes_) {
+        report << "    " << std::quoted(name) << ": {"
+               << "\"p50Ms\": " << percentile(samples, 0.50) << ", "
+               << "\"p95Ms\": " << percentile(samples, 0.95) << ", "
+               << "\"measurements\": " << samples.size() << "}"
+               << (++passIndex < benchmarkPassGpuTimes_.size() ? "," : "")
+               << "\n";
+    }
+    report << "  },\n"
            << "  \"renderMemoryBytes\": " << renderer_->estimatedRenderMemoryBytes() << ",\n"
            << "  \"textureMemoryBytes\": " << loadedTextureMemoryBytes_ << ",\n"
            << "  \"geometryMemoryBytes\": " << geometryMemoryBytes << ",\n"

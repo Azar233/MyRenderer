@@ -56,3 +56,8 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
 - `glass3_caustics_debug.png`: raw receiver sampling of the filtered caustics map.
 - `glass3_transmission_shadow.png`: RGB transmission visibility after PCF and
   multiplicative Beer-Lambert shadow composition.
+- `glass4_volume_*.png`: final, Glass Off, IOR, thickness, attenuation, true
+  exit normal, object pairing, approximation, and 1x/4x MSAA coverage for the
+  dual-sphere KHR volume validation scene.
+- `glass4_caustics_*.png`: fixed-camera Crystal hero coverage for final,
+  Dispersion Off, Caustics Off, and 1x/4x MSAA states.

@@ -69,6 +69,8 @@ Renderer::Renderer(
     glGenQueries(static_cast<GLsizei>(beamEndQueries_.size()), beamEndQueries_.data());
     glGenQueries(static_cast<GLsizei>(causticsStartQueries_.size()), causticsStartQueries_.data());
     glGenQueries(static_cast<GLsizei>(causticsEndQueries_.size()), causticsEndQueries_.data());
+    glGenQueries(static_cast<GLsizei>(passStartQueries_.size()), passStartQueries_.data());
+    glGenQueries(static_cast<GLsizei>(passEndQueries_.size()), passEndQueries_.data());
 }
 
 Renderer::~Renderer() {
@@ -77,6 +79,8 @@ Renderer::~Renderer() {
     glDeleteQueries(static_cast<GLsizei>(beamEndQueries_.size()), beamEndQueries_.data());
     glDeleteQueries(static_cast<GLsizei>(causticsStartQueries_.size()), causticsStartQueries_.data());
     glDeleteQueries(static_cast<GLsizei>(causticsEndQueries_.size()), causticsEndQueries_.data());
+    glDeleteQueries(static_cast<GLsizei>(passStartQueries_.size()), passStartQueries_.data());
+    glDeleteQueries(static_cast<GLsizei>(passEndQueries_.size()), passEndQueries_.data());
 }
 
 void Renderer::render(
@@ -154,6 +158,37 @@ void Renderer::render(
             ++causticsMeasurementSerial_;
             causticsTimingPending_[index] = false;
         }
+    }
+    for (std::size_t index = 0; index < passTimingPending_.size(); ++index) {
+        if (!passTimingPending_[index]) continue;
+        GLint startAvailable = GL_FALSE;
+        GLint endAvailable = GL_FALSE;
+        glGetQueryObjectiv(passStartQueries_[index], GL_QUERY_RESULT_AVAILABLE, &startAvailable);
+        glGetQueryObjectiv(passEndQueries_[index], GL_QUERY_RESULT_AVAILABLE, &endAvailable);
+        if (startAvailable != GL_TRUE || endAvailable != GL_TRUE) continue;
+        GLuint64 startTimestamp = 0U;
+        GLuint64 endTimestamp = 0U;
+        glGetQueryObjectui64v(passStartQueries_[index], GL_QUERY_RESULT, &startTimestamp);
+        glGetQueryObjectui64v(passEndQueries_[index], GL_QUERY_RESULT, &endTimestamp);
+        const double measured = endTimestamp >= startTimestamp
+            ? static_cast<double>(endTimestamp - startTimestamp) / 1'000'000.0
+            : 0.0;
+        const std::string& name = passTimingNames_[index];
+        auto timing = std::find_if(
+            gpuPassTimings_.begin(),
+            gpuPassTimings_.end(),
+            [&](const GpuPassTiming& candidate) { return candidate.name == name; }
+        );
+        if (timing == gpuPassTimings_.end()) {
+            gpuPassTimings_.push_back(GpuPassTiming{name, measured, measured, 1U});
+        } else {
+            timing->latestMilliseconds = measured;
+            timing->milliseconds = timing->measurementSerial > 0U
+                ? timing->milliseconds * 0.9 + measured * 0.1
+                : measured;
+            ++timing->measurementSerial;
+        }
+        passTimingPending_[index] = false;
     }
 
     std::size_t timingQuery = timingQueries_.size();
@@ -258,6 +293,7 @@ void Renderer::render(
             "uTwoInterfaceRefractionEnabled",
             settings.twoInterfaceRefractionEnabled
         );
+        shader_->setBool("uDispersionEnabled", settings.dispersionEnabled);
         shader_->setFloat("uDispersionStrength", settings.dispersionStrength);
         shader_->setFloat("uIndexOfRefractionOverride", settings.indexOfRefractionOverride);
         shader_->setInt("uGlassDebugView", static_cast<int>(settings.glassDebugView));
@@ -417,6 +453,9 @@ void Renderer::render(
                     causticsShader.setVec3("uCausticDirection", settings.causticsDirection);
                     causticsShader.setFloat(
                         "uDispersionStrength", settings.dispersionStrength
+                    );
+                    causticsShader.setBool(
+                        "uDispersionEnabled", settings.dispersionEnabled
                     );
                     causticsShader.setFloat(
                         "uIndexOfRefractionOverride", settings.indexOfRefractionOverride
@@ -728,7 +767,42 @@ void Renderer::render(
         drawCallCount_ += settings.bloom ? 10U : 1U;
     });
     activePassNames_ = sequence.names();
-    sequence.run();
+    std::array<std::size_t, maxProfiledPasses_> activePassQuerySlots{};
+    activePassQuerySlots.fill(passTimingPending_.size());
+    const bool hasDebugGroups = GLAD_GL_KHR_debug != 0
+        && glPushDebugGroup != nullptr
+        && glPopDebugGroup != nullptr;
+    sequence.run(
+        [&](std::size_t passIndex, const std::string& name) {
+            if (hasDebugGroups) {
+                glPushDebugGroup(
+                    GL_DEBUG_SOURCE_APPLICATION,
+                    static_cast<GLuint>(passIndex + 1U),
+                    -1,
+                    name.c_str()
+                );
+            }
+            if (passIndex >= maxProfiledPasses_) return;
+            const std::size_t ring = nextPassTimingRing_[passIndex];
+            const std::size_t slot = passIndex * passTimingRingSize_ + ring;
+            if (passTimingPending_[slot]) return;
+            glQueryCounter(passStartQueries_[slot], GL_TIMESTAMP);
+            activePassQuerySlots[passIndex] = slot;
+        },
+        [&](std::size_t passIndex, const std::string& name) {
+            if (passIndex < maxProfiledPasses_) {
+                const std::size_t slot = activePassQuerySlots[passIndex];
+                if (slot < passTimingPending_.size()) {
+                    glQueryCounter(passEndQueries_[slot], GL_TIMESTAMP);
+                    passTimingPending_[slot] = true;
+                    passTimingNames_[slot] = name;
+                    nextPassTimingRing_[passIndex] =
+                        (nextPassTimingRing_[passIndex] + 1U) % passTimingRingSize_;
+                }
+            }
+            if (hasDebugGroups) glPopDebugGroup();
+        }
+    );
     if (timingQuery < timingQueries_.size()) {
         glEndQuery(GL_TIME_ELAPSED);
         timingQueryPending_[timingQuery] = true;

@@ -275,6 +275,9 @@
 | LOD | 根据距离或屏幕尺寸选择不同精度模型。 | GP-P1 与 TA 资产预算路线。 | 计划 |
 | Instancing（实例化） | 一次 Draw Call 绘制同一 Mesh 的多个不同 Transform 实例。 | GP-P1 压力场景计划。 | 计划 |
 | GPU-driven Rendering | 由 GPU 完成可见性、批次和间接绘制命令生成，减少 CPU 提交。 | GP-P2 备选旗舰。 | 计划 |
+| Visual Regression（视觉回归） | 用固定场景、固定机位和容差比较重拍图片，确认代码修改没有破坏既有画面。 | Glass-4 已用 14 张 1080p 基线覆盖玻璃、色散、焦散和 MSAA；属于[回归测试](https://vibe-hub.org/regression-test)的一种。 | 已完成 |
+| Frame Capture（帧捕获） | 保存一段 CPU/GPU 图形调用、时间线和调试标记，供 RenderDoc、Nsight 等工具离线检查。 | Glass-4 保存带 `KHR_debug` Pass 范围的 Nsight Systems 报告。 | 已完成 |
+| GPU Timestamp Query | 在 GPU 命令流中记录开始/结束时间戳，不阻塞 CPU 地统计某个 Pass 的耗时。 | Renderer 为所有顶层 Pass 使用 4 槽查询环，并在 GUI/Benchmark 输出结果。 | 已完成 |
 | Compute Shader | 不直接负责画三角形、用于通用 GPU 并行计算的 Shader。 | OpenGL 3.3 不支持；GPU 粒子/Driven 路线需升级 API。 | 计划 |
 | SSBO | Shader 可读写的大容量结构化 Buffer。 | OpenGL 4.3+ GPU-driven/Compute 路线需要。 | 计划 |
 | Indirect Draw | Draw Call 的参数存放在 GPU Buffer 中，可由 GPU 生成。 | GPU-driven 路线需要 Multi-Draw Indirect。 | 计划 |

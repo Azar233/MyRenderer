@@ -314,6 +314,58 @@ if(BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "Benchmarking Glass-3 Off, Projector, and Light-space modes"
     )
+
+    add_custom_target(glass4-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/glass4-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/Glass4VisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing and comparing the Glass-4 portfolio regression matrix"
+    )
+
+    add_custom_target(glass4-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/glass4-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/Glass4Benchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Benchmarking Glass-4 per-pass GPU time at 1920x1080 and 4x MSAA"
+    )
+
+    find_program(MYRENDERER_NSYS_EXECUTABLE
+        NAMES nsys nsys.exe
+        HINTS
+            "C:/Program Files/NVIDIA Corporation/Nsight Systems 2024.5.1/target-windows-x64"
+    )
+    if(MYRENDERER_NSYS_EXECUTABLE)
+        add_custom_target(glass4-nsight-capture
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                    ${CMAKE_CURRENT_BINARY_DIR}/glass4-captures
+            COMMAND ${CMAKE_COMMAND} -E env
+                    MYRENDERER_GLASS3_DEMO=1
+                    MYRENDERER_SMOKE_TEST=1
+                    MYRENDERER_MSAA=4
+                    MYRENDERER_RENDER_WIDTH=1920
+                    MYRENDERER_RENDER_HEIGHT=1080
+                    MYRENDERER_CAUSTICS=1
+                    MYRENDERER_CAUSTICS_MODE=1
+                    ${MYRENDERER_NSYS_EXECUTABLE} profile
+                    --trace=opengl,opengl-annotations
+                    --sample=none
+                    --force-overwrite=true
+                    --output=${CMAKE_CURRENT_BINARY_DIR}/glass4-captures/glass4_caustics
+                    $<TARGET_FILE:MyRenderer>
+            DEPENDS MyRenderer
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "Saving a Glass-4 Nsight Systems capture with KHR_debug pass ranges"
+        )
+    endif()
 endif()
 
 add_custom_target(gpu-smoke

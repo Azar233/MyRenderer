@@ -61,6 +61,7 @@ uniform float uVolumeGlassTransmission;
 uniform float uVolumeGlassRoughness;
 uniform vec3 uVolumeGlassAttenuationColor;
 uniform float uVolumeGlassAttenuationDistance;
+uniform bool uDispersionEnabled;
 uniform float uDispersionStrength;
 uniform float uMaterialDispersion;
 uniform float uOpaqueColorMaxMip;
@@ -508,9 +509,11 @@ void main() {
             exitSurfaceNormal
         );
         vec3 rgbPathLengths = vec3(volumePathLength);
-        float dispersion = uDispersionStrength > 0.0
-            ? uDispersionStrength
-            : max(uMaterialDispersion, 0.0);
+        float dispersion = uDispersionEnabled
+            ? (uDispersionStrength > 0.0
+                ? uDispersionStrength
+                : max(uMaterialDispersion, 0.0))
+            : 0.0;
         if (dispersion > 0.0001 && uThicknessFactor > 0.0) {
             float halfSpread = (ior - 1.0) * 0.025 * dispersion;
             vec3 channelIors = max(

@@ -487,11 +487,13 @@ Prism Demo 验收：出射光谱必须由世界空间入射光经过两个棱镜
 
 #### Glass-4：展示、测试与验收
 
-- [ ] 制作两套专用展示场景：水晶主体 + 白色地面 + 黑色背景的焦散 Hero Scene，以及平滑体积球 + 棋盘格背景 + 高对比 HDRI 的 `KHR_materials_volume` 验收场景。
-- [ ] 提供 Glass、Dispersion、Caustics 独立开关和相同机位的 On / Off 对照截图。
-- [ ] 建立固定相机视觉回归，覆盖 IOR、Thickness、Attenuation、真实退出法线、双物体配对、Dispersion、Caustics 和 1x/4x MSAA。
-- [ ] 输出 1080p 下各 Pass 的 GPU 时间、Draw Call 和显存占用，并保存带 Pass 标记的 RenderDoc / Nsight Capture。
-- [ ] 为 TA 展示准备至少 3 个可复用玻璃 Preset；为图形程序展示准备算法、失败案例和优化前后报告。
+- [x] 制作两套专用展示场景：水晶主体 + 白色地面 + 黑色背景的焦散 Hero Scene，以及平滑体积球 + 棋盘格背景 + 高对比 HDRI 的 `KHR_materials_volume` 验收场景。
+- [x] 提供 Glass、Dispersion、Caustics 独立开关和相同机位的 On / Off 对照截图。
+- [x] 建立固定相机视觉回归，覆盖 IOR、Thickness、Attenuation、真实退出法线、双物体配对、Dispersion、Caustics 和 1x/4x MSAA。
+- [x] 输出 1080p 下各 Pass 的 GPU 时间、Draw Call 和显存占用，并保存带 Pass 标记的 RenderDoc / Nsight Capture。
+- [x] 为 TA 展示准备至少 3 个可复用玻璃 Preset；为图形程序展示准备算法、失败案例和优化前后报告。
+
+> Glass-4 完成（2026-08-25）：固化双球棋盘格 KHR volume 验收场景与白地黑背景 Crystal 焦散 Hero Scene；Glass、Dispersion、Caustics 现为互不耦合的开关，Clear / Olive / Amber / Crystal 四组 Preset 共用同一 Shader。新增 14 张 1920×1080 固定机位视觉回归，覆盖 IOR、Thickness、Attenuation、Exit Normal、Object ID、近似/真实双界面、色散、焦散和 1x/4x MSAA。RenderPassSequence 为每个顶层 Pass 写入 `KHR_debug` 范围并用查询环记录 GPU Timestamp；Benchmark JSON 输出逐 Pass P50/P95、Draw Call 和 291.3 MiB 实测资源估算。RTX 4060 Laptop 上真实曲面出口 Forward P50 为 0.703 ms，Light-space RGB Caustics P50 为 0.094 ms。已保存 `docs/captures/glass4_caustics.nsys-rep`，算法、失败边界与近似/高质量代价对照见 `docs/glass4-validation.md`。Glass 专项阶段至此完成，下一阶段按路线进入 GP-P1 的 Deferred Shading 基线。
 
 Glass 阶段验收：Glass-2C 完成后，弯曲球体应达到 Khronos `KHR_materials_volume` 参考图所表达的核心效果——稳定环境反射、双界面背景折射和厚度相关体积吸收；Glass-3 完成后，水晶 Hero Scene 的地面还应出现与光源/物体关系一致的彩色焦散。两套参考目标分别验收，不用焦散掩盖玻璃主体的折射错误。
 

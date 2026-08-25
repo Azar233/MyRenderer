@@ -22,12 +22,16 @@ function(capture_and_compare name)
     if(NOT capture_result EQUAL 0)
         message(FATAL_ERROR "Failed to capture ${name}")
     endif()
-    execute_process(
-        COMMAND "${COMPARATOR}" "${baseline}" "${output}" 0.015 0.08
-        RESULT_VARIABLE comparison_result
-    )
-    if(NOT comparison_result EQUAL 0)
-        message(FATAL_ERROR "Visual regression failed for ${name}")
+    if(UPDATE_BASELINES)
+        file(COPY_FILE "${output}" "${baseline}" ONLY_IF_DIFFERENT)
+    else()
+        execute_process(
+            COMMAND "${COMPARATOR}" "${baseline}" "${output}" 0.015 0.08
+            RESULT_VARIABLE comparison_result
+        )
+        if(NOT comparison_result EQUAL 0)
+            message(FATAL_ERROR "Visual regression failed for ${name}")
+        endif()
     endif()
 endfunction()
 

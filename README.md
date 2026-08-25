@@ -25,7 +25,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - glTF 2.0 metallic-roughness PBR（Cook-Torrance GGX）、Radiance HDR equirectangular 环境、Diffuse Irradiance、GGX Prefiltered Specular Cubemap、BRDF LUT、Split-Sum IBL、天空盒与方向光 PCF 阴影；HDR 资产缺失时回退到程序化 Studio 环境。
 - glTF `OPAQUE` / `MASK` / `BLEND`、Alpha Cutoff、双面材质、透明子网格后向前排序，以及独立的透明深度/混合状态。
 - glTF `KHR_materials_transmission` / `KHR_materials_ior` / `KHR_materials_volume` / `KHR_materials_dispersion`：IOR 驱动的 Fresnel、Snell 折射、全反射、深度 Ray March、Thickness Texture、对象级前/后表面深度、真实出射法线、双界面折射、Beer-Lambert 体积吸收、环境回退与 13 种 Glass/Light Debug View；材质色散可被 Inspector 全局覆盖。
-- Glass-3 彩色光传输：RGBA16F 透射阴影、可控 Caustics Projector、Light-space RGB Photon Splat 焦散、两次空间滤波、独立 GPU Timestamp Query，以及 Off / Projector / Light-space 性能对照。
+- Glass-3/4 彩色光传输与作品集验收：RGBA16F 透射阴影、可控 Caustics Projector、Light-space RGB Photon Splat 焦散、两次空间滤波，以及独立 Glass / Dispersion / Caustics 开关、四组玻璃 Preset、14 场景视觉回归、逐 Pass GPU Timestamp 和带标记 Nsight Capture。
 - Prism-0～5 光谱 Demo：原创封闭三棱柱、纯黑舞台、固定正面镜头、CPU 双界面 Ray/Prism 求交，以及 380～700 nm 的 7/15/21/31 档波长采样；每个样本使用 Cauchy IOR、CIE 1931 近似线性 RGB、两界面 Fresnel 与 Beer-Lambert 能量。独立 `Spectral beam HDR` Pass 把结果生成相机朝向的柔边 Ribbon Mesh，支持连续光谱和七色美术模式，并提供固定视觉回归、性能报告和 Demo Reel。
 - 多对象 `RenderItem` 场景提交、跨对象透明 Draw List 全局排序，以及可调颜色/高度并能接收 PBR 光照与阴影的程序化地面；可开启第二模型实例验证场景级排序。
 - `Shadow map → Transmission shadow → Caustics HDR/filter → Opaque HDR → Forward refractive → Bloom/tone map` 多 Pass 管线；Opaque HDR Color、最终 HDR Scene Color 与可采样 Depth 相互独立，可切换 ACES Tone Mapping、曝光和 Bloom。
@@ -69,7 +69,7 @@ cmake --build build-mingw --parallel
 - Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
 - Inspector / Renderer：切换 PBR、IBL、天空盒、阴影、彩色透射阴影、HDR Caustics、Transmission、Geometric Glass Thickness、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整焦散模式/强度/尺度/方向/锐度/动画、折射距离/步数、体积厚度倍率、RGB 色散、Debug View、环境强度、曝光、Bloom、背景色、灯光与 FOV，并查看活动 Pass 和 GPU 时间。
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
-- View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber 三组体积玻璃参数。
+- View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber / Crystal 四组体积玻璃参数。
 - View / `Glass caustics preset`：加载透明水晶球、白色接收地面与固定高机位，默认启用 Light-space RGB 焦散、彩色透射阴影和空间滤波；可即时切到 Projector / Decal 做美术对照。
 - 渲染视口：鼠标右键拖动旋转相机，中键拖动平移，滚轮缩放；工具栏或 File 菜单可将当前解析后画面保存为 PNG。
 - `Esc`：退出程序。
@@ -141,6 +141,16 @@ cmake --build build-release --target glass3-benchmark
 ```
 
 视觉目标比较 6 张 1920×1080 固定镜头图片；Benchmark 输出 Off / Projector / Light-space 的独立 Caustics GPU P50/P95、整帧、Draw Call 与显存。参考结果见 `docs/glass3-caustics.md`。
+
+Glass-4 增加 `MYRENDERER_GLASS_PRESET=0|1|2|3`、`MYRENDERER_TRANSMISSION=0|1`、`MYRENDERER_DISPERSION_ENABLED=0|1`、`MYRENDERER_DISPERSION` 与 `MYRENDERER_IOR`，并提供最终作品集验收目标：
+
+```powershell
+cmake --build build-release --target glass4-visual-regression
+cmake --build build-release --target glass4-benchmark
+cmake --build build-release --target glass4-nsight-capture
+```
+
+视觉回归覆盖 14 张 1920×1080 固定镜头图片；Benchmark JSON 输出所有活动 Pass 的 GPU P50/P95、整帧、Draw Call 和显存。参考结果与已知边界见 `docs/glass4-validation.md`。
 
 `gpu-smoke` 目标会运行材质场景以及“成功场景后加载错误资产”的恢复测试，确保 GPU 路径使用真实上下文且失败导入保留当前场景：
 

@@ -15,6 +15,7 @@ uniform float uReceiverPlaneY;
 uniform float uIndexOfRefraction;
 uniform float uIndexOfRefractionOverride;
 uniform float uMaterialDispersion;
+uniform bool uDispersionEnabled;
 uniform float uDispersionStrength;
 uniform int uCausticChannel;
 uniform float uCausticScale;
@@ -33,8 +34,10 @@ void main() {
     vec3 worldNormal = normalize(vWorldNormal[0] + vWorldNormal[1] + vWorldNormal[2]);
     vec3 incident = normalize(uLightDirection);
     float incidence = max(dot(-incident, worldNormal), 0.0);
-    float dispersion = uDispersionStrength > 0.0
-        ? uDispersionStrength : max(uMaterialDispersion, 0.0);
+    float dispersion = uDispersionEnabled
+        ? (uDispersionStrength > 0.0
+            ? uDispersionStrength : max(uMaterialDispersion, 0.0))
+        : 0.0;
     float centralIor = uIndexOfRefractionOverride > 0.0
         ? uIndexOfRefractionOverride : uIndexOfRefraction;
     // The splat projection magnifies the standard RGB IOR spread so the

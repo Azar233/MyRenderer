@@ -46,6 +46,13 @@ enum class CausticsMode {
     LightSpace = 1
 };
 
+struct GpuPassTiming {
+    std::string name;
+    double milliseconds{0.0};
+    double latestMilliseconds{0.0};
+    std::size_t measurementSerial{0};
+};
+
 struct RendererSettings {
     glm::vec3 backgroundColor{0.055f, 0.065f, 0.085f};
     glm::vec3 baseColor{1.0f};
@@ -91,6 +98,7 @@ struct RendererSettings {
     float volumeGlassRoughness{0.06f};
     glm::vec3 volumeGlassAttenuationColor{0.68f, 0.86f, 0.22f};
     float volumeGlassAttenuationDistance{0.85f};
+    bool dispersionEnabled{true};
     float dispersionStrength{0.0f};
     GlassDebugView glassDebugView{GlassDebugView::Final};
     float exposure{1.0f};
@@ -153,6 +161,7 @@ public:
     std::size_t causticsMeasurementSerial() const { return causticsMeasurementSerial_; }
     std::size_t drawCallCount() const { return drawCallCount_; }
     const std::vector<std::string>& activePassNames() const { return activePassNames_; }
+    const std::vector<GpuPassTiming>& gpuPassTimings() const { return gpuPassTimings_; }
     int shadowResolution() const;
     int renderWidth() const;
     int renderHeight() const;
@@ -181,6 +190,13 @@ private:
     std::array<unsigned int, 4> causticsStartQueries_{};
     std::array<unsigned int, 4> causticsEndQueries_{};
     std::array<bool, 4> causticsTimingPending_{};
+    static constexpr std::size_t maxProfiledPasses_ = 16U;
+    static constexpr std::size_t passTimingRingSize_ = 4U;
+    std::array<unsigned int, maxProfiledPasses_ * passTimingRingSize_> passStartQueries_{};
+    std::array<unsigned int, maxProfiledPasses_ * passTimingRingSize_> passEndQueries_{};
+    std::array<bool, maxProfiledPasses_ * passTimingRingSize_> passTimingPending_{};
+    std::array<std::string, maxProfiledPasses_ * passTimingRingSize_> passTimingNames_{};
+    std::array<std::size_t, maxProfiledPasses_> nextPassTimingRing_{};
     std::size_t nextTimingQuery_{0};
     std::size_t nextBeamTimingQuery_{0};
     std::size_t nextCausticsTimingQuery_{0};
@@ -198,4 +214,5 @@ private:
     bool hasPrismBeamGpuTime_{false};
     bool hasCausticsGpuTime_{false};
     std::vector<std::string> activePassNames_;
+    std::vector<GpuPassTiming> gpuPassTimings_;
 };
