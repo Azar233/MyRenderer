@@ -61,3 +61,8 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
   dual-sphere KHR volume validation scene.
 - `glass4_caustics_*.png`: fixed-camera Crystal hero coverage for final,
   Dispersion Off, Caustics Off, and 1x/4x MSAA states.
+- `gp_p1_forward_final.png` / `gp_p1_deferred_final.png`: same PBR fixture,
+  camera, HDRI, directional light, and 4x MSAA for render-path parity.
+- `gp_p1_gbuffer_albedo.png`, `gp_p1_gbuffer_normal.png`,
+  `gp_p1_gbuffer_material.png`, and `gp_p1_gbuffer_depth.png`: raw MRT
+  attachment views with skybox, overlays, transparency, and post FX bypassed.

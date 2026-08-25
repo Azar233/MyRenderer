@@ -252,7 +252,7 @@
 | Deterministic Capture（确定性录制） | 固定镜头、参数时间线、帧数和输出分辨率，使每次录制可重复。 | Prism-5 输出 360 帧固定时间线，再编码为 15 秒 Demo Reel。 | 已实现 |
 | Demo Reel | 用短视频集中展示作品中最有代表性的视觉效果与技术变化。 | `prism5_demo_reel.mp4` 依次展示零色散、色散渐变、角度扫描和七色 Hero Shot。 | 已实现 |
 | SSIM | 比逐像素相等更关注结构相似度的图像比较指标。 | 计划用于容忍不同 GPU 的微小浮点差异。 | 计划 |
-| Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 已支持 Reflection、Refraction、IOR、Refracted UV、Thickness、Transmittance 与 RGB Dispersion；完整 GBuffer/材质视图仍在 P0 路线。 | 部分实现 |
+| Debug View（调试视图） | 把法线、深度、粗糙度等中间数据直接显示出来。 | Glass 支持折射/厚度/色散等视图；GP-P1A 可直接显示 G-Buffer 的 Albedo、Encoded Normal、Metallic/Roughness 与 Depth，并绕过后处理。 | 已实现 |
 | Overlay Pass（叠加 Pass） | 在主体画面之后再绘制一层辅助内容，通常用于轮廓、Gizmo、调试线或 HUD。 | Optical Path Debug 在 Glass 之后、Tone Mapping 之前写入同一个 HDR Scene。 | 已实现 |
 | Camera Lock（镜头锁定） | 暂时禁止鼠标改变相机，避免录屏或回归截图因误操作改变机位。 | Prism-4 默认锁定 Hero Camera，取消勾选后恢复 Orbit 操作。 | 已实现 |
 | State Snapshot / Restore（状态快照 / 恢复） | 进入临时模式前保存一份设置，退出时原样还原，避免该模式的开关和参数污染后续场景。 | Prism Preset 保存通用 Renderer/Scene 状态；成功加载其他模型时恢复，并自动移除光束与光路 Overlay。 | 已实现 |
@@ -264,7 +264,12 @@
 
 | 术语 | 通俗解释 | 在 MyRenderer 中的作用 | 状态 |
 | --- | --- | --- | --- |
-| G-Buffer | Deferred Rendering 用的一组纹理，存储 Albedo、Normal、Material、Depth 等。 | GP-P1 计划。 | 计划 |
+| G-Buffer | Deferred Rendering 用的一组纹理，先记录“这个像素是什么材质、朝哪里、离相机多远”，再统一算光照。 | GP-P1A 使用 Albedo、Encoded Normal、Metallic/Roughness、Depth/Stencil 四个 Attachment，并支持 1×/4× MSAA Resolve。 | 已实现 |
+| Deferred Shading（延迟着色） | 几何阶段先写 G-Buffer，把光照推迟到全屏 Lighting Pass；大量灯光时避免为每个物体重复跑完整材质光照。 | Renderer 可与原 Forward 路径实时切换，并复用 PBR、IBL、Shadow、Transmission Shadow 与 Caustics。 | 已实现（单方向光基线） |
+| MRT（Multiple Render Targets） | 一次片元着色同时写多张 RenderTarget，像一次填写多列表格。 | G-buffer Fragment Shader 一次写 Albedo、Normal 和 Metallic/Roughness，Depth 由固定管线写入。 | 已实现 |
+| Lighting Pass（光照阶段） | 读取屏幕上的材质和深度数据，对每个可见像素统一计算光照。 | 全屏三角形从 Depth 重建世界坐标并计算 Cook-Torrance GGX、Split-Sum IBL 与阴影。 | 已实现 |
+| Hybrid Deferred（混合延迟渲染） | 不透明物使用 Deferred，必须排序或读取背景的透明物仍走 Forward。 | 保留 Glass-4 的 Forward Transparent/Refractive Pass，避免把有序透明错误塞进普通 G-Buffer。 | 已实现 |
+| Render Path（渲染路径） | 从场景数据到最终像素所选择的一套 Pass 流程。 | GUI 的 Opaque render path 可在 Forward 与 Deferred (hybrid) 间即时切换。 | 已实现 |
 | SSAO | 根据屏幕深度和法线近似物体缝隙中的环境遮蔽。 | GP-P1 候选效果。 | 计划 |
 | SSR | 在屏幕深度/颜色中追踪反射，只能反射屏幕已有信息。 | GP-P1 候选效果。 | 计划 |
 | TAA | 融合当前帧与历史帧降低锯齿和闪烁，需要运动信息与稳定策略。 | 对焦散稳定也有价值。 | 计划 |

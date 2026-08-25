@@ -342,6 +342,22 @@ void RenderTarget::bindOpaqueScene() const {
     );
 }
 
+void RenderTarget::bindOpaqueResolvedScene() const {
+    glBindFramebuffer(GL_FRAMEBUFFER, opaqueFramebuffer_);
+}
+
+void RenderTarget::bindDeferredOpaqueScene(unsigned int sourceFramebuffer) const {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, sourceFramebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, opaqueFramebuffer_);
+    glBlitFramebuffer(
+        0, 0, width_, height_,
+        0, 0, width_, height_,
+        GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
+        GL_NEAREST
+    );
+    glBindFramebuffer(GL_FRAMEBUFFER, opaqueFramebuffer_);
+}
+
 void RenderTarget::resolveOpaqueScene() const {
     if (samples_ > 1) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampleFramebuffer_);
@@ -359,6 +375,10 @@ void RenderTarget::resolveOpaqueScene() const {
             GL_NEAREST
         );
     }
+    finalizeOpaqueScene();
+}
+
+void RenderTarget::finalizeOpaqueScene() const {
     glBindTexture(GL_TEXTURE_2D, opaqueColorTexture_);
     glGenerateMipmap(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, 0);

@@ -16,6 +16,7 @@ class Camera;
 class CausticsMap;
 class DebugGrid;
 class EnvironmentMap;
+class GBuffer;
 class GpuModel;
 class OpticalPathDebugRenderer;
 class PostProcessor;
@@ -46,6 +47,19 @@ enum class CausticsMode {
     LightSpace = 1
 };
 
+enum class RenderPath {
+    Forward = 0,
+    Deferred = 1
+};
+
+enum class GBufferDebugView {
+    Final = 0,
+    Albedo = 1,
+    EncodedNormal = 2,
+    MetallicRoughness = 3,
+    Depth = 4
+};
+
 struct GpuPassTiming {
     std::string name;
     double milliseconds{0.0};
@@ -62,6 +76,8 @@ struct RendererSettings {
     float specularStrength{0.28f};
     float shininess{48.0f};
     int msaaSamples{4};
+    RenderPath renderPath{RenderPath::Forward};
+    GBufferDebugView gBufferDebugView{GBufferDebugView::Final};
     bool wireframe{false};
     bool cullBackFaces{false};
     bool normalMapping{true};
@@ -173,15 +189,19 @@ private:
     std::unique_ptr<CausticsMap> causticsMap_;
     std::unique_ptr<DebugGrid> debugGrid_;
     std::unique_ptr<EnvironmentMap> environmentMap_;
+    std::unique_ptr<GBuffer> gBuffer_;
     std::unique_ptr<OpticalPathDebugRenderer> opticalPathDebugRenderer_;
     std::unique_ptr<ShadowMap> shadowMap_;
     std::unique_ptr<SpectralBeamRenderer> spectralBeamRenderer_;
     std::unique_ptr<Shader> shadowShader_;
     std::unique_ptr<Shader> transmissionShadowShader_;
     std::unique_ptr<Shader> glassThicknessShader_;
+    std::unique_ptr<Shader> gBufferShader_;
+    std::unique_ptr<Shader> deferredLightingShader_;
     std::unique_ptr<PostProcessor> postProcessor_;
     std::unique_ptr<RenderTarget> renderTarget_;
     std::unique_ptr<TextureCache> textureCache_;
+    unsigned int fullscreenVertexArray_{0};
     std::array<unsigned int, 4> timingQueries_{};
     std::array<bool, 4> timingQueryPending_{};
     std::array<unsigned int, 4> beamStartQueries_{};

@@ -91,6 +91,7 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
     compositeShader_->setInt("uBloom", 1);
     compositeShader_->setBool("uToneMapping", settings.toneMapping);
     compositeShader_->setBool("uBloomEnabled", settings.bloom);
+    compositeShader_->setBool("uEncodeSrgb", settings.encodeSrgb);
     compositeShader_->setFloat("uExposure", settings.exposure);
     compositeShader_->setFloat("uBloomIntensity", settings.bloomIntensity);
     glActiveTexture(GL_TEXTURE0);

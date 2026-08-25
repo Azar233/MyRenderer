@@ -228,10 +228,23 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* msaa = std::getenv("MYRENDERER_MSAA")) {
         rendererSettings_.msaaSamples = std::atoi(msaa) <= 1 ? 1 : 4;
     }
+    if (const char* value = std::getenv("MYRENDERER_RENDER_PATH")) {
+        rendererSettings_.renderPath = std::atoi(value) == 0
+            ? RenderPath::Forward
+            : RenderPath::Deferred;
+    }
+    if (const char* value = std::getenv("MYRENDERER_GBUFFER_DEBUG")) {
+        rendererSettings_.gBufferDebugView = static_cast<GBufferDebugView>(
+            std::clamp(std::atoi(value), 0, 4)
+        );
+    }
     if (const char* value = std::getenv("MYRENDERER_PBR")) rendererSettings_.pbrEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_IBL")) rendererSettings_.iblEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_SHADOWS")) rendererSettings_.shadowsEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_BLOOM")) rendererSettings_.bloom = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_GRID")) rendererSettings_.showGrid = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_AXES")) rendererSettings_.showAxes = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_GROUND")) showGroundPlane_ = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_TRANSMISSION")) rendererSettings_.transmissionEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_REFRACTION_SCALE")) {
         rendererSettings_.refractionScale = std::clamp(std::strtof(value, nullptr), 0.0f, 0.8f);
@@ -818,6 +831,24 @@ void Application::drawInspectorPanel() {
 
         if (ImGui::BeginTabItem("Renderer")) {
             ImGui::SeparatorText("PBR & environment");
+            int renderPath = static_cast<int>(rendererSettings_.renderPath);
+            const char* renderPaths[] = {"Forward", "Deferred (hybrid)"};
+            if (ImGui::Combo("Opaque render path", &renderPath, renderPaths, 2)) {
+                rendererSettings_.renderPath = static_cast<RenderPath>(renderPath);
+            }
+            ImGui::BeginDisabled(rendererSettings_.renderPath != RenderPath::Deferred);
+            int gBufferDebug = static_cast<int>(rendererSettings_.gBufferDebugView);
+            const char* gBufferDebugViews[] = {
+                "Final lighting",
+                "Albedo",
+                "Encoded normal",
+                "Metallic / Roughness",
+                "Depth"
+            };
+            if (ImGui::Combo("G-buffer debug", &gBufferDebug, gBufferDebugViews, 5)) {
+                rendererSettings_.gBufferDebugView = static_cast<GBufferDebugView>(gBufferDebug);
+            }
+            ImGui::EndDisabled();
             ImGui::Checkbox("Metallic-roughness PBR", &rendererSettings_.pbrEnabled);
             ImGui::Checkbox("Image-based lighting", &rendererSettings_.iblEnabled);
             ImGui::Checkbox("Skybox", &rendererSettings_.skyboxEnabled);
@@ -2150,6 +2181,9 @@ void Application::writePrismBenchmarkReport() {
            << "  \"width\": " << renderer_->renderWidth() << ",\n"
            << "  \"height\": " << renderer_->renderHeight() << ",\n"
            << "  \"msaaSamples\": " << renderer_->activeMsaaSamples() << ",\n"
+           << "  \"renderPath\": "
+           << std::quoted(rendererSettings_.renderPath == RenderPath::Deferred
+                ? "deferred" : "forward") << ",\n"
            << "  \"spectralSamples\": " << rendererSettings_.prismSpectrum.samples.size() << ",\n"
            << "  \"drawCalls\": " << renderer_->drawCallCount() << ",\n"
            << "  \"cpuOpticsP50Ms\": " << percentile(solveTimes, 0.50) << ",\n"

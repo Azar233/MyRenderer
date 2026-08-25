@@ -12,6 +12,7 @@
 #include "render/CausticsMap.h"
 #include "render/DebugGrid.h"
 #include "render/EnvironmentMap.h"
+#include "render/GBuffer.h"
 #include "render/GpuModel.h"
 #include "render/OpticalPathDebugRenderer.h"
 #include "render/PostProcessor.h"
@@ -35,6 +36,7 @@ Renderer::Renderer(
         vertexShaderPath.parent_path() / "fullscreen.vert",
         vertexShaderPath.parent_path() / "skybox.frag"
     )),
+    gBuffer_(std::make_unique<GBuffer>()),
     opticalPathDebugRenderer_(std::make_unique<OpticalPathDebugRenderer>(
         debugVertexShaderPath,
         debugFragmentShaderPath
@@ -56,6 +58,14 @@ Renderer::Renderer(
         vertexShaderPath.parent_path() / "glass_thickness.vert",
         vertexShaderPath.parent_path() / "glass_thickness.frag"
     )),
+    gBufferShader_(std::make_unique<Shader>(
+        vertexShaderPath.parent_path() / "gbuffer.vert",
+        vertexShaderPath.parent_path() / "gbuffer.frag"
+    )),
+    deferredLightingShader_(std::make_unique<Shader>(
+        vertexShaderPath.parent_path() / "fullscreen.vert",
+        vertexShaderPath.parent_path() / "deferred_lighting.frag"
+    )),
     postProcessor_(std::make_unique<PostProcessor>(
         vertexShaderPath.parent_path() / "fullscreen.vert",
         vertexShaderPath.parent_path() / "bloom_extract.frag",
@@ -71,9 +81,11 @@ Renderer::Renderer(
     glGenQueries(static_cast<GLsizei>(causticsEndQueries_.size()), causticsEndQueries_.data());
     glGenQueries(static_cast<GLsizei>(passStartQueries_.size()), passStartQueries_.data());
     glGenQueries(static_cast<GLsizei>(passEndQueries_.size()), passEndQueries_.data());
+    glGenVertexArrays(1, &fullscreenVertexArray_);
 }
 
 Renderer::~Renderer() {
+    if (fullscreenVertexArray_ != 0U) glDeleteVertexArrays(1, &fullscreenVertexArray_);
     glDeleteQueries(static_cast<GLsizei>(timingQueries_.size()), timingQueries_.data());
     glDeleteQueries(static_cast<GLsizei>(beamStartQueries_.size()), beamStartQueries_.data());
     glDeleteQueries(static_cast<GLsizei>(beamEndQueries_.size()), beamEndQueries_.data());
@@ -93,6 +105,16 @@ void Renderer::render(
     width = std::max(width, 1);
     height = std::max(height, 1);
     renderTarget_->resize(width, height, settings.msaaSamples);
+    const bool deferredActive = settings.renderPath == RenderPath::Deferred;
+    const bool gBufferDebugActive = deferredActive
+        && settings.gBufferDebugView != GBufferDebugView::Final;
+    if (deferredActive) {
+        gBuffer_->resize(width, height, settings.msaaSamples);
+    } else if (gBuffer_->framebuffer() != 0U) {
+        // Keep GUI/benchmark memory comparisons honest after switching back
+        // from Deferred instead of retaining inactive MRT allocations.
+        gBuffer_->destroy();
+    }
 
     for (std::size_t index = 0; index < timingQueries_.size(); ++index) {
         if (!timingQueryPending_[index]) {
@@ -499,7 +521,7 @@ void Renderer::render(
             }
         );
     }
-    sequence.add("Opaque HDR scene", [&] {
+    if (!deferredActive) sequence.add("Forward opaque HDR scene", [&] {
         renderTarget_->bindOpaqueScene();
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, 0);
@@ -548,12 +570,137 @@ void Renderer::render(
             renderTarget_->resolveOpaqueScene();
         }
     });
+    if (deferredActive) {
+        sequence.add("G-buffer geometry", [&] {
+            gBuffer_->bindForGeometry();
+            glViewport(0, 0, width, height);
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
+            const std::array<float, 4> clearAlbedo{0.0f, 0.0f, 0.0f, 0.0f};
+            const std::array<float, 4> clearNormal{0.5f, 0.5f, 1.0f, 0.0f};
+            const std::array<float, 4> clearMaterial{0.0f, 1.0f, 0.0f, 0.0f};
+            glClearBufferfv(GL_COLOR, 0, clearAlbedo.data());
+            glClearBufferfv(GL_COLOR, 1, clearNormal.data());
+            glClearBufferfv(GL_COLOR, 2, clearMaterial.data());
+            glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
+
+            gBufferShader_->use();
+            gBufferShader_->setMat4("uView", view);
+            gBufferShader_->setMat4("uProjection", projection);
+            gBufferShader_->setBool("uNormalMappingEnabled", settings.normalMapping);
+            for (const RenderItem& item : renderItems) {
+                if (!item.visible || item.model == nullptr) continue;
+                gBufferShader_->setMat4("uModel", item.modelMatrix);
+                item.model->drawOpaque(*gBufferShader_, item.tint, settings.cullBackFaces);
+                drawCallCount_ += item.model->opaqueSubmeshCount();
+            }
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glDisable(GL_CULL_FACE);
+            gBuffer_->resolve();
+        });
+
+        sequence.add("Deferred lighting", [&] {
+            renderTarget_->bindDeferredOpaqueScene(gBuffer_->framebuffer());
+            glViewport(0, 0, width, height);
+            glClearColor(
+                settings.backgroundColor.r,
+                settings.backgroundColor.g,
+                settings.backgroundColor.b,
+                1.0f
+            );
+            glClear(GL_COLOR_BUFFER_BIT);
+            if (settings.skyboxEnabled && !gBufferDebugActive) {
+                glDisable(GL_DEPTH_TEST);
+                environmentMap_->draw(
+                    glm::inverse(projection * view),
+                    camera.position(),
+                    settings.environmentIntensity
+                );
+                ++drawCallCount_;
+            }
+
+            deferredLightingShader_->use();
+            deferredLightingShader_->setInt("uGAlbedo", 0);
+            deferredLightingShader_->setInt("uGNormal", 1);
+            deferredLightingShader_->setInt("uGMaterial", 2);
+            deferredLightingShader_->setInt("uGDepth", 3);
+            deferredLightingShader_->setInt("uIrradianceMap", 4);
+            deferredLightingShader_->setInt("uPrefilteredEnvironmentMap", 5);
+            deferredLightingShader_->setInt("uBrdfLut", 6);
+            deferredLightingShader_->setInt("uShadowMap", 7);
+            deferredLightingShader_->setInt("uTransmissionShadowMap", 8);
+            deferredLightingShader_->setInt("uCausticsMap", 9);
+            deferredLightingShader_->setMat4(
+                "uInverseViewProjection",
+                glm::inverse(projection * view)
+            );
+            deferredLightingShader_->setMat4("uLightViewProjection", lightViewProjection);
+            deferredLightingShader_->setVec3("uCameraPosition", camera.position());
+            deferredLightingShader_->setVec3("uLightDirection", lightDirection);
+            deferredLightingShader_->setFloat("uAmbientStrength", settings.ambientStrength);
+            deferredLightingShader_->setFloat("uDiffuseStrength", settings.diffuseStrength);
+            deferredLightingShader_->setFloat("uSpecularStrength", settings.specularStrength);
+            deferredLightingShader_->setFloat("uShininess", settings.shininess);
+            deferredLightingShader_->setFloat(
+                "uEnvironmentIntensity",
+                settings.environmentIntensity
+            );
+            deferredLightingShader_->setFloat(
+                "uEnvironmentMaxMip",
+                static_cast<float>(environmentMap_->maximumMipLevel())
+            );
+            deferredLightingShader_->setBool("uPbrEnabled", settings.pbrEnabled);
+            deferredLightingShader_->setBool("uIblEnabled", settings.iblEnabled);
+            deferredLightingShader_->setBool("uShadowsEnabled", settings.shadowsEnabled);
+            deferredLightingShader_->setBool(
+                "uColoredTransmissionShadowsEnabled",
+                settings.coloredTransmissionShadowsEnabled
+            );
+            deferredLightingShader_->setBool("uCausticsEnabled", causticsActive);
+            deferredLightingShader_->setInt(
+                "uGBufferDebugView",
+                static_cast<int>(settings.gBufferDebugView)
+            );
+            gBuffer_->bindTextures(0U, 1U, 2U, 3U);
+            environmentMap_->bindIrradiance(4U);
+            environmentMap_->bindPrefiltered(5U);
+            environmentMap_->bindBrdfLut(6U);
+            shadowMap_->bindTexture(7U);
+            shadowMap_->bindTransmissionTexture(8U);
+            causticsMap_->bindTexture(9U);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_BLEND);
+            glBindVertexArray(fullscreenVertexArray_);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glBindVertexArray(0);
+            ++drawCallCount_;
+
+            if (!gBufferDebugActive && (settings.showGrid || settings.showAxes)) {
+                glEnable(GL_DEPTH_TEST);
+                glDepthMask(GL_FALSE);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                debugGrid_->draw(view, projection, settings.showGrid, settings.showAxes);
+                drawCallCount_ += (settings.showGrid ? 1U : 0U)
+                    + (settings.showAxes ? 1U : 0U);
+                glDisable(GL_BLEND);
+                glDepthMask(GL_TRUE);
+            }
+            if (!spectralBeamVisible) renderTarget_->finalizeOpaqueScene();
+        });
+    }
     if (spectralBeamVisible) {
         sequence.add("Spectral beam HDR", [&] {
             // The beam is composited after opaque geometry so the existing depth
             // buffer occludes it correctly, but before glass so refraction can
             // sample its radiance from the resolved opaque HDR texture.
-            renderTarget_->bindOpaqueScene();
+            if (deferredActive) {
+                renderTarget_->bindOpaqueResolvedScene();
+            } else {
+                renderTarget_->bindOpaqueScene();
+            }
             glViewport(0, 0, width, height);
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
@@ -584,7 +731,11 @@ void Renderer::render(
             }
             glDisable(GL_BLEND);
             glDepthMask(GL_TRUE);
-            renderTarget_->resolveOpaqueScene();
+            if (deferredActive) {
+                renderTarget_->finalizeOpaqueScene();
+            } else {
+                renderTarget_->resolveOpaqueScene();
+            }
         });
     }
     sequence.add("Forward transparent / refractive scene", [&] {
@@ -593,7 +744,7 @@ void Renderer::render(
         // while drawing here without reading from the texture being written.
         renderTarget_->bindRefractiveScene();
         glViewport(0, 0, width, height);
-        if (!transparentDraws.empty()) {
+        if (!transparentDraws.empty() && !gBufferDebugActive) {
             glActiveTexture(GL_TEXTURE5);
             glBindTexture(GL_TEXTURE_2D, renderTarget_->opaqueColorTexture());
             glActiveTexture(GL_TEXTURE6);
@@ -735,7 +886,9 @@ void Renderer::render(
             glBindTexture(GL_TEXTURE_2D, 0);
         }
     });
-    if (settings.showPrismOpticalPathDebug && settings.prismOpticalPathValid) {
+    if (settings.showPrismOpticalPathDebug
+        && settings.prismOpticalPathValid
+        && !gBufferDebugActive) {
         sequence.add("Optical path debug", [&] {
             renderTarget_->bindHdrSceneForOverlay();
             glViewport(0, 0, width, height);
@@ -756,15 +909,20 @@ void Renderer::render(
             glEnable(GL_DEPTH_TEST);
         });
     }
-    sequence.add(settings.bloom ? "Bloom + tone map" : "Tone map", [&] {
+    sequence.add(
+        gBufferDebugActive
+            ? "G-buffer debug output"
+            : (settings.bloom ? "Bloom + tone map" : "Tone map"),
+        [&] {
         postProcessor_->process(*renderTarget_, PostProcessSettings{
-            settings.toneMapping,
-            settings.bloom,
-            settings.exposure,
+            gBufferDebugActive ? false : settings.toneMapping,
+            gBufferDebugActive ? false : settings.bloom,
+            !gBufferDebugActive,
+            gBufferDebugActive ? 1.0f : settings.exposure,
             settings.bloomThreshold,
             settings.bloomIntensity
         });
-        drawCallCount_ += settings.bloom ? 10U : 1U;
+        drawCallCount_ += !gBufferDebugActive && settings.bloom ? 10U : 1U;
     });
     activePassNames_ = sequence.names();
     std::array<std::size_t, maxProfiledPasses_> activePassQuerySlots{};
@@ -840,6 +998,7 @@ int Renderer::renderHeight() const {
 
 std::size_t Renderer::estimatedRenderMemoryBytes() const {
     return renderTarget_->estimatedBytes()
+        + gBuffer_->estimatedBytes()
         + postProcessor_->estimatedBytes()
         + environmentMap_->estimatedBytes()
         + shadowMap_->estimatedBytes()

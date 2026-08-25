@@ -4,6 +4,7 @@ uniform sampler2D uScene;
 uniform sampler2D uBloom;
 uniform bool uToneMapping;
 uniform bool uBloomEnabled;
+uniform bool uEncodeSrgb;
 uniform float uExposure;
 uniform float uBloomIntensity;
 out vec4 fragmentColor;
@@ -28,5 +29,5 @@ void main() {
     if (uBloomEnabled) color += texture(uBloom, vUv).rgb * uBloomIntensity;
     color *= max(uExposure, 0.0);
     color = uToneMapping ? aces(color) : clamp(color, 0.0, 1.0);
-    fragmentColor = vec4(linearToSrgb(color), 1.0);
+    fragmentColor = vec4(uEncodeSrgb ? linearToSrgb(color) : color, 1.0);
 }

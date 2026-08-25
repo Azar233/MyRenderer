@@ -19,6 +19,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - 切线空间法线贴图、退化 UV 安全回退与可关闭的法线贴图着色。
 - 按子网格材质范围绑定材质并提交 Draw Call，同一模型可显示多个材质。
 - GPU 顶点/索引缓冲、深度测试、背面剔除和线框模式。
+- 可实时切换的 Forward / Hybrid Deferred 不透明渲染路径：`GL_RGBA8` Albedo、`GL_RGBA16F` Encoded Normal、`GL_RG8` Metallic/Roughness 与 `GL_DEPTH24_STENCIL8` Depth/Stencil G-Buffer，支持 1×/4× MSAA Resolve、逐附件 Debug View、世界坐标重建与全屏 PBR/IBL Lighting Pass；透明/玻璃继续使用 Forward Refractive Pass。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
@@ -28,7 +29,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - Glass-3/4 彩色光传输与作品集验收：RGBA16F 透射阴影、可控 Caustics Projector、Light-space RGB Photon Splat 焦散、两次空间滤波，以及独立 Glass / Dispersion / Caustics 开关、四组玻璃 Preset、14 场景视觉回归、逐 Pass GPU Timestamp 和带标记 Nsight Capture。
 - Prism-0～5 光谱 Demo：原创封闭三棱柱、纯黑舞台、固定正面镜头、CPU 双界面 Ray/Prism 求交，以及 380～700 nm 的 7/15/21/31 档波长采样；每个样本使用 Cauchy IOR、CIE 1931 近似线性 RGB、两界面 Fresnel 与 Beer-Lambert 能量。独立 `Spectral beam HDR` Pass 把结果生成相机朝向的柔边 Ribbon Mesh，支持连续光谱和七色美术模式，并提供固定视觉回归、性能报告和 Demo Reel。
 - 多对象 `RenderItem` 场景提交、跨对象透明 Draw List 全局排序，以及可调颜色/高度并能接收 PBR 光照与阴影的程序化地面；可开启第二模型实例验证场景级排序。
-- `Shadow map → Transmission shadow → Caustics HDR/filter → Opaque HDR → Forward refractive → Bloom/tone map` 多 Pass 管线；Opaque HDR Color、最终 HDR Scene Color 与可采样 Depth 相互独立，可切换 ACES Tone Mapping、曝光和 Bloom。
+- `Shadow map → Transmission shadow → Caustics HDR/filter → Forward Opaque 或 G-Buffer + Deferred Lighting → Forward refractive → Bloom/tone map` 多 Pass 管线；Opaque HDR Color、最终 HDR Scene Color 与可采样 Depth 相互独立，可切换 ACES Tone Mapping、曝光和 Bloom。
 - 像素风应用图标，覆盖 GLFW 标题栏、任务栏和 Windows 可执行文件资源。
 - 顶部菜单、模型列表、Scene 面板、Inspector 面板和运行状态。
 - Windows 原生模型文件选择器、窗口拖放加载与后台 CPU 资产导入；失败导入不会替换当前场景。
@@ -67,7 +68,7 @@ cmake --build build-mingw --parallel
 
 - Scene 面板：查看主体、地面接收器与可选对照实例，切换 `assets/models` 中的 OBJ、DAE、glTF/GLB，使用原生文件选择器，输入其他模型路径，或把模型文件拖入窗口。CPU 导入期间会显示文件大小、耗时和活动进度，当前场景保持可用。
 - Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
-- Inspector / Renderer：切换 PBR、IBL、天空盒、阴影、彩色透射阴影、HDR Caustics、Transmission、Geometric Glass Thickness、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整焦散模式/强度/尺度/方向/锐度/动画、折射距离/步数、体积厚度倍率、RGB 色散、Debug View、环境强度、曝光、Bloom、背景色、灯光与 FOV，并查看活动 Pass 和 GPU 时间。
+- Inspector / Renderer：切换 Forward / Deferred (hybrid)、G-Buffer Albedo/Encoded Normal/Metallic-Roughness/Depth 调试、PBR、IBL、天空盒、阴影、彩色透射阴影、HDR Caustics、Transmission、Geometric Glass Thickness、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整焦散模式/强度/尺度/方向/锐度/动画、折射距离/步数、体积厚度倍率、RGB 色散、环境强度、曝光、背景色、灯光与 FOV，并查看活动 Pass 和 GPU 时间。
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
 - View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber / Crystal 四组体积玻璃参数。
 - View / `Glass caustics preset`：加载透明水晶球、白色接收地面与固定高机位，默认启用 Light-space RGB 焦散、彩色透射阴影和空间滤波；可即时切到 Projector / Decal 做美术对照。
@@ -152,6 +153,15 @@ cmake --build build-release --target glass4-nsight-capture
 
 视觉回归覆盖 14 张 1920×1080 固定镜头图片；Benchmark JSON 输出所有活动 Pass 的 GPU P50/P95、整帧、Draw Call 和显存。参考结果与已知边界见 `docs/glass4-validation.md`。
 
+GP-P1A Deferred 基线使用 `MYRENDERER_RENDER_PATH=0|1` 切换 Forward/Deferred，使用 `MYRENDERER_GBUFFER_DEBUG=0..4` 选择 Final/Albedo/Encoded Normal/Metallic-Roughness/Depth。固定画面与性能对照可重复执行：
+
+```powershell
+cmake --build build-release --target deferred-visual-regression
+cmake --build build-release --target deferred-benchmark
+```
+
+视觉回归覆盖 6 张 1920×1080 固定镜头图片；Forward/Deferred 最终图 MAE 为 0.000517。RTX 4060 Laptop 的 4× MSAA 基线上，Forward / Deferred GPU Frame P50 分别为 1.435 / 1.860 ms，RenderTarget 估算分别为 291.2 / 469.1 MiB。当前单光源基线不宣称 Deferred 更快，多光源扩展性将在下一阶段验证。实现、GUI 调试和限制见 `docs/deferred-shading.md`。
+
 `gpu-smoke` 目标会运行材质场景以及“成功场景后加载错误资产”的恢复测试，确保 GPU 路径使用真实上下文且失败导入保留当前场景：
 
 ```powershell
@@ -183,6 +193,7 @@ src/optics/PrismDemo.*   Prism 参数、四组光学 Preset、White Point 与实
 src/render/Camera.*      轨道相机
 src/render/DebugGrid.*   世界网格、XYZ 轴线与 Debug Line GPU 绘制
 src/render/EnvironmentMap.* HDR equirectangular 导入、Split-Sum IBL 预计算、程序化回退与天空盒
+src/render/GBuffer.*     Deferred MRT、1x/4x MSAA Resolve、Attachment 绑定与显存估算
 src/render/GpuModel.*    一个模型所拥有的 GPU Mesh 集合与统计
 src/render/Mesh.*        VAO/VBO/EBO、顶点布局与子网格 Draw Call
 src/render/OpenGlDebug.* Debug 构建的 OpenGL 驱动诊断

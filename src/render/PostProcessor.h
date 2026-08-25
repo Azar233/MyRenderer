@@ -10,6 +10,7 @@ class Shader;
 struct PostProcessSettings {
     bool toneMapping{true};
     bool bloom{true};
+    bool encodeSrgb{true};
     float exposure{1.0f};
     float bloomThreshold{1.0f};
     float bloomIntensity{0.12f};

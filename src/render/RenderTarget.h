@@ -14,7 +14,10 @@ public:
 
     void resize(int width, int height, int samples);
     void bindOpaqueScene() const;
+    void bindOpaqueResolvedScene() const;
+    void bindDeferredOpaqueScene(unsigned int sourceFramebuffer) const;
     void resolveOpaqueScene() const;
+    void finalizeOpaqueScene() const;
     void bindGlassFrontfaceThickness() const;
     void bindGlassBackfaceThickness() const;
     void bindGlassExitSurfaceData() const;
