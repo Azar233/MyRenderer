@@ -362,6 +362,29 @@ if(BUILD_TESTING)
         COMMENT "Benchmarking GP-P1 Forward/Deferred at 1080p with 1x/4x MSAA"
     )
 
+    add_custom_target(local-lights-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/local-lights-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/LocalLightsVisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing and comparing the GP-P1B local-light stress matrix"
+    )
+
+    add_custom_target(local-lights-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/local-lights-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/LocalLightsBenchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Benchmarking Forward/Deferred with 8, 32, and 64 local lights"
+    )
+
     find_program(MYRENDERER_NSYS_EXECUTABLE
         NAMES nsys nsys.exe
         HINTS
@@ -423,6 +446,14 @@ add_custom_target(gpu-smoke
             MYRENDERER_GBUFFER_DEBUG=0
             $<TARGET_FILE:MyRenderer>
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/glass_material_test.gltf
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_RENDER_PATH=1
+            MYRENDERER_LIGHT_STRESS=1
+            MYRENDERER_LOCAL_LIGHT_TIER=2
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/cube.obj
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=4

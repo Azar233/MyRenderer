@@ -502,13 +502,15 @@ Glass 阶段验收：Glass-2C 完成后，弯曲球体应达到 Khronos `KHR_mat
 #### GP-P1：可观测的现代实时渲染能力（优先做）
 
 - [x] 增加 G-Buffer / Deferred Shading 路径，并保留当前 Forward 路径作对照；至少包含 Albedo、Encoded Normal、Metallic/Roughness、Depth，支持逐附件调试。
-- [ ] 建立多光源压力场景：点光 / 聚光、至少三档灯光数量；记录 Forward 与 Deferred 在同一机器同一画面下的 GPU 时间、带宽和 Draw Call 差异。
+- [x] 建立多光源压力场景：点光 / 聚光、至少三档灯光数量；记录 Forward 与 Deferred 在同一机器同一画面下的 GPU 时间、带宽和 Draw Call 差异。
 - [ ] 实现实例化、CPU Frustum Culling 和 LOD 选择；用同一 Mesh 的大规模实例场景证明提交与几何优化，不以空场 FPS 作为结果。
 - [ ] 从 SSAO、TAA、SSR 中选择两项实现，其中优先 TAA：需要 Motion Vector、Halton Jitter、History Reprojection、Neighborhood Clamp、静止/运动 Ghosting 对照。
 - [ ] 增加骨骼动画最小闭环：glTF Skin、Joint/Weight、Animation Sampling、GPU Skinning；提供 bind pose、动画和骨骼/权重调试视图。
 - [ ] 给每项优化建立 Before / After Capture；报告必须同时写画质代价、CPU/GPU/显存变化，不能只写“FPS 提升”。
 
 > GP-P1A Deferred 基线完成（2026-08-25）：新增可切换的 Forward / Hybrid Deferred 路径；不透明物以 MRT 写入 RGBA8 Albedo、RGBA16F Encoded Normal、RG8 Metallic/Roughness 与 Depth24/Stencil8，再由全屏 Lighting Pass 重建世界坐标并计算 PBR/IBL/Shadow/Caustics；透明与玻璃保留 Forward Refractive Pass。Inspector 提供 Final + 4 种原始 Attachment 调试，调试时自动绕过天空盒、Overlay、透明和后处理。6 张 1080p 固定回归中 Forward/Deferred 最终画面 MAE 0.000517、变化像素 0.135%。RTX 4060 Laptop 4× MSAA 下 Forward/Deferred GPU P50 为 1.435/1.860 ms，显存估算为 291.2/469.1 MiB；当前单光源阶段不宣称性能收益。详见 `docs/deferred-shading.md`。下一项进入点光/聚光多光源压力场景与扩展性曲线。
+
+> GP-P1B 多光源压力场景完成（2026-08-26）：新增 Point/Spot 各半的 8/32/64 三档局部灯、有限半径逆平方衰减、平滑聚光锥，以及 100 个独立 Draw 的固定立方体舞台。Forward/Deferred 使用同一 Uniform Light Array 与 GGX BRDF；4 张 1080p 回归中同档 MAE 均低于 0.0008。RTX 4060 Laptop 4× MSAA 下，64 灯 GPU P50 为 Forward 3.773 ms、Deferred 2.183 ms（约 1.73×）；Draw Call 111/112，RenderTarget 显存 291.2/469.1 MiB，估算 Opaque Attachment 流量 213.6/387.6 MiB/frame。报告明确流量为格式推导下限而非硬件 Counter，并记录局部灯无阴影、最多 64 灯、尚未做 Light Volume/Tiled/Clustered 的边界。详见 `docs/local-light-stress.md`。下一项进入 Instancing、CPU Frustum Culling 与 LOD。
 
 #### GP-P2：旗舰方向三选一（只选一个做深）
 

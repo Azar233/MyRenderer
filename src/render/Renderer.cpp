@@ -106,6 +106,7 @@ void Renderer::render(
     height = std::max(height, 1);
     renderTarget_->resize(width, height, settings.msaaSamples);
     const bool deferredActive = settings.renderPath == RenderPath::Deferred;
+    activeRenderPath_ = settings.renderPath;
     const bool gBufferDebugActive = deferredActive
         && settings.gBufferDebugView != GBufferDebugView::Final;
     if (deferredActive) {
@@ -275,12 +276,61 @@ void Renderer::render(
     const bool causticsActive = settings.causticsEnabled
         && (settings.causticsMode == CausticsMode::Projector || hasTransmissiveCasters);
 
+    constexpr std::size_t maximumLocalLights = 64U;
+    const std::size_t localLightCount = std::min(
+        settings.localLights.size(),
+        maximumLocalLights
+    );
+    std::array<glm::vec4, maximumLocalLights> localLightPositionRadius{};
+    std::array<glm::vec4, maximumLocalLights> localLightColorIntensity{};
+    std::array<glm::vec4, maximumLocalLights> localLightDirectionOuter{};
+    for (std::size_t index = 0; index < localLightCount; ++index) {
+        const LocalLight& light = settings.localLights[index];
+        const float radius = std::max(light.radius, 0.001f);
+        localLightPositionRadius[index] = glm::vec4(
+            light.position,
+            light.type == LocalLightType::Spot ? -radius : radius
+        );
+        localLightColorIntensity[index] = glm::vec4(
+            glm::max(light.color, glm::vec3(0.0f)),
+            std::max(light.intensity, 0.0f)
+        );
+        glm::vec3 direction = light.direction;
+        if (glm::dot(direction, direction) < 1e-8f) {
+            direction = glm::vec3(0.0f, -1.0f, 0.0f);
+        }
+        localLightDirectionOuter[index] = glm::vec4(
+            glm::normalize(direction),
+            std::clamp(light.outerConeCosine, -0.99f, 0.99f)
+        );
+    }
+    const auto bindLocalLights = [&](Shader& targetShader) {
+        targetShader.setInt("uLocalLightCount", static_cast<int>(localLightCount));
+        if (localLightCount == 0U) return;
+        targetShader.setVec4Array(
+            "uLocalLightPositionRadius[0]",
+            localLightPositionRadius.data(),
+            localLightCount
+        );
+        targetShader.setVec4Array(
+            "uLocalLightColorIntensity[0]",
+            localLightColorIntensity.data(),
+            localLightCount
+        );
+        targetShader.setVec4Array(
+            "uLocalLightDirectionOuter[0]",
+            localLightDirectionOuter.data(),
+            localLightCount
+        );
+    };
+
     const auto bindSceneShader = [&] {
         shader_->use();
         shader_->setMat4("uView", view);
         shader_->setMat4("uProjection", projection);
         shader_->setMat4("uLightViewProjection", lightViewProjection);
         shader_->setVec3("uLightDirection", lightDirection);
+        bindLocalLights(*shader_);
         shader_->setVec3("uCameraPosition", camera.position());
         shader_->setFloat("uAmbientStrength", settings.ambientStrength);
         shader_->setFloat("uDiffuseStrength", settings.diffuseStrength);
@@ -639,6 +689,7 @@ void Renderer::render(
             deferredLightingShader_->setMat4("uLightViewProjection", lightViewProjection);
             deferredLightingShader_->setVec3("uCameraPosition", camera.position());
             deferredLightingShader_->setVec3("uLightDirection", lightDirection);
+            bindLocalLights(*deferredLightingShader_);
             deferredLightingShader_->setFloat("uAmbientStrength", settings.ambientStrength);
             deferredLightingShader_->setFloat("uDiffuseStrength", settings.diffuseStrength);
             deferredLightingShader_->setFloat("uSpecularStrength", settings.specularStrength);
@@ -1004,4 +1055,30 @@ std::size_t Renderer::estimatedRenderMemoryBytes() const {
         + shadowMap_->estimatedBytes()
         + causticsMap_->estimatedBytes()
         + spectralBeamRenderer_->vertexBufferBytes();
+}
+
+std::size_t Renderer::estimatedOpaqueTrafficBytesPerFrame() const {
+    const std::size_t pixels = static_cast<std::size_t>(std::max(renderTarget_->width(), 0))
+        * static_cast<std::size_t>(std::max(renderTarget_->height(), 0));
+    const std::size_t samples = static_cast<std::size_t>(
+        std::max(renderTarget_->samples(), 1)
+    );
+    if (activeRenderPath_ == RenderPath::Forward) {
+        constexpr std::size_t hdrColorAndDepthBytes = 8U + 4U;
+        std::size_t traffic = pixels * hdrColorAndDepthBytes * samples;
+        if (samples > 1U) {
+            traffic += pixels * hdrColorAndDepthBytes * (samples + 1U);
+        }
+        return traffic;
+    }
+
+    constexpr std::size_t gBufferBytes = 4U + 8U + 2U + 4U;
+    constexpr std::size_t opaqueHdrBytes = 8U;
+    constexpr std::size_t depthCopyBytes = 4U + 4U;
+    std::size_t traffic = pixels * gBufferBytes * samples;
+    if (samples > 1U) {
+        traffic += pixels * gBufferBytes * (samples + 1U);
+    }
+    traffic += pixels * (gBufferBytes + opaqueHdrBytes + depthCopyBytes);
+    return traffic;
 }

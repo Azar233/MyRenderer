@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstddef>
 #include <string>
 
 #include <glm/mat4x4.hpp>
@@ -26,6 +27,7 @@ public:
     void setFloat(const char* name, float value) const;
     void setVec3(const char* name, const glm::vec3& value) const;
     void setVec4(const char* name, const glm::vec4& value) const;
+    void setVec4Array(const char* name, const glm::vec4* values, std::size_t count) const;
     void setMat4(const char* name, const glm::mat4& value) const;
 
 private:

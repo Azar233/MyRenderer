@@ -66,6 +66,8 @@ private:
     void activatePrismDemoPreset(bool loadFixture);
     void activateGlassCausticsPreset();
     void applyVolumeGlassPreset(VolumeGlassPreset preset);
+    void activateLightStressPreset(bool loadFixture);
+    void rebuildLocalLights();
     void deactivatePrismDemoPreset();
     void updatePrismDemoOptics();
     void applyPrismOpticalPreset(PrismOpticalPreset preset);
@@ -164,10 +166,12 @@ private:
     bool prismDemoEnabled_{false};
     bool glassVolumeDemoEnabled_{false};
     bool glassCausticsDemoEnabled_{false};
+    bool lightStressDemoEnabled_{false};
     bool prismCameraLocked_{true};
     bool prismModelVisible_{true};
     bool benchmarkMode_{false};
     bool prismReelMode_{false};
+    int localLightTierIndex_{1};
     VolumeGlassPreset volumeGlassPreset_{VolumeGlassPreset::Olive};
     PrismOpticalPreset prismOpticalPreset_{PrismOpticalPreset::CrownGlass};
     PrismDemoParameters prismParameters_{};

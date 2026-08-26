@@ -300,12 +300,20 @@ int Application::run(const std::filesystem::path& initialModel) {
         }
     }
     if (const char* value = std::getenv("MYRENDERER_SCENE_DEMO")) showComparisonObject_ = std::atoi(value) != 0;
+    if (const char* value = std::getenv("MYRENDERER_LIGHT_STRESS")) {
+        lightStressDemoEnabled_ = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_LOCAL_LIGHT_TIER")) {
+        localLightTierIndex_ = std::clamp(std::atoi(value), 0, 2);
+    }
     if (const char* value = std::getenv("MYRENDERER_PRISM_DEMO")) {
         prismDemoEnabled_ = std::atoi(value) != 0;
     }
     if (prismReelMode_) prismDemoEnabled_ = true;
     if (prismDemoEnabled_) {
         activatePrismDemoPreset(false);
+    } else if (lightStressDemoEnabled_ && !glassCausticsDemoEnabled_) {
+        activateLightStressPreset(false);
     }
 
     std::filesystem::path modelToLoad = initialModel;
@@ -650,6 +658,9 @@ void Application::drawMainMenu() {
         if (ImGui::MenuItem("Glass caustics preset")) {
             activateGlassCausticsPreset();
         }
+        if (ImGui::MenuItem("Local light stress preset")) {
+            activateLightStressPreset(true);
+        }
         ImGui::MenuItem("Wireframe", nullptr, &rendererSettings_.wireframe);
         ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
         ImGui::Separator();
@@ -702,6 +713,11 @@ void Application::drawScenePanel() {
         if (showComparisonObject_) {
             ImGui::TreeNodeEx("Comparison instance", ImGuiTreeNodeFlags_Leaf);
             ImGui::TreePop();
+        }
+        if (lightStressDemoEnabled_) {
+            ImGui::TreeNodeEx("Stress instances x100", ImGuiTreeNodeFlags_Leaf);
+            ImGui::TreePop();
+            ImGui::TextDisabled("Local lights: %zu", rendererSettings_.localLights.size());
         }
         if (rendererSettings_.showPrismIncidentBeam) {
             ImGui::TreeNodeEx("Incident beam (Prism-0 placeholder)", ImGuiTreeNodeFlags_Leaf);
@@ -848,6 +864,33 @@ void Application::drawInspectorPanel() {
             if (ImGui::Combo("G-buffer debug", &gBufferDebug, gBufferDebugViews, 5)) {
                 rendererSettings_.gBufferDebugView = static_cast<GBufferDebugView>(gBufferDebug);
             }
+            ImGui::EndDisabled();
+            ImGui::SeparatorText("Local light stress");
+            bool stressEnabled = lightStressDemoEnabled_;
+            if (ImGui::Checkbox("Enable stress scene", &stressEnabled)) {
+                lightStressDemoEnabled_ = stressEnabled;
+                if (lightStressDemoEnabled_) {
+                    activateLightStressPreset(false);
+                } else {
+                    rendererSettings_.localLights.clear();
+                    statusMessage_ = "Local light stress scene disabled";
+                }
+            }
+            ImGui::BeginDisabled(!lightStressDemoEnabled_);
+            const char* lightTiers[] = {"Low (8)", "Medium (32)", "High (64)"};
+            if (ImGui::Combo("Local light tier", &localLightTierIndex_, lightTiers, 3)) {
+                rebuildLocalLights();
+            }
+            const std::size_t spotCount = std::count_if(
+                rendererSettings_.localLights.begin(),
+                rendererSettings_.localLights.end(),
+                [](const LocalLight& light) { return light.type == LocalLightType::Spot; }
+            );
+            ImGui::TextDisabled(
+                "%zu point + %zu spot | 100 objects",
+                rendererSettings_.localLights.size() - spotCount,
+                spotCount
+            );
             ImGui::EndDisabled();
             ImGui::Checkbox("Metallic-roughness PBR", &rendererSettings_.pbrEnabled);
             ImGui::Checkbox("Image-based lighting", &rendererSettings_.iblEnabled);
@@ -1246,6 +1289,11 @@ void Application::drawInspectorPanel() {
                 ImGui::Text("GPU beam pass: %.3f ms", renderer_->prismBeamGpuTimeMilliseconds());
             }
             ImGui::Text("Draw calls: %zu", renderer_->drawCallCount());
+            ImGui::Text(
+                "Estimated opaque traffic: %.1f MiB/frame",
+                static_cast<double>(renderer_->estimatedOpaqueTrafficBytesPerFrame())
+                    / (1024.0 * 1024.0)
+            );
             ImGui::Text("Active passes: %zu", renderer_->activePassNames().size());
             for (const auto& passName : renderer_->activePassNames()) {
                 const auto timing = std::find_if(
@@ -1338,7 +1386,50 @@ void Application::drawViewportPanel() {
     modelMatrix *= normalization;
 
     std::vector<RenderItem> renderItems;
-    if (model_ != nullptr && (!prismDemoEnabled_ || prismModelVisible_)) {
+    if (model_ != nullptr && lightStressDemoEnabled_) {
+        static constexpr std::array<glm::vec3, 6> instanceTints{
+            glm::vec3(0.95f, 0.36f, 0.24f),
+            glm::vec3(0.96f, 0.70f, 0.24f),
+            glm::vec3(0.42f, 0.86f, 0.48f),
+            glm::vec3(0.22f, 0.68f, 0.96f),
+            glm::vec3(0.52f, 0.38f, 0.94f),
+            glm::vec3(0.92f, 0.32f, 0.70f)
+        };
+        constexpr int instanceColumns = 10;
+        constexpr int instanceRows = 10;
+        for (int row = 0; row < instanceRows; ++row) {
+            for (int column = 0; column < instanceColumns; ++column) {
+                const int index = row * instanceColumns + column;
+                const glm::vec3 position(
+                    -3.24f + static_cast<float>(column) * 0.72f,
+                    groundOffset_ + 0.25f,
+                    -3.24f + static_cast<float>(row) * 0.72f
+                );
+                glm::mat4 instanceMatrix = glm::translate(glm::mat4(1.0f), position);
+                instanceMatrix = glm::rotate(
+                    instanceMatrix,
+                    glm::radians(static_cast<float>((index * 29) % 360)),
+                    glm::vec3(0.0f, 1.0f, 0.0f)
+                );
+                instanceMatrix = glm::rotate(
+                    instanceMatrix,
+                    glm::radians(static_cast<float>((row + column) % 3) * 7.0f),
+                    glm::vec3(1.0f, 0.0f, 0.0f)
+                );
+                instanceMatrix = glm::scale(instanceMatrix, glm::vec3(0.36f));
+                instanceMatrix *= normalization;
+                renderItems.push_back(RenderItem{
+                    model_.get(),
+                    instanceMatrix,
+                    instanceTints[static_cast<std::size_t>(index) % instanceTints.size()],
+                    true,
+                    false
+                });
+            }
+        }
+    }
+    if (model_ != nullptr && !lightStressDemoEnabled_
+        && (!prismDemoEnabled_ || prismModelVisible_)) {
         renderItems.push_back(RenderItem{
             model_.get(),
             modelMatrix,
@@ -1747,6 +1838,10 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
     const bool loadedGlassVolumeFixture =
         lowercase(path.filename().string()) == "glass_volume_sphere.gltf";
     const bool wasGlassVolumeDemo = glassVolumeDemoEnabled_;
+    if (loadedPrismFixture || loadedGlassVolumeFixture) {
+        lightStressDemoEnabled_ = false;
+        rendererSettings_.localLights.clear();
+    }
     if (loadedPrismFixture) {
         activatePrismDemoPreset(false);
     } else {
@@ -1826,7 +1921,11 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
                 rendererSettings_.skyboxEnabled = true;
             }
             glassCausticsDemoEnabled_ = false;
-            camera_.reset();
+            if (lightStressDemoEnabled_) {
+                activateLightStressPreset(false);
+            } else {
+                camera_.reset();
+            }
         }
     }
 
@@ -1917,7 +2016,95 @@ void Application::resetObjectTransform() {
     modelScale_ = 1.0f;
 }
 
+void Application::rebuildLocalLights() {
+    static constexpr std::array<int, 3> tierCounts{8, 32, 64};
+    static constexpr std::array<glm::vec3, 8> palette{
+        glm::vec3(1.00f, 0.18f, 0.10f),
+        glm::vec3(1.00f, 0.52f, 0.08f),
+        glm::vec3(0.95f, 0.88f, 0.22f),
+        glm::vec3(0.18f, 0.90f, 0.42f),
+        glm::vec3(0.10f, 0.62f, 1.00f),
+        glm::vec3(0.30f, 0.24f, 1.00f),
+        glm::vec3(0.76f, 0.18f, 1.00f),
+        glm::vec3(1.00f, 0.18f, 0.58f)
+    };
+    const int count = tierCounts[static_cast<std::size_t>(
+        std::clamp(localLightTierIndex_, 0, 2)
+    )];
+    const int columns = count == 8 ? 4 : 8;
+    const int rows = count / columns;
+    rendererSettings_.localLights.clear();
+    rendererSettings_.localLights.reserve(static_cast<std::size_t>(count));
+    for (int index = 0; index < count; ++index) {
+        const int column = index % columns;
+        const int row = index / columns;
+        const float x = -3.15f + 6.30f * static_cast<float>(column)
+            / static_cast<float>(std::max(columns - 1, 1));
+        const float z = -3.15f + 6.30f * static_cast<float>(row)
+            / static_cast<float>(std::max(rows - 1, 1));
+        const bool spot = (column + row) % 2 != 0;
+        LocalLight light;
+        light.type = spot ? LocalLightType::Spot : LocalLightType::Point;
+        light.position = glm::vec3(
+            x,
+            spot ? 1.85f : 0.22f + 0.12f * static_cast<float>(index % 3),
+            z
+        );
+        light.radius = spot ? 4.3f : 2.8f;
+        light.color = palette[static_cast<std::size_t>(index) % palette.size()];
+        light.intensity = spot ? 18.0f : 11.0f;
+        light.direction = spot
+            ? glm::normalize(glm::vec3(-x * 0.10f, -1.75f, -z * 0.10f))
+            : glm::vec3(0.0f, -1.0f, 0.0f);
+        light.outerConeCosine = 0.82f;
+        rendererSettings_.localLights.push_back(light);
+    }
+}
+
+void Application::activateLightStressPreset(bool loadFixture) {
+    deactivatePrismDemoPreset();
+    lightStressDemoEnabled_ = true;
+    glassVolumeDemoEnabled_ = false;
+    glassCausticsDemoEnabled_ = false;
+    autoRotate_ = false;
+    showGroundPlane_ = true;
+    showComparisonObject_ = false;
+    modelPosition_ = glm::vec3(0.0f);
+    modelRotationDegrees_ = glm::vec3(0.0f);
+    modelScale_ = 1.0f;
+    groundOffset_ = -0.72f;
+    groundColor_ = glm::vec3(0.10f, 0.115f, 0.14f);
+    rendererSettings_.showGrid = false;
+    rendererSettings_.showAxes = false;
+    rendererSettings_.backgroundColor = glm::vec3(0.0025f, 0.0035f, 0.0060f);
+    rendererSettings_.skyboxEnabled = false;
+    rendererSettings_.pbrEnabled = true;
+    rendererSettings_.iblEnabled = true;
+    rendererSettings_.environmentIntensity = 0.08f;
+    rendererSettings_.ambientStrength = 0.015f;
+    rendererSettings_.diffuseStrength = 1.0f;
+    rendererSettings_.shadowsEnabled = false;
+    rendererSettings_.coloredTransmissionShadowsEnabled = false;
+    rendererSettings_.causticsEnabled = false;
+    rendererSettings_.transmissionEnabled = false;
+    rendererSettings_.toneMapping = true;
+    rendererSettings_.bloom = true;
+    rendererSettings_.exposure = 1.0f;
+    rendererSettings_.bloomThreshold = 0.85f;
+    rendererSettings_.bloomIntensity = 0.10f;
+    rebuildLocalLights();
+    camera_.setOrbitPose(glm::vec3(0.0f, -0.40f, 0.0f), 42.0f, 30.0f, 10.5f, 48.0f);
+    statusMessage_ = "Local light stress: 100 objects, "
+        + std::to_string(rendererSettings_.localLights.size())
+        + " point/spot lights";
+    if (loadFixture) {
+        loadModel(sourceRoot_ / "assets" / "models" / "cube.obj");
+    }
+}
+
 void Application::activateGlassCausticsPreset() {
+    lightStressDemoEnabled_ = false;
+    rendererSettings_.localLights.clear();
     glassCausticsDemoEnabled_ = true;
     volumeGlassPreset_ = VolumeGlassPreset::Crystal;
     if (!loadModel(sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf")) {
@@ -1960,6 +2147,8 @@ void Application::applyVolumeGlassPreset(VolumeGlassPreset preset) {
 }
 
 void Application::activatePrismDemoPreset(bool loadFixture) {
+    lightStressDemoEnabled_ = false;
+    rendererSettings_.localLights.clear();
     if (!prismDemoPreviousState_.has_value()) {
         prismDemoPreviousState_.emplace(PrismDemoPreviousState{
             rendererSettings_,
@@ -2174,6 +2363,17 @@ void Application::writePrismBenchmarkReport() {
     }
     const std::size_t geometryMemoryBytes = loadedVertexCount_ * sizeof(Vertex)
         + loadedTriangleCount_ * 3U * sizeof(std::uint32_t);
+    const double gpuFrameP50 = percentile(benchmarkGpuFrameTimes_, 0.50);
+    const std::size_t opaqueTrafficBytes = renderer_->estimatedOpaqueTrafficBytesPerFrame();
+    const double estimatedOpaqueTrafficGiBPerSecond = gpuFrameP50 > 0.0
+        ? (static_cast<double>(opaqueTrafficBytes) / (1024.0 * 1024.0 * 1024.0))
+            / (gpuFrameP50 / 1000.0)
+        : 0.0;
+    const std::size_t spotLightCount = static_cast<std::size_t>(std::count_if(
+        rendererSettings_.localLights.begin(),
+        rendererSettings_.localLights.end(),
+        [](const LocalLight& light) { return light.type == LocalLightType::Spot; }
+    ));
     report << std::fixed << std::setprecision(6)
            << "{\n"
            << "  \"schemaVersion\": 1,\n"
@@ -2185,12 +2385,18 @@ void Application::writePrismBenchmarkReport() {
            << std::quoted(rendererSettings_.renderPath == RenderPath::Deferred
                 ? "deferred" : "forward") << ",\n"
            << "  \"spectralSamples\": " << rendererSettings_.prismSpectrum.samples.size() << ",\n"
+           << "  \"lightStressScene\": " << (lightStressDemoEnabled_ ? "true" : "false") << ",\n"
+           << "  \"stressInstanceCount\": " << (lightStressDemoEnabled_ ? 100 : 1) << ",\n"
+           << "  \"localLightCount\": " << rendererSettings_.localLights.size() << ",\n"
+           << "  \"pointLightCount\": "
+           << rendererSettings_.localLights.size() - spotLightCount << ",\n"
+           << "  \"spotLightCount\": " << spotLightCount << ",\n"
            << "  \"drawCalls\": " << renderer_->drawCallCount() << ",\n"
            << "  \"cpuOpticsP50Ms\": " << percentile(solveTimes, 0.50) << ",\n"
            << "  \"cpuOpticsP95Ms\": " << percentile(solveTimes, 0.95) << ",\n"
            << "  \"cpuFrameP50Ms\": " << percentile(benchmarkCpuFrameTimes_, 0.50) << ",\n"
            << "  \"cpuFrameP95Ms\": " << percentile(benchmarkCpuFrameTimes_, 0.95) << ",\n"
-           << "  \"gpuFrameP50Ms\": " << percentile(benchmarkGpuFrameTimes_, 0.50) << ",\n"
+           << "  \"gpuFrameP50Ms\": " << gpuFrameP50 << ",\n"
            << "  \"gpuFrameP95Ms\": " << percentile(benchmarkGpuFrameTimes_, 0.95) << ",\n"
            << "  \"gpuBeamP50Ms\": " << percentile(benchmarkBeamGpuTimes_, 0.50) << ",\n"
            << "  \"gpuBeamP95Ms\": " << percentile(benchmarkBeamGpuTimes_, 0.95) << ",\n"
@@ -2212,6 +2418,9 @@ void Application::writePrismBenchmarkReport() {
     }
     report << "  },\n"
            << "  \"renderMemoryBytes\": " << renderer_->estimatedRenderMemoryBytes() << ",\n"
+           << "  \"estimatedOpaqueTrafficBytesPerFrame\": " << opaqueTrafficBytes << ",\n"
+           << "  \"estimatedOpaqueTrafficGiBPerSecondAtGpuP50\": "
+           << estimatedOpaqueTrafficGiBPerSecond << ",\n"
            << "  \"textureMemoryBytes\": " << loadedTextureMemoryBytes_ << ",\n"
            << "  \"geometryMemoryBytes\": " << geometryMemoryBytes << ",\n"
            << "  \"totalMeasuredMemoryBytes\": "

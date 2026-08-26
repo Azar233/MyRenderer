@@ -265,11 +265,16 @@
 | 术语 | 通俗解释 | 在 MyRenderer 中的作用 | 状态 |
 | --- | --- | --- | --- |
 | G-Buffer | Deferred Rendering 用的一组纹理，先记录“这个像素是什么材质、朝哪里、离相机多远”，再统一算光照。 | GP-P1A 使用 Albedo、Encoded Normal、Metallic/Roughness、Depth/Stencil 四个 Attachment，并支持 1×/4× MSAA Resolve。 | 已实现 |
-| Deferred Shading（延迟着色） | 几何阶段先写 G-Buffer，把光照推迟到全屏 Lighting Pass；大量灯光时避免为每个物体重复跑完整材质光照。 | Renderer 可与原 Forward 路径实时切换，并复用 PBR、IBL、Shadow、Transmission Shadow 与 Caustics。 | 已实现（单方向光基线） |
+| Deferred Shading（延迟着色） | 几何阶段先写 G-Buffer，把光照推迟到全屏 Lighting Pass；大量灯光时避免为每个物体重复跑完整材质光照。 | Renderer 可与原 Forward 路径实时切换，并复用 PBR、IBL、Shadow、Caustics 与最多 64 个局部灯。 | 已实现 |
 | MRT（Multiple Render Targets） | 一次片元着色同时写多张 RenderTarget，像一次填写多列表格。 | G-buffer Fragment Shader 一次写 Albedo、Normal 和 Metallic/Roughness，Depth 由固定管线写入。 | 已实现 |
 | Lighting Pass（光照阶段） | 读取屏幕上的材质和深度数据，对每个可见像素统一计算光照。 | 全屏三角形从 Depth 重建世界坐标并计算 Cook-Torrance GGX、Split-Sum IBL 与阴影。 | 已实现 |
 | Hybrid Deferred（混合延迟渲染） | 不透明物使用 Deferred，必须排序或读取背景的透明物仍走 Forward。 | 保留 Glass-4 的 Forward Transparent/Refractive Pass，避免把有序透明错误塞进普通 G-Buffer。 | 已实现 |
 | Render Path（渲染路径） | 从场景数据到最终像素所选择的一套 Pass 流程。 | GUI 的 Opaque render path 可在 Forward 与 Deferred (hybrid) 间即时切换。 | 已实现 |
+| Point Light（点光源） | 从一个位置向四周发光，亮度随距离衰减，类似未考虑灯罩的裸灯泡。 | GP-P1B 使用有限半径平滑截止的逆平方衰减；8/32/64 档中各有一半点光。 | 已实现 |
+| Spot Light（聚光灯） | 只在一个锥形方向内发光，并在内外锥之间平滑变暗。 | 与 Point Light 共用距离衰减，另以 Smoothstep Cone Attenuation 控制边缘。 | 已实现 |
+| Light Stress Test（光源压力测试） | 固定物体、镜头和材质，只增加灯光数量，观察渲染成本如何增长。 | 100 个独立物体配 8/32/64 局部灯，对比 Forward/Deferred GPU P50/P95、Draw Call、显存与流量。 | 已实现 |
+| Light Volume（光体积） | 只在点光/聚光真正能影响的空间范围绘制光照，避免全屏像素遍历无关灯光。 | 当前 Deferred 仍对每个几何像素遍历全部局部灯；Light Volume/Tiled/Clustered 是后续优化。 | 计划 |
+| Attachment Traffic（附件流量） | RenderTarget 每帧因写入、读取和 MSAA Resolve 产生的数据量。 | Benchmark 根据格式和采样数输出下限估算；明确不是驱动硬件带宽 Counter。 | 已实现（估算） |
 | SSAO | 根据屏幕深度和法线近似物体缝隙中的环境遮蔽。 | GP-P1 候选效果。 | 计划 |
 | SSR | 在屏幕深度/颜色中追踪反射，只能反射屏幕已有信息。 | GP-P1 候选效果。 | 计划 |
 | TAA | 融合当前帧与历史帧降低锯齿和闪烁，需要运动信息与稳定策略。 | 对焦散稳定也有价值。 | 计划 |

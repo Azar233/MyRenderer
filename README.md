@@ -20,6 +20,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - 按子网格材质范围绑定材质并提交 Draw Call，同一模型可显示多个材质。
 - GPU 顶点/索引缓冲、深度测试、背面剔除和线框模式。
 - 可实时切换的 Forward / Hybrid Deferred 不透明渲染路径：`GL_RGBA8` Albedo、`GL_RGBA16F` Encoded Normal、`GL_RG8` Metallic/Roughness 与 `GL_DEPTH24_STENCIL8` Depth/Stencil G-Buffer，支持 1×/4× MSAA Resolve、逐附件 Debug View、世界坐标重建与全屏 PBR/IBL Lighting Pass；透明/玻璃继续使用 Forward Refractive Pass。
+- Point Light / Spot Light 局部光照与确定性压力场景：8/32/64 三档灯光、100 个独立物体、平滑有限半径逆平方衰减与聚光锥；GUI/Benchmark 对比 Forward/Deferred 的 GPU P50/P95、Draw Call、显存和估算 Attachment 流量。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
@@ -72,6 +73,7 @@ cmake --build build-mingw --parallel
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
 - View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber / Crystal 四组体积玻璃参数。
 - View / `Glass caustics preset`：加载透明水晶球、白色接收地面与固定高机位，默认启用 Light-space RGB 焦散、彩色透射阴影和空间滤波；可即时切到 Projector / Decal 做美术对照。
+- View / `Local light stress preset`：加载 10×10 立方体固定舞台，并在 Renderer 面板选择 8/32/64 档 Point/Spot 灯光；切换 Forward/Deferred 可查看相同画面下的活动 Pass、Draw Call 与估算 Opaque Attachment 流量。
 - 渲染视口：鼠标右键拖动旋转相机，中键拖动平移，滚轮缩放；工具栏或 File 菜单可将当前解析后画面保存为 PNG。
 - `Esc`：退出程序。
 
@@ -161,6 +163,15 @@ cmake --build build-release --target deferred-benchmark
 ```
 
 视觉回归覆盖 6 张 1920×1080 固定镜头图片；Forward/Deferred 最终图 MAE 为 0.000517。RTX 4060 Laptop 的 4× MSAA 基线上，Forward / Deferred GPU Frame P50 分别为 1.435 / 1.860 ms，RenderTarget 估算分别为 291.2 / 469.1 MiB。当前单光源基线不宣称 Deferred 更快，多光源扩展性将在下一阶段验证。实现、GUI 调试和限制见 `docs/deferred-shading.md`。
+
+GP-P1B 多光源压力场景可重复执行：
+
+```powershell
+cmake --build build-release --target local-lights-visual-regression
+cmake --build build-release --target local-lights-benchmark
+```
+
+Benchmark 覆盖 Forward/Deferred × 8/32/64 灯。RTX 4060 Laptop 的 64 灯 GPU Frame P50 为 Forward 3.773 ms、Deferred 2.183 ms；Deferred 约快 1.73×，同时 RenderTarget 显存由 291.2 MiB 增至 469.1 MiB。画质、带宽估算边界与完整曲线见 `docs/local-light-stress.md`。
 
 `gpu-smoke` 目标会运行材质场景以及“成功场景后加载错误资产”的恢复测试，确保 GPU 路径使用真实上下文且失败导入保留当前场景：
 

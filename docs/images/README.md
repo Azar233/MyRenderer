@@ -66,3 +66,7 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
 - `gp_p1_gbuffer_albedo.png`, `gp_p1_gbuffer_normal.png`,
   `gp_p1_gbuffer_material.png`, and `gp_p1_gbuffer_depth.png`: raw MRT
   attachment views with skybox, overlays, transparency, and post FX bypassed.
+- `gp_p1b_forward_lights8.png` / `gp_p1b_deferred_lights8.png`: identical
+  100-object stage with four point and four spot lights at the low tier.
+- `gp_p1b_forward_lights64.png` / `gp_p1b_deferred_lights64.png`: high-tier
+  Forward/Deferred parity and scalability evidence with 32 point + 32 spot lights.

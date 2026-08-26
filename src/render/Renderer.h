@@ -9,6 +9,7 @@
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 #include "optics/PrismOptics.h"
 
@@ -60,6 +61,21 @@ enum class GBufferDebugView {
     Depth = 4
 };
 
+enum class LocalLightType {
+    Point = 0,
+    Spot = 1
+};
+
+struct LocalLight {
+    glm::vec3 position{0.0f};
+    float radius{3.0f};
+    glm::vec3 color{1.0f};
+    float intensity{8.0f};
+    glm::vec3 direction{0.0f, -1.0f, 0.0f};
+    float outerConeCosine{0.82f};
+    LocalLightType type{LocalLightType::Point};
+};
+
 struct GpuPassTiming {
     std::string name;
     double milliseconds{0.0};
@@ -78,6 +94,7 @@ struct RendererSettings {
     int msaaSamples{4};
     RenderPath renderPath{RenderPath::Forward};
     GBufferDebugView gBufferDebugView{GBufferDebugView::Final};
+    std::vector<LocalLight> localLights;
     bool wireframe{false};
     bool cullBackFaces{false};
     bool normalMapping{true};
@@ -182,6 +199,7 @@ public:
     int renderWidth() const;
     int renderHeight() const;
     std::size_t estimatedRenderMemoryBytes() const;
+    std::size_t estimatedOpaqueTrafficBytesPerFrame() const;
     TextureCache& textureCache();
 
 private:
@@ -235,4 +253,5 @@ private:
     bool hasCausticsGpuTime_{false};
     std::vector<std::string> activePassNames_;
     std::vector<GpuPassTiming> gpuPassTimings_;
+    RenderPath activeRenderPath_{RenderPath::Forward};
 };

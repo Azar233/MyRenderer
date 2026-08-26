@@ -16,6 +16,11 @@ uniform mat4 uInverseViewProjection;
 uniform mat4 uLightViewProjection;
 uniform vec3 uCameraPosition;
 uniform vec3 uLightDirection;
+const int MAX_LOCAL_LIGHTS = 64;
+uniform int uLocalLightCount;
+uniform vec4 uLocalLightPositionRadius[MAX_LOCAL_LIGHTS];
+uniform vec4 uLocalLightColorIntensity[MAX_LOCAL_LIGHTS];
+uniform vec4 uLocalLightDirectionOuter[MAX_LOCAL_LIGHTS];
 uniform float uAmbientStrength;
 uniform float uDiffuseStrength;
 uniform float uSpecularStrength;
@@ -55,6 +60,28 @@ float geometrySchlickGGX(float nDotV, float roughness) {
 
 vec3 fresnelSchlick(float cosine, vec3 f0) {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
+}
+
+vec3 localLightRadiance(int index, vec3 worldPosition, out vec3 lightDirection) {
+    vec4 positionRadius = uLocalLightPositionRadius[index];
+    vec3 toLight = positionRadius.xyz - worldPosition;
+    float distanceToLight = length(toLight);
+    lightDirection = toLight / max(distanceToLight, 0.0001);
+    float radius = max(abs(positionRadius.w), 0.001);
+    float distanceRatio = distanceToLight / radius;
+    float smoothRange = clamp(1.0 - pow(distanceRatio, 4.0), 0.0, 1.0);
+    float attenuation = smoothRange * smoothRange
+        / max(1.0 + distanceToLight * distanceToLight, 0.0001);
+
+    if (positionRadius.w < 0.0) {
+        vec4 directionOuter = uLocalLightDirectionOuter[index];
+        vec3 fromLight = normalize(worldPosition - positionRadius.xyz);
+        float coneCosine = dot(fromLight, normalize(directionOuter.xyz));
+        float innerCosine = min(directionOuter.w + 0.10, 0.999);
+        attenuation *= smoothstep(directionOuter.w, innerCosine, coneCosine);
+    }
+    vec4 colorIntensity = uLocalLightColorIntensity[index];
+    return colorIntensity.rgb * colorIntensity.w * attenuation;
 }
 
 vec3 projectedCoordinates(vec3 worldPosition) {
@@ -133,9 +160,23 @@ void main() {
         float diffuse = nDotL * uDiffuseStrength;
         float specular = pow(max(dot(normal, halfDirection), 0.0), uShininess)
             * uSpecularStrength;
+        vec3 localLighting = vec3(0.0);
+        for (int index = 0; index < uLocalLightCount; ++index) {
+            vec3 localDirection;
+            vec3 radiance = localLightRadiance(index, worldPosition, localDirection);
+            float localNDotL = max(dot(normal, localDirection), 0.0);
+            vec3 localHalf = normalize(localDirection + viewDirection);
+            float localSpecular = localNDotL > 0.0
+                ? pow(max(dot(normal, localHalf), 0.0), uShininess)
+                    * uSpecularStrength
+                : 0.0;
+            localLighting += radiance * (
+                albedo * localNDotL * uDiffuseStrength + localSpecular
+            );
+        }
         fragmentColor = vec4(
             albedo * (uAmbientStrength + visibility * diffuse)
-                + visibility * vec3(specular) + caustics * albedo,
+                + visibility * vec3(specular) + caustics * albedo + localLighting,
             1.0
         );
         return;
@@ -151,6 +192,27 @@ void main() {
     vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
     vec3 direct = (diffuseWeight * albedo / PI + specular)
         * nDotL * uDiffuseStrength;
+    vec3 localDirect = vec3(0.0);
+    for (int index = 0; index < uLocalLightCount; ++index) {
+        vec3 localDirection;
+        vec3 radiance = localLightRadiance(index, worldPosition, localDirection);
+        float localNDotL = max(dot(normal, localDirection), 0.0);
+        if (localNDotL <= 0.0) continue;
+        vec3 localHalf = normalize(viewDirection + localDirection);
+        vec3 localFresnel = fresnelSchlick(
+            max(dot(localHalf, viewDirection), 0.0),
+            f0
+        );
+        float localDistribution = distributionGGX(normal, localHalf, roughness);
+        float localGeometry = geometrySchlickGGX(nDotV, roughness)
+            * geometrySchlickGGX(localNDotL, roughness);
+        vec3 localSpecular = localDistribution * localGeometry * localFresnel
+            / max(4.0 * nDotV * localNDotL, 0.0001);
+        vec3 localDiffuseWeight = (vec3(1.0) - localFresnel) * (1.0 - metallic);
+        localDirect += radiance * (
+            localDiffuseWeight * albedo / PI + localSpecular
+        ) * localNDotL * uDiffuseStrength;
+    }
 
     vec3 ambient = albedo * uAmbientStrength;
     if (uIblEnabled) {
@@ -168,5 +230,8 @@ void main() {
         ambient = ((vec3(1.0) - iblFresnel) * (1.0 - metallic) * diffuseIbl
             + specularIbl) * uEnvironmentIntensity;
     }
-    fragmentColor = vec4(ambient + visibility * direct + caustics * albedo, 1.0);
+    fragmentColor = vec4(
+        ambient + visibility * direct + localDirect + caustics * albedo,
+        1.0
+    );
 }
