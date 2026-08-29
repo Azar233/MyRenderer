@@ -385,6 +385,29 @@ if(BUILD_TESTING)
         COMMENT "Benchmarking Forward/Deferred with 8, 32, and 64 local lights"
     )
 
+    add_custom_target(instance-stress-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/instance-stress-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/InstanceStressVisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing and comparing the GP-P1C instance/culling/LOD scene"
+    )
+
+    add_custom_target(instance-stress-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/instance-stress-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/InstanceStressBenchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Benchmarking GP-P1C baseline, instancing, culling, and LOD stages"
+    )
+
     find_program(MYRENDERER_NSYS_EXECUTABLE
         NAMES nsys nsys.exe
         HINTS
@@ -454,6 +477,16 @@ add_custom_target(gpu-smoke
             MYRENDERER_LOCAL_LIGHT_TIER=2
             $<TARGET_FILE:MyRenderer>
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/cube.obj
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_RENDER_PATH=0
+            MYRENDERER_INSTANCE_STRESS=1
+            MYRENDERER_INSTANCE_OPTIMIZATION=1
+            MYRENDERER_FRUSTUM_CULLING=1
+            MYRENDERER_LOD=1
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/sphere.obj
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=4

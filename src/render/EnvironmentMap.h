@@ -35,5 +35,6 @@ private:
     unsigned int brdfLutTexture_{0};
     unsigned int vertexArray_{0};
     int maximumMipLevel_{0};
-    int faceSize_{64};
+    int radianceFaceSize_{512};
+    int prefilteredFaceSize_{64};
 };

@@ -37,6 +37,8 @@ GpuModel::GpuModel(
     : whiteTexture_(textureCache.whiteTexture()),
       flatNormalTexture_(textureCache.flatNormalTexture()),
       linearWhiteTexture_(textureCache.linearWhiteTexture()) {
+    boundsCenter_ = 0.5f * (data.boundsMin + data.boundsMax);
+    boundsRadius_ = glm::length(0.5f * (data.boundsMax - data.boundsMin));
     textures_.reserve(data.textures.size());
     textureFallbacks_.reserve(data.textures.size());
     for (const auto& textureData : data.textures) {
@@ -224,12 +226,41 @@ void GpuModel::applyCullState(const GpuMaterial* material, bool cullBackFaces) c
 }
 
 void GpuModel::drawOpaque(const Shader& shader, const glm::vec3& tint, bool cullBackFaces) const {
+    shader.setBool("uInstanced", false);
     const glm::vec3 linearTint = srgbToLinear(tint);
     for (const DrawCommand& command : opaqueDrawCommands_) {
         const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
         applyCullState(material, cullBackFaces);
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
+}
+
+void GpuModel::drawOpaqueInstanced(
+    const Shader& shader,
+    const glm::vec3& tint,
+    const std::vector<glm::mat4>& modelMatrices,
+    std::size_t lodLevel,
+    bool cullBackFaces
+) const {
+    if (modelMatrices.empty()) return;
+    shader.setBool("uInstanced", true);
+    const glm::vec3 linearTint = srgbToLinear(tint);
+    for (const DrawCommand& command : opaqueDrawCommands_) {
+        const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
+        applyCullState(material, cullBackFaces);
+        meshes_[command.meshIndex]->drawSubmeshInstanced(
+            command.submeshIndex,
+            lodLevel,
+            modelMatrices
+        );
+    }
+    shader.setBool("uInstanced", false);
+}
+
+std::size_t GpuModel::lodTriangleCount(std::size_t lodLevel) const {
+    std::size_t count = 0U;
+    for (const auto& mesh : meshes_) count += mesh->lodTriangleCount(lodLevel);
+    return count;
 }
 
 void GpuModel::drawTransparentSubmesh(

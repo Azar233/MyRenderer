@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include <glm/mat4x4.hpp>
+
 #include "asset/ModelData.h"
 
 class Mesh;
@@ -31,6 +33,13 @@ public:
     GpuModel& operator=(const GpuModel&) = delete;
 
     void drawOpaque(const Shader& shader, const glm::vec3& tint, bool cullBackFaces) const;
+    void drawOpaqueInstanced(
+        const Shader& shader,
+        const glm::vec3& tint,
+        const std::vector<glm::mat4>& modelMatrices,
+        std::size_t lodLevel,
+        bool cullBackFaces
+    ) const;
     void drawTransparentSubmesh(
         const Shader& shader,
         const glm::vec3& tint,
@@ -46,6 +55,9 @@ public:
     std::size_t submeshCount() const { return submeshCount_; }
     std::size_t vertexCount() const { return vertexCount_; }
     std::size_t triangleCount() const { return triangleCount_; }
+    std::size_t lodTriangleCount(std::size_t lodLevel) const;
+    const glm::vec3& boundsCenter() const { return boundsCenter_; }
+    float boundsRadius() const { return boundsRadius_; }
     std::size_t materialCount() const { return materials_.size(); }
     std::size_t textureCount() const { return textures_.size(); }
     std::size_t opaqueSubmeshCount() const { return opaqueDrawCommands_.size(); }
@@ -109,4 +121,6 @@ private:
     std::size_t loadedTextureCount_{0};
     std::size_t fallbackTextureCount_{0};
     std::size_t textureMemoryBytes_{0};
+    glm::vec3 boundsCenter_{0.0f};
+    float boundsRadius_{0.0f};
 };

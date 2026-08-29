@@ -1,8 +1,8 @@
 # Versioned visual baselines
 
-This directory stores selected, intentionally reviewed renderer outputs used by
-the portfolio roadmap. They are not byte-exact golden images yet; the future
-visual-regression harness will define GPU-tolerant comparison thresholds.
+This directory stores intentionally reviewed renderer outputs used by the
+portfolio roadmap. Visual-regression targets compare fresh captures with
+GPU-tolerant MAE and changed-pixel thresholds rather than byte equality.
 
 - `prism0_baseline.png`: Prism-0 fixed camera, black stage, original closed
   triangular prism, and the white incident-beam placeholder before optical
@@ -70,3 +70,5 @@ visual-regression harness will define GPU-tolerant comparison thresholds.
   100-object stage with four point and four spot lights at the low tier.
 - `gp_p1b_forward_lights64.png` / `gp_p1b_deferred_lights64.png`: high-tier
   Forward/Deferred parity and scalability evidence with 32 point + 32 spot lights.
+- `gp_p1c_baseline.png` / `gp_p1c_optimized.png`: fixed 2,500-sphere scene
+  before and after GPU Instancing, CPU Frustum Culling, and projected-size LOD.

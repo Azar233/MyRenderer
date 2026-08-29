@@ -1,12 +1,15 @@
 #include "render/Renderer.h"
 
 #include <algorithm>
+#include <chrono>
+#include <iterator>
 
 #include <glad/gl.h>
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/vec4.hpp>
+#include <glm/vector_relational.hpp>
 
 #include "render/Camera.h"
 #include "render/CausticsMap.h"
@@ -23,6 +26,21 @@
 #include "render/ShadowMap.h"
 #include "render/SpectralBeamRenderer.h"
 #include "render/Texture2D.h"
+
+namespace {
+
+struct InstanceBatch {
+    const GpuModel* model{nullptr};
+    glm::vec3 tint{1.0f};
+    std::size_t lodLevel{0U};
+    std::vector<glm::mat4> modelMatrices;
+};
+
+bool sameTint(const glm::vec3& left, const glm::vec3& right) {
+    return glm::all(glm::equal(left, right));
+}
+
+} // namespace
 
 Renderer::Renderer(
     const std::filesystem::path& vertexShaderPath,
@@ -227,6 +245,63 @@ void Renderer::render(
     const glm::mat4 projection = camera.projectionMatrix(
         static_cast<float>(width) / static_cast<float>(height)
     );
+    submittedInstanceCount_ = 0U;
+    visibleInstanceCount_ = 0U;
+    culledInstanceCount_ = 0U;
+    lodInstanceCounts_.fill(0U);
+    renderedInstanceTriangleCount_ = 0U;
+    std::vector<InstanceBatch> instanceBatches;
+    const auto instancePreparationStart = std::chrono::steady_clock::now();
+    const ViewFrustum viewFrustum = extractViewFrustum(projection * view);
+    for (const RenderItem& item : renderItems) {
+        if (!item.visible || item.model == nullptr || !item.instanceCandidate) continue;
+        ++submittedInstanceCount_;
+        std::size_t lodLevel = 0U;
+        if (settings.instanceOptimizationEnabled) {
+            const BoundingSphere worldBounds = transformBoundingSphere(
+                BoundingSphere{item.model->boundsCenter(), item.model->boundsRadius()},
+                item.modelMatrix
+            );
+            if (settings.frustumCullingEnabled
+                && !intersectsViewFrustum(viewFrustum, worldBounds)) {
+                ++culledInstanceCount_;
+                continue;
+            }
+            if (settings.lodSelectionEnabled) {
+                const float projectedRadius = projectedSphereRadiusPixels(
+                    worldBounds,
+                    camera.position(),
+                    glm::radians(camera.fieldOfView()),
+                    height
+                );
+                lodLevel = selectLodLevel(
+                    projectedRadius,
+                    settings.lodMediumThresholdPixels,
+                    settings.lodHighThresholdPixels
+                );
+            }
+            auto batch = std::find_if(
+                instanceBatches.begin(),
+                instanceBatches.end(),
+                [&](const InstanceBatch& candidate) {
+                    return candidate.model == item.model
+                        && candidate.lodLevel == lodLevel
+                        && sameTint(candidate.tint, item.tint);
+                }
+            );
+            if (batch == instanceBatches.end()) {
+                instanceBatches.push_back(InstanceBatch{item.model, item.tint, lodLevel, {}});
+                batch = std::prev(instanceBatches.end());
+            }
+            batch->modelMatrices.push_back(item.modelMatrix);
+        }
+        ++visibleInstanceCount_;
+        ++lodInstanceCounts_[lodLevel];
+        renderedInstanceTriangleCount_ += item.model->lodTriangleCount(lodLevel);
+    }
+    instancePreparationMilliseconds_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - instancePreparationStart
+    ).count();
     glm::vec3 lightDirection = settings.lightDirection;
     if (glm::dot(lightDirection, lightDirection) < 1e-8f) {
         lightDirection = glm::vec3(-0.45f, -0.8f, -0.35f);
@@ -608,9 +683,20 @@ void Renderer::render(
                 if (!item.visible || item.model == nullptr) {
                     continue;
                 }
+                if (settings.instanceOptimizationEnabled && item.instanceCandidate) continue;
                 shader_->setMat4("uModel", item.modelMatrix);
                 item.model->drawOpaque(*shader_, item.tint, settings.cullBackFaces);
                 drawCallCount_ += item.model->opaqueSubmeshCount();
+            }
+            for (const InstanceBatch& batch : instanceBatches) {
+                batch.model->drawOpaqueInstanced(
+                    *shader_,
+                    batch.tint,
+                    batch.modelMatrices,
+                    batch.lodLevel,
+                    settings.cullBackFaces
+                );
+                drawCallCount_ += batch.model->opaqueSubmeshCount();
             }
         }
 
@@ -642,9 +728,20 @@ void Renderer::render(
             gBufferShader_->setBool("uNormalMappingEnabled", settings.normalMapping);
             for (const RenderItem& item : renderItems) {
                 if (!item.visible || item.model == nullptr) continue;
+                if (settings.instanceOptimizationEnabled && item.instanceCandidate) continue;
                 gBufferShader_->setMat4("uModel", item.modelMatrix);
                 item.model->drawOpaque(*gBufferShader_, item.tint, settings.cullBackFaces);
                 drawCallCount_ += item.model->opaqueSubmeshCount();
+            }
+            for (const InstanceBatch& batch : instanceBatches) {
+                batch.model->drawOpaqueInstanced(
+                    *gBufferShader_,
+                    batch.tint,
+                    batch.modelMatrices,
+                    batch.lodLevel,
+                    settings.cullBackFaces
+                );
+                drawCallCount_ += batch.model->opaqueSubmeshCount();
             }
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             glDisable(GL_CULL_FACE);

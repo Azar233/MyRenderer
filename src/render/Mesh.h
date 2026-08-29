@@ -1,9 +1,11 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <vector>
 
+#include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
 #include "asset/ModelData.h"
@@ -20,18 +22,27 @@ public:
 
     void draw(const MaterialBinder& bindMaterial) const;
     void drawSubmesh(std::size_t index) const;
+    void drawSubmeshInstanced(
+        std::size_t index,
+        std::size_t lodLevel,
+        const std::vector<glm::mat4>& modelMatrices
+    ) const;
     std::int32_t submeshMaterialIndex(std::size_t index) const;
     const glm::vec3& submeshCenter(std::size_t index) const;
     std::size_t vertexCount() const { return vertexCount_; }
     std::size_t triangleCount() const { return indexCount_ / 3; }
+    std::size_t lodTriangleCount(std::size_t lodLevel) const;
     std::size_t submeshCount() const { return submeshes_.size(); }
 
 private:
     unsigned int vao_{0};
     unsigned int vbo_{0};
-    unsigned int ebo_{0};
+    unsigned int instanceVbo_{0};
+    std::array<unsigned int, 3> lodEbos_{};
     std::size_t vertexCount_{0};
     std::size_t indexCount_{0};
     std::vector<SubmeshData> submeshes_;
+    std::array<std::vector<SubmeshData>, 3> lodSubmeshes_;
+    std::array<std::size_t, 3> lodTriangleCounts_{};
     std::vector<glm::vec3> submeshCenters_;
 };

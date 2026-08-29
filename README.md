@@ -21,6 +21,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - GPU 顶点/索引缓冲、深度测试、背面剔除和线框模式。
 - 可实时切换的 Forward / Hybrid Deferred 不透明渲染路径：`GL_RGBA8` Albedo、`GL_RGBA16F` Encoded Normal、`GL_RG8` Metallic/Roughness 与 `GL_DEPTH24_STENCIL8` Depth/Stencil G-Buffer，支持 1×/4× MSAA Resolve、逐附件 Debug View、世界坐标重建与全屏 PBR/IBL Lighting Pass；透明/玻璃继续使用 Forward Refractive Pass。
 - Point Light / Spot Light 局部光照与确定性压力场景：8/32/64 三档灯光、100 个独立物体、平滑有限半径逆平方衰减与聚光锥；GUI/Benchmark 对比 Forward/Deferred 的 GPU P50/P95、Draw Call、显存和估算 Attachment 流量。
+- GPU Instancing、CPU Frustum Culling 与屏幕尺寸 LOD：2,500 个共享 Sphere Mesh 的固定场景按模型/Tint/LOD 合批，六平面包围球剔除并切换三档聚类索引；1080p/4×MSAA 实测 Draw Call 2,501→19、CPU P50 5.386→2.077 ms、GPU P50 1.465→0.653 ms。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
@@ -85,9 +86,9 @@ ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRe
 
 所有格式最终转换为相同的 `ModelData`、子网格、材质和纹理来源数据。渲染层统一解码并缓存外部或内嵌图像，基础色 Shader 将材质因子、可调 Tint 和基础色贴图相乘；没有贴图的材质使用白色纹理，无法解码或缺失的基础色贴图使用洋红棋盘并在状态区报告原因。基础色纹理使用 sRGB 内部格式，法线贴图保持线性数据；光照在线性空间完成，最终颜色仅进行一次 sRGB 编码。
 
-OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道），并支持基础 Alpha Mode、双面材质、`KHR_materials_transmission`、`KHR_materials_ior`、`KHR_materials_volume` 和 `KHR_materials_dispersion`。Alpha Blending 只做颜色覆盖率合成；Glass-1～2B 已完成透射、几何厚度、Beer-Lambert 吸收与色散。Glass-2C 按 `RenderItem` 重建 R32F 入口/出口深度、RGBA16F 出射法线和 R32UI 对象 ID，沿内部折射方向追踪真实退出点，再执行玻璃→空气的第二次 Snell 折射；无有效退出点时继续使用稳定的局部平行表面回退。对象级缓存解决独立玻璃实例互相串层，但同一 `RenderItem` 内的嵌套/凹形多壳体仍属于屏幕空间近似。环境光来自原创 Radiance HDRI，并预计算标准 Split-Sum IBL。骨骼动画和 FBX 尚未启用。
+OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道），并支持基础 Alpha Mode、双面材质、`KHR_materials_transmission`、`KHR_materials_ior`、`KHR_materials_volume` 和 `KHR_materials_dispersion`。Alpha Blending 只做颜色覆盖率合成；Glass-1～2B 已完成透射、几何厚度、Beer-Lambert 吸收与色散。Glass-2C 按 `RenderItem` 重建 R32F 入口/出口深度、RGBA16F 出射法线和 R32UI 对象 ID，沿内部折射方向追踪真实退出点，再执行玻璃→空气的第二次 Snell 折射；无有效退出点时继续使用稳定的局部平行表面回退。对象级缓存解决独立玻璃实例互相串层，但同一 `RenderItem` 内的嵌套/凹形多壳体仍属于屏幕空间近似。环境光来自 Poly Haven 的 CC0 Radiance HDRI，并预计算标准 Split-Sum IBL。骨骼动画和 FBX 尚未启用。
 
-固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）、`glass_volume_sphere.gltf`（1,986 顶点闭合流形球体）和 `prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）。`glass_studio.hdr` 是项目生成的原创高动态范围 Studio 环境。
+固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）、`glass_volume_sphere.gltf`（1,986 顶点闭合流形球体）和 `prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）。默认环境为 Poly Haven 的 2K `Delta 2` CC0 HDRI，来源和许可记录见 `assets/environments/README.md`。
 
 ## 自动测试
 
@@ -173,6 +174,15 @@ cmake --build build-release --target local-lights-benchmark
 
 Benchmark 覆盖 Forward/Deferred × 8/32/64 灯。RTX 4060 Laptop 的 64 灯 GPU Frame P50 为 Forward 3.773 ms、Deferred 2.183 ms；Deferred 约快 1.73×，同时 RenderTarget 显存由 291.2 MiB 增至 469.1 MiB。画质、带宽估算边界与完整曲线见 `docs/local-light-stress.md`。
 
+GP-P1C 实例提交、CPU 视锥剔除与 LOD 可重复执行：
+
+```powershell
+cmake --build build-release --target instance-stress-visual-regression
+cmake --build build-release --target instance-stress-benchmark
+```
+
+Benchmark 分别记录 2,500 个 Sphere 的逐对象基线、Instancing、Instancing+Culling 和完整 LOD 四个阶段。RTX 4060 Laptop 的完整路径将 Draw Call 从 2,501 降至 19、CPU Frame P50 从 5.386 ms 降至 2.077 ms、GPU Frame P50 从 1.465 ms 降至 0.653 ms；算法、固定截图、三角形代价和边界见 `docs/instance-culling-lod.md`。
+
 `gpu-smoke` 目标会运行材质场景以及“成功场景后加载错误资产”的恢复测试，确保 GPU 路径使用真实上下文且失败导入保留当前场景：
 
 ```powershell
@@ -206,12 +216,13 @@ src/render/DebugGrid.*   世界网格、XYZ 轴线与 Debug Line GPU 绘制
 src/render/EnvironmentMap.* HDR equirectangular 导入、Split-Sum IBL 预计算、程序化回退与天空盒
 src/render/GBuffer.*     Deferred MRT、1x/4x MSAA Resolve、Attachment 绑定与显存估算
 src/render/GpuModel.*    一个模型所拥有的 GPU Mesh 集合与统计
-src/render/Mesh.*        VAO/VBO/EBO、顶点布局与子网格 Draw Call
+src/render/Mesh.*        VAO/VBO、多档 EBO、实例矩阵 Buffer 与 Instanced Draw
 src/render/OpenGlDebug.* Debug 构建的 OpenGL 驱动诊断
 src/render/OpticalPathDebugRenderer.* 世界空间光路、交点、法线、TIR 与能量调试层
 src/render/PostProcessor.* HDR Bloom、ACES Tone Mapping 与最终 sRGB 输出
 src/render/RenderTarget.*Opaque/HDR/MSAA 场景、可采样深度与最终 LDR 离屏 Framebuffer
 src/render/Renderer.*    渲染状态、轻量 Pass 编排、相机参数与离屏绘制
+src/render/SceneDrawList.* 透明排序、视锥平面、包围球与屏幕尺寸 LOD 决策
 src/render/ShadowMap.*   方向光深度贴图
 src/render/Shader.*      GLSL 编译、链接与 uniform
 src/render/Texture2D.*   GPU 纹理 RAII、图像解码、缓存和回退纹理

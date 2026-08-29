@@ -183,7 +183,7 @@ EnvironmentMap::EnvironmentMap(
 ) : shader_(std::make_unique<Shader>(vertexShaderPath, fragmentShaderPath)) {
     EquirectangularHdr source;
     const std::filesystem::path hdriPath = vertexShaderPath.parent_path().parent_path()
-        / "assets" / "environments" / "glass_studio.hdr";
+        / "assets" / "environments" / "delta_2_2k.hdr";
     int components = 0;
     float* loadedPixels = stbi_loadf(
         hdriPath.string().c_str(),
@@ -219,8 +219,8 @@ EnvironmentMap::EnvironmentMap(
     const auto radiance = [&source](const glm::vec3& direction) {
         return sampleEquirectangular(source, direction);
     };
-    const int size = faceSize_;
-    maximumMipLevel_ = static_cast<int>(std::log2(size));
+    const int size = radianceFaceSize_;
+    maximumMipLevel_ = static_cast<int>(std::log2(prefilteredFaceSize_));
     glGenTextures(1, &texture_);
     glBindTexture(GL_TEXTURE_CUBE_MAP, texture_);
     std::vector<float> pixels(static_cast<std::size_t>(size * size * 3));
@@ -304,7 +304,7 @@ EnvironmentMap::EnvironmentMap(
     glGenTextures(1, &prefilteredTexture_);
     glBindTexture(GL_TEXTURE_CUBE_MAP, prefilteredTexture_);
     for (int mip = 0; mip <= maximumMipLevel_; ++mip) {
-        const int mipSize = std::max(size >> mip, 1);
+        const int mipSize = std::max(prefilteredFaceSize_ >> mip, 1);
         const float roughness = maximumMipLevel_ > 0
             ? static_cast<float>(mip) / static_cast<float>(maximumMipLevel_)
             : 0.0f;
@@ -395,16 +395,27 @@ EnvironmentMap::EnvironmentMap(
 }
 
 std::size_t EnvironmentMap::estimatedBytes() const {
-    std::size_t pixels = 0U;
-    int size = faceSize_;
-    for (int level = 0; level <= maximumMipLevel_; ++level) {
-        pixels += static_cast<std::size_t>(size) * static_cast<std::size_t>(size) * 6U;
-        size = std::max(size / 2, 1);
-    }
-    const std::size_t baseAndPrefiltered = pixels * 6U * 2U;
+    const auto cubemapTexels = [](int baseSize, int maximumMipLevel) {
+        std::size_t pixels = 0U;
+        int size = baseSize;
+        for (int level = 0; level <= maximumMipLevel; ++level) {
+            pixels += static_cast<std::size_t>(size) * static_cast<std::size_t>(size) * 6U;
+            size = std::max(size / 2, 1);
+        }
+        return pixels;
+    };
+    const int radianceMaximumMipLevel = static_cast<int>(std::log2(radianceFaceSize_));
+    const std::size_t radiance = cubemapTexels(
+        radianceFaceSize_,
+        radianceMaximumMipLevel
+    ) * 6U;
+    const std::size_t prefiltered = cubemapTexels(
+        prefilteredFaceSize_,
+        maximumMipLevel_
+    ) * 6U;
     const std::size_t irradiance = 16U * 16U * 6U * 6U;
     const std::size_t brdf = 64U * 64U * 4U;
-    return baseAndPrefiltered + irradiance + brdf;
+    return radiance + prefiltered + irradiance + brdf;
 }
 
 EnvironmentMap::~EnvironmentMap() {

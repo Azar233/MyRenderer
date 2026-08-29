@@ -146,6 +146,11 @@ struct RendererSettings {
     glm::vec3 prismBeamWhitePoint{1.0f};
     float indexOfRefractionOverride{0.0f};
     bool showPrismOpticalPathDebug{false};
+    bool instanceOptimizationEnabled{false};
+    bool frustumCullingEnabled{true};
+    bool lodSelectionEnabled{true};
+    float lodMediumThresholdPixels{12.0f};
+    float lodHighThresholdPixels{32.0f};
 };
 
 struct RenderItem {
@@ -154,6 +159,7 @@ struct RenderItem {
     glm::vec3 tint{1.0f};
     bool visible{true};
     bool castsShadow{true};
+    bool instanceCandidate{false};
 };
 
 class Renderer {
@@ -193,6 +199,12 @@ public:
     double latestCausticsMeasurementMilliseconds() const { return latestCausticsMeasurementMilliseconds_; }
     std::size_t causticsMeasurementSerial() const { return causticsMeasurementSerial_; }
     std::size_t drawCallCount() const { return drawCallCount_; }
+    std::size_t submittedInstanceCount() const { return submittedInstanceCount_; }
+    std::size_t visibleInstanceCount() const { return visibleInstanceCount_; }
+    std::size_t culledInstanceCount() const { return culledInstanceCount_; }
+    const std::array<std::size_t, 3>& lodInstanceCounts() const { return lodInstanceCounts_; }
+    std::size_t renderedInstanceTriangleCount() const { return renderedInstanceTriangleCount_; }
+    double instancePreparationMilliseconds() const { return instancePreparationMilliseconds_; }
     const std::vector<std::string>& activePassNames() const { return activePassNames_; }
     const std::vector<GpuPassTiming>& gpuPassTimings() const { return gpuPassTimings_; }
     int shadowResolution() const;
@@ -248,6 +260,12 @@ private:
     std::size_t prismBeamMeasurementSerial_{0};
     std::size_t causticsMeasurementSerial_{0};
     std::size_t drawCallCount_{0};
+    std::size_t submittedInstanceCount_{0};
+    std::size_t visibleInstanceCount_{0};
+    std::size_t culledInstanceCount_{0};
+    std::array<std::size_t, 3> lodInstanceCounts_{};
+    std::size_t renderedInstanceTriangleCount_{0};
+    double instancePreparationMilliseconds_{0.0};
     bool hasGpuFrameTime_{false};
     bool hasPrismBeamGpuTime_{false};
     bool hasCausticsGpuTime_{false};

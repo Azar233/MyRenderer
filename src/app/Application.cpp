@@ -303,6 +303,20 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_LIGHT_STRESS")) {
         lightStressDemoEnabled_ = std::atoi(value) != 0;
     }
+    if (const char* value = std::getenv("MYRENDERER_INSTANCE_STRESS")) {
+        instanceStressDemoEnabled_ = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_INSTANCE_OPTIMIZATION")) {
+        rendererSettings_.instanceOptimizationEnabled = std::atoi(value) != 0;
+    } else if (instanceStressDemoEnabled_) {
+        rendererSettings_.instanceOptimizationEnabled = true;
+    }
+    if (const char* value = std::getenv("MYRENDERER_FRUSTUM_CULLING")) {
+        rendererSettings_.frustumCullingEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_LOD")) {
+        rendererSettings_.lodSelectionEnabled = std::atoi(value) != 0;
+    }
     if (const char* value = std::getenv("MYRENDERER_LOCAL_LIGHT_TIER")) {
         localLightTierIndex_ = std::clamp(std::atoi(value), 0, 2);
     }
@@ -312,6 +326,8 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (prismReelMode_) prismDemoEnabled_ = true;
     if (prismDemoEnabled_) {
         activatePrismDemoPreset(false);
+    } else if (instanceStressDemoEnabled_ && !glassCausticsDemoEnabled_) {
+        activateInstanceStressPreset(false);
     } else if (lightStressDemoEnabled_ && !glassCausticsDemoEnabled_) {
         activateLightStressPreset(false);
     }
@@ -322,7 +338,9 @@ int Application::run(const std::filesystem::path& initialModel) {
             ? sourceRoot_ / "assets" / "models" / "prism_spectrum.gltf"
             : (glassCausticsDemoEnabled_
                 ? sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf"
-                : sourceRoot_ / "assets" / "models" / "cube.obj");
+                : (instanceStressDemoEnabled_
+                    ? sourceRoot_ / "assets" / "models" / "sphere.obj"
+                    : sourceRoot_ / "assets" / "models" / "cube.obj"));
         modelToLoad = std::filesystem::exists(defaultModel)
             ? defaultModel
             : (availableModels_.empty() ? std::filesystem::path{} : availableModels_.front());
@@ -661,6 +679,9 @@ void Application::drawMainMenu() {
         if (ImGui::MenuItem("Local light stress preset")) {
             activateLightStressPreset(true);
         }
+        if (ImGui::MenuItem("Instance / culling / LOD stress preset")) {
+            activateInstanceStressPreset(true);
+        }
         ImGui::MenuItem("Wireframe", nullptr, &rendererSettings_.wireframe);
         ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
         ImGui::Separator();
@@ -718,6 +739,15 @@ void Application::drawScenePanel() {
             ImGui::TreeNodeEx("Stress instances x100", ImGuiTreeNodeFlags_Leaf);
             ImGui::TreePop();
             ImGui::TextDisabled("Local lights: %zu", rendererSettings_.localLights.size());
+        }
+        if (instanceStressDemoEnabled_) {
+            ImGui::TreeNodeEx("Instance stress x2500", ImGuiTreeNodeFlags_Leaf);
+            ImGui::TreePop();
+            ImGui::TextDisabled(
+                "Visible / culled: %zu / %zu",
+                renderer_->visibleInstanceCount(),
+                renderer_->culledInstanceCount()
+            );
         }
         if (rendererSettings_.showPrismIncidentBeam) {
             ImGui::TreeNodeEx("Incident beam (Prism-0 placeholder)", ImGuiTreeNodeFlags_Leaf);
@@ -890,6 +920,43 @@ void Application::drawInspectorPanel() {
                 "%zu point + %zu spot | 100 objects",
                 rendererSettings_.localLights.size() - spotCount,
                 spotCount
+            );
+            ImGui::EndDisabled();
+            ImGui::SeparatorText("Instance submission stress");
+            bool instanceStressEnabled = instanceStressDemoEnabled_;
+            if (ImGui::Checkbox("Enable 2,500-instance scene", &instanceStressEnabled)) {
+                instanceStressDemoEnabled_ = instanceStressEnabled;
+                if (instanceStressDemoEnabled_) {
+                    activateInstanceStressPreset(true);
+                } else {
+                    rendererSettings_.instanceOptimizationEnabled = false;
+                    statusMessage_ = "Instance stress scene disabled";
+                }
+            }
+            ImGui::BeginDisabled(!instanceStressDemoEnabled_);
+            ImGui::Checkbox(
+                "GPU instancing / batching",
+                &rendererSettings_.instanceOptimizationEnabled
+            );
+            ImGui::BeginDisabled(!rendererSettings_.instanceOptimizationEnabled);
+            ImGui::Checkbox("CPU frustum culling", &rendererSettings_.frustumCullingEnabled);
+            ImGui::Checkbox("Projected-size LOD", &rendererSettings_.lodSelectionEnabled);
+            ImGui::EndDisabled();
+            const auto& lodCounts = renderer_->lodInstanceCounts();
+            ImGui::TextDisabled(
+                "Submitted %zu | visible %zu | culled %zu",
+                renderer_->submittedInstanceCount(),
+                renderer_->visibleInstanceCount(),
+                renderer_->culledInstanceCount()
+            );
+            ImGui::TextDisabled(
+                "LOD0 / 1 / 2: %zu / %zu / %zu | prep %.3f ms",
+                lodCounts[0], lodCounts[1], lodCounts[2],
+                renderer_->instancePreparationMilliseconds()
+            );
+            ImGui::TextDisabled(
+                "Submitted triangles: %zu",
+                renderer_->renderedInstanceTriangleCount()
             );
             ImGui::EndDisabled();
             ImGui::Checkbox("Metallic-roughness PBR", &rendererSettings_.pbrEnabled);
@@ -1386,7 +1453,44 @@ void Application::drawViewportPanel() {
     modelMatrix *= normalization;
 
     std::vector<RenderItem> renderItems;
-    if (model_ != nullptr && lightStressDemoEnabled_) {
+    if (model_ != nullptr && instanceStressDemoEnabled_) {
+        static constexpr std::array<glm::vec3, 6> instanceTints{
+            glm::vec3(0.82f, 0.34f, 0.22f),
+            glm::vec3(0.86f, 0.62f, 0.20f),
+            glm::vec3(0.30f, 0.72f, 0.42f),
+            glm::vec3(0.20f, 0.54f, 0.86f),
+            glm::vec3(0.48f, 0.32f, 0.82f),
+            glm::vec3(0.78f, 0.28f, 0.60f)
+        };
+        constexpr int instanceColumns = 50;
+        constexpr int instanceRows = 50;
+        for (int row = 0; row < instanceRows; ++row) {
+            for (int column = 0; column < instanceColumns; ++column) {
+                const int index = row * instanceColumns + column;
+                const glm::vec3 position(
+                    -17.15f + static_cast<float>(column) * 0.70f,
+                    -0.25f + 0.08f * static_cast<float>((row + column) % 4),
+                    -17.15f + static_cast<float>(row) * 0.70f
+                );
+                glm::mat4 instanceMatrix = glm::translate(glm::mat4(1.0f), position);
+                instanceMatrix = glm::rotate(
+                    instanceMatrix,
+                    glm::radians(static_cast<float>((index * 29) % 360)),
+                    glm::vec3(0.0f, 1.0f, 0.0f)
+                );
+                instanceMatrix = glm::scale(instanceMatrix, glm::vec3(0.22f));
+                instanceMatrix *= normalization;
+                renderItems.push_back(RenderItem{
+                    model_.get(),
+                    instanceMatrix,
+                    instanceTints[static_cast<std::size_t>(index) % instanceTints.size()],
+                    true,
+                    false,
+                    true
+                });
+            }
+        }
+    } else if (model_ != nullptr && lightStressDemoEnabled_) {
         static constexpr std::array<glm::vec3, 6> instanceTints{
             glm::vec3(0.95f, 0.36f, 0.24f),
             glm::vec3(0.96f, 0.70f, 0.24f),
@@ -1428,7 +1532,7 @@ void Application::drawViewportPanel() {
             }
         }
     }
-    if (model_ != nullptr && !lightStressDemoEnabled_
+    if (model_ != nullptr && !lightStressDemoEnabled_ && !instanceStressDemoEnabled_
         && (!prismDemoEnabled_ || prismModelVisible_)) {
         renderItems.push_back(RenderItem{
             model_.get(),
@@ -1840,6 +1944,8 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
     const bool wasGlassVolumeDemo = glassVolumeDemoEnabled_;
     if (loadedPrismFixture || loadedGlassVolumeFixture) {
         lightStressDemoEnabled_ = false;
+        instanceStressDemoEnabled_ = false;
+        rendererSettings_.instanceOptimizationEnabled = false;
         rendererSettings_.localLights.clear();
     }
     if (loadedPrismFixture) {
@@ -1921,7 +2027,9 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
                 rendererSettings_.skyboxEnabled = true;
             }
             glassCausticsDemoEnabled_ = false;
-            if (lightStressDemoEnabled_) {
+            if (instanceStressDemoEnabled_) {
+                activateInstanceStressPreset(false);
+            } else if (lightStressDemoEnabled_) {
                 activateLightStressPreset(false);
             } else {
                 camera_.reset();
@@ -2063,6 +2171,8 @@ void Application::rebuildLocalLights() {
 
 void Application::activateLightStressPreset(bool loadFixture) {
     deactivatePrismDemoPreset();
+    instanceStressDemoEnabled_ = false;
+    rendererSettings_.instanceOptimizationEnabled = false;
     lightStressDemoEnabled_ = true;
     glassVolumeDemoEnabled_ = false;
     glassCausticsDemoEnabled_ = false;
@@ -2102,8 +2212,50 @@ void Application::activateLightStressPreset(bool loadFixture) {
     }
 }
 
+void Application::activateInstanceStressPreset(bool loadFixture) {
+    deactivatePrismDemoPreset();
+    lightStressDemoEnabled_ = false;
+    instanceStressDemoEnabled_ = true;
+    glassVolumeDemoEnabled_ = false;
+    glassCausticsDemoEnabled_ = false;
+    rendererSettings_.localLights.clear();
+    if (loadFixture) rendererSettings_.instanceOptimizationEnabled = true;
+    autoRotate_ = false;
+    showGroundPlane_ = false;
+    showComparisonObject_ = false;
+    modelPosition_ = glm::vec3(0.0f);
+    modelRotationDegrees_ = glm::vec3(0.0f);
+    modelScale_ = 1.0f;
+    rendererSettings_.showGrid = false;
+    rendererSettings_.showAxes = false;
+    rendererSettings_.backgroundColor = glm::vec3(0.008f, 0.011f, 0.018f);
+    rendererSettings_.skyboxEnabled = false;
+    rendererSettings_.pbrEnabled = true;
+    rendererSettings_.iblEnabled = true;
+    rendererSettings_.environmentIntensity = 0.16f;
+    rendererSettings_.ambientStrength = 0.035f;
+    rendererSettings_.diffuseStrength = 1.0f;
+    rendererSettings_.shadowsEnabled = false;
+    rendererSettings_.coloredTransmissionShadowsEnabled = false;
+    rendererSettings_.causticsEnabled = false;
+    rendererSettings_.transmissionEnabled = false;
+    rendererSettings_.toneMapping = true;
+    rendererSettings_.bloom = false;
+    rendererSettings_.lodMediumThresholdPixels = 7.0f;
+    rendererSettings_.lodHighThresholdPixels = 14.0f;
+    camera_.setOrbitPose(glm::vec3(0.0f), 38.0f, 28.0f, 34.0f, 46.0f);
+    statusMessage_ = rendererSettings_.instanceOptimizationEnabled
+        ? "Instance stress: 2,500 spheres with batching, frustum culling, and LOD"
+        : "Instance stress baseline: 2,500 independent sphere submissions";
+    if (loadFixture) {
+        loadModel(sourceRoot_ / "assets" / "models" / "sphere.obj");
+    }
+}
+
 void Application::activateGlassCausticsPreset() {
     lightStressDemoEnabled_ = false;
+    instanceStressDemoEnabled_ = false;
+    rendererSettings_.instanceOptimizationEnabled = false;
     rendererSettings_.localLights.clear();
     glassCausticsDemoEnabled_ = true;
     volumeGlassPreset_ = VolumeGlassPreset::Crystal;
@@ -2148,6 +2300,8 @@ void Application::applyVolumeGlassPreset(VolumeGlassPreset preset) {
 
 void Application::activatePrismDemoPreset(bool loadFixture) {
     lightStressDemoEnabled_ = false;
+    instanceStressDemoEnabled_ = false;
+    rendererSettings_.instanceOptimizationEnabled = false;
     rendererSettings_.localLights.clear();
     if (!prismDemoPreviousState_.has_value()) {
         prismDemoPreviousState_.emplace(PrismDemoPreviousState{
@@ -2386,7 +2540,25 @@ void Application::writePrismBenchmarkReport() {
                 ? "deferred" : "forward") << ",\n"
            << "  \"spectralSamples\": " << rendererSettings_.prismSpectrum.samples.size() << ",\n"
            << "  \"lightStressScene\": " << (lightStressDemoEnabled_ ? "true" : "false") << ",\n"
-           << "  \"stressInstanceCount\": " << (lightStressDemoEnabled_ ? 100 : 1) << ",\n"
+           << "  \"instanceStressScene\": " << (instanceStressDemoEnabled_ ? "true" : "false") << ",\n"
+           << "  \"instanceOptimizationEnabled\": "
+           << (rendererSettings_.instanceOptimizationEnabled ? "true" : "false") << ",\n"
+           << "  \"frustumCullingEnabled\": "
+           << (rendererSettings_.frustumCullingEnabled ? "true" : "false") << ",\n"
+           << "  \"lodSelectionEnabled\": "
+           << (rendererSettings_.lodSelectionEnabled ? "true" : "false") << ",\n"
+           << "  \"stressInstanceCount\": "
+           << (instanceStressDemoEnabled_ ? 2500 : (lightStressDemoEnabled_ ? 100 : 1)) << ",\n"
+           << "  \"submittedInstances\": " << renderer_->submittedInstanceCount() << ",\n"
+           << "  \"visibleInstances\": " << renderer_->visibleInstanceCount() << ",\n"
+           << "  \"culledInstances\": " << renderer_->culledInstanceCount() << ",\n"
+           << "  \"lod0Instances\": " << renderer_->lodInstanceCounts()[0] << ",\n"
+           << "  \"lod1Instances\": " << renderer_->lodInstanceCounts()[1] << ",\n"
+           << "  \"lod2Instances\": " << renderer_->lodInstanceCounts()[2] << ",\n"
+           << "  \"renderedInstanceTriangles\": "
+           << renderer_->renderedInstanceTriangleCount() << ",\n"
+           << "  \"instancePreparationMs\": "
+           << renderer_->instancePreparationMilliseconds() << ",\n"
            << "  \"localLightCount\": " << rendererSettings_.localLights.size() << ",\n"
            << "  \"pointLightCount\": "
            << rendererSettings_.localLights.size() - spotLightCount << ",\n"

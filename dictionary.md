@@ -193,7 +193,7 @@
 | Exit Surface Normal（出射面法线） | 光在离开玻璃的位置所遇到表面的朝向；弯曲物体的出射法线通常不等于入口法线。 | Glass-2C 以 RGBA16F 保存对象最远表面法线，内部射线跨越 R32F 退出深度时读取并显示调试色。 | 已实现（屏幕空间） |
 | Two-interface Refraction（双界面折射） | 光进入玻璃时弯折一次，离开玻璃时根据另一侧表面方向再次弯折。 | Glass Shader 对空气→玻璃与玻璃→空气分别应用 Snell 定律，并插值退出交点以消除步进色带。 | 已实现（可切换） |
 | Object-ID-aware Depth Pairing（对象 ID 深度配对） | 用对象标识确保入口和出口来自同一个玻璃物体，避免重叠物体的深度被错误组合。 | 每个透明 `RenderItem` 在绘制前重建并立即消费自己的深度/法线缓存，R32UI ID 在 Shader 内再次校验。 | 已实现（逐对象） |
-| Split-Sum IBL | 将环境镜面光预积分成按粗糙度过滤的 Cubemap 与二维 BRDF LUT，并把漫反射单独卷积，避免每像素对 HDR 环境做大量采样。 | `EnvironmentMap` 从原创 Radiance HDRI 生成 Diffuse Irradiance、GGX Prefiltered Specular 和 RG16F BRDF LUT。 | 已实现 |
+| Split-Sum IBL | 将环境镜面光预积分成按粗糙度过滤的 Cubemap 与二维 BRDF LUT，并把漫反射单独卷积，避免每像素对 HDR 环境做大量采样。 | `EnvironmentMap` 从 Poly Haven CC0 Radiance HDRI 生成 Diffuse Irradiance、GGX Prefiltered Specular 和 RG16F BRDF LUT。 | 已实现 |
 | Beer-Lambert Law | 光在介质中传播越远，被吸收越多；不同颜色可以有不同吸收。 | Shader 使用 `attenuationColor^(pathLength/attenuationDistance)` 计算玻璃透射率。 | 已实现 |
 | Attenuation（衰减/吸收） | 光穿过介质后亮度和颜色逐渐减少。 | glTF 材质的 Color / Distance 决定两组测试玻璃的青色和琥珀色体积。 | 已实现 |
 | Transmittance（透射率） | 光穿过一段介质后还剩下的比例，1 表示没有损失，0 表示完全吸收。 | Glass Debug View 可直接显示 Beer-Lambert 计算出的 RGB 透射率。 | 已实现 |
@@ -281,9 +281,9 @@
 | Motion Vector（运动向量） | 记录像素从上一帧到当前帧移动了多少。 | TAA History Reprojection 的基础。 | 计划 |
 | Temporal Reprojection（时序重投影） | 根据运动向量把上一帧结果映射到当前帧。 | TAA 与焦散时序稳定会使用。 | 计划 |
 | Jitter | 每帧轻微移动投影采样位置，用多帧积累获得更密集采样。 | TAA 计划使用 Halton 序列。 | 计划 |
-| Frustum Culling（视锥裁剪） | CPU/GPU 不提交相机视野外的物体。 | GP-P1 大场景优化路线。 | 计划 |
-| LOD | 根据距离或屏幕尺寸选择不同精度模型。 | GP-P1 与 TA 资产预算路线。 | 计划 |
-| Instancing（实例化） | 一次 Draw Call 绘制同一 Mesh 的多个不同 Transform 实例。 | GP-P1 压力场景计划。 | 计划 |
+| Frustum Culling（视锥剔除） | CPU/GPU 不提交相机视野外的物体。 | GP-P1C 从 View-Projection 提取六个平面，以世界空间包围球保守判断 2,500 个实例的可见性。 | 已实现（CPU） |
+| LOD（Level of Detail） | 根据距离或屏幕尺寸选择不同精度模型。 | GP-P1C 按投影像素半径选择三档顶点聚类索引；共享 Vertex Buffer，只切换 Element Buffer。 | 已实现（三档） |
+| Instancing（实例化） | 一次 Draw Call 绘制同一 Mesh 的多个不同 Transform 实例。 | GP-P1C 以 `glDrawElementsInstanced` 和 Mat4 Instance Buffer 合并同模型、Tint、LOD 的对象。 | 已实现 |
 | GPU-driven Rendering | 由 GPU 完成可见性、批次和间接绘制命令生成，减少 CPU 提交。 | GP-P2 备选旗舰。 | 计划 |
 | Visual Regression（视觉回归） | 用固定场景、固定机位和容差比较重拍图片，确认代码修改没有破坏既有画面。 | Glass-4 已用 14 张 1080p 基线覆盖玻璃、色散、焦散和 MSAA；属于[回归测试](https://vibe-hub.org/regression-test)的一种。 | 已完成 |
 | Frame Capture（帧捕获） | 保存一段 CPU/GPU 图形调用、时间线和调试标记，供 RenderDoc、Nsight 等工具离线检查。 | Glass-4 保存带 `KHR_debug` Pass 范围的 Nsight Systems 报告。 | 已完成 |
@@ -346,6 +346,7 @@
 | Shadow Map | `src/render/ShadowMap.*`、`shaders/shadow_depth.*` |
 | 彩色透射阴影与焦散 | `src/render/ShadowMap.*`、`src/render/CausticsMap.*`、`shaders/caustics_*`、`shaders/transmission_shadow.*` |
 | GPU Mesh 与材质绑定 | `src/render/Mesh.*`、`src/render/GpuModel.*` |
+| 实例化、视锥剔除与 LOD | `src/render/SceneDrawList.*`、`src/render/Mesh.*`、`docs/instance-culling-lod.md` |
 | 纹理解码、缓存和回退 | `src/render/Texture2D.*` |
 | 格式无关资产结构 | `src/asset/ModelData.h` |
 | OBJ 导入 | `src/io/ObjLoader.*` |
