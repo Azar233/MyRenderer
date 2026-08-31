@@ -24,6 +24,7 @@ class PostProcessor;
 class RenderTarget;
 class Shader;
 class ShadowMap;
+class SsaoRenderer;
 class SpectralBeamRenderer;
 class TextureCache;
 
@@ -58,7 +59,8 @@ enum class GBufferDebugView {
     Albedo = 1,
     EncodedNormal = 2,
     MetallicRoughness = 3,
-    Depth = 4
+    Depth = 4,
+    Ssao = 5
 };
 
 enum class LocalLightType {
@@ -151,6 +153,13 @@ struct RendererSettings {
     bool lodSelectionEnabled{true};
     float lodMediumThresholdPixels{12.0f};
     float lodHighThresholdPixels{32.0f};
+    bool ssaoEnabled{false};
+    float ssaoRadius{0.55f};
+    float ssaoBias{0.025f};
+    float ssaoStrength{1.35f};
+    bool temporalAaEnabled{false};
+    float temporalHistoryWeight{0.9f};
+    int temporalDebugView{0};
 };
 
 struct RenderItem {
@@ -222,6 +231,7 @@ private:
     std::unique_ptr<GBuffer> gBuffer_;
     std::unique_ptr<OpticalPathDebugRenderer> opticalPathDebugRenderer_;
     std::unique_ptr<ShadowMap> shadowMap_;
+    std::unique_ptr<SsaoRenderer> ssaoRenderer_;
     std::unique_ptr<SpectralBeamRenderer> spectralBeamRenderer_;
     std::unique_ptr<Shader> shadowShader_;
     std::unique_ptr<Shader> transmissionShadowShader_;
@@ -272,4 +282,10 @@ private:
     std::vector<std::string> activePassNames_;
     std::vector<GpuPassTiming> gpuPassTimings_;
     RenderPath activeRenderPath_{RenderPath::Forward};
+    glm::mat4 previousViewProjection_{1.0f};
+    std::size_t temporalFrameIndex_{0U};
+    int lastTemporalWidth_{0};
+    int lastTemporalHeight_{0};
+    bool previousViewProjectionValid_{false};
+    bool lastTemporalAaEnabled_{false};
 };

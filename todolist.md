@@ -504,7 +504,7 @@ Glass 阶段验收：Glass-2C 完成后，弯曲球体应达到 Khronos `KHR_mat
 - [x] 增加 G-Buffer / Deferred Shading 路径，并保留当前 Forward 路径作对照；至少包含 Albedo、Encoded Normal、Metallic/Roughness、Depth，支持逐附件调试。
 - [x] 建立多光源压力场景：点光 / 聚光、至少三档灯光数量；记录 Forward 与 Deferred 在同一机器同一画面下的 GPU 时间、带宽和 Draw Call 差异。
 - [x] 实现实例化、CPU Frustum Culling 和 LOD 选择；用同一 Mesh 的大规模实例场景证明提交与几何优化，不以空场 FPS 作为结果。
-- [ ] 从 SSAO、TAA、SSR 中选择两项实现，其中优先 TAA：需要 Motion Vector、Halton Jitter、History Reprojection、Neighborhood Clamp、静止/运动 Ghosting 对照。
+- [x] 从 SSAO、TAA、SSR 中选择两项实现，其中优先 TAA：需要 Motion Vector、Halton Jitter、History Reprojection、Neighborhood Clamp、静止/运动 Ghosting 对照。
 - [ ] 增加骨骼动画最小闭环：glTF Skin、Joint/Weight、Animation Sampling、GPU Skinning；提供 bind pose、动画和骨骼/权重调试视图。
 - [ ] 给每项优化建立 Before / After Capture；报告必须同时写画质代价、CPU/GPU/显存变化，不能只写“FPS 提升”。
 
@@ -513,6 +513,8 @@ Glass 阶段验收：Glass-2C 完成后，弯曲球体应达到 Khronos `KHR_mat
 > GP-P1B 多光源压力场景完成（2026-08-26）：新增 Point/Spot 各半的 8/32/64 三档局部灯、有限半径逆平方衰减、平滑聚光锥，以及 100 个独立 Draw 的固定立方体舞台。Forward/Deferred 使用同一 Uniform Light Array 与 GGX BRDF；4 张 1080p 回归中同档 MAE 均低于 0.0008。RTX 4060 Laptop 4× MSAA 下，64 灯 GPU P50 为 Forward 3.773 ms、Deferred 2.183 ms（约 1.73×）；Draw Call 111/112，RenderTarget 显存 291.2/469.1 MiB，估算 Opaque Attachment 流量 213.6/387.6 MiB/frame。报告明确流量为格式推导下限而非硬件 Counter，并记录局部灯无阴影、最多 64 灯、尚未做 Light Volume/Tiled/Clustered 的边界。详见 `docs/local-light-stress.md`。下一项进入 Instancing、CPU Frustum Culling 与 LOD。
 
 > GP-P1C 实例提交与几何优化完成（2026-08-29）：新增 2,500 个 `sphere.obj` 实例的固定场景，按 GpuModel、Tint 与 LOD 使用 `glDrawElementsInstanced` 合批；CPU 从 View-Projection 提取六平面视锥，用保守世界包围球剔除，并按投影像素半径选择三档顶点聚类索引 LOD。RTX 4060 Laptop、1080p、4×MSAA 下，完整路径将 Draw Call 从 2,501 降至 19，提交三角形从 800,000 降至 477,636，CPU Frame P50 从 5.386 ms 降至 2.077 ms，GPU Frame P50 从 1.465 ms 降至 0.653 ms；2,390 个可见实例的 CPU 准备成本为 0.110 ms。已保存优化前后视觉基线和 Baseline / Instancing / +Culling / +LOD 四段 JSON，边界与复现命令见 `docs/instance-culling-lod.md`。下一项进入 TAA 与 SSAO/SSR 二选一。
+
+> GP-P1D TAA 与 SSAO 完成（2026-08-31）：TAA 使用 8 样本 Halton(2,3) Jitter、当前深度世界坐标重建、上一帧 View-Projection History Reprojection、历史深度拒绝与 3×3 Neighborhood Clamp，并以 RG16F 输出 Motion Vector、RGBA16F Alpha 输出历史接受权重；SSAO 使用 16 样本观察空间半球、G-Buffer Depth/Normal 和 5×5 深度感知滤波，仅调制 Ambient/IBL。7 张 1080p 固定回归覆盖 SSAO Final/Debug、TAA 静止/运动、Motion Vector 与 History Weight。RTX 4060 Laptop、1080p、1×MSAA 下 Baseline / TAA moving / SSAO+TAA 的 GPU P50 分别为 0.536 / 0.695 / 1.457 ms；SSAO 与 TAA Pass P50 分别约 0.728 / 0.230 ms。对象自身 Motion Vector 尚未实现，下一项进入 glTF Skin / Animation / GPU Skinning 最小闭环。详见 `docs/taa-ssao.md`。
 
 #### GP-P2：旗舰方向三选一（只选一个做深）
 

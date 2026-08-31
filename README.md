@@ -22,6 +22,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - 可实时切换的 Forward / Hybrid Deferred 不透明渲染路径：`GL_RGBA8` Albedo、`GL_RGBA16F` Encoded Normal、`GL_RG8` Metallic/Roughness 与 `GL_DEPTH24_STENCIL8` Depth/Stencil G-Buffer，支持 1×/4× MSAA Resolve、逐附件 Debug View、世界坐标重建与全屏 PBR/IBL Lighting Pass；透明/玻璃继续使用 Forward Refractive Pass。
 - Point Light / Spot Light 局部光照与确定性压力场景：8/32/64 三档灯光、100 个独立物体、平滑有限半径逆平方衰减与聚光锥；GUI/Benchmark 对比 Forward/Deferred 的 GPU P50/P95、Draw Call、显存和估算 Attachment 流量。
 - GPU Instancing、CPU Frustum Culling 与屏幕尺寸 LOD：2,500 个共享 Sphere Mesh 的固定场景按模型/Tint/LOD 合批，六平面包围球剔除并切换三档聚类索引；1080p/4×MSAA 实测 Draw Call 2,501→19、CPU P50 5.386→2.077 ms、GPU P50 1.465→0.653 ms。
+- TAA 与 SSAO 屏幕空间管线：8 样本 Halton Jitter、深度反投影 Motion Vector、History Reprojection、历史深度拒绝、3×3 Neighborhood Clamp，以及 16 样本 SSAO + 5×5 深度感知滤波；提供静止/运动 Ghosting、Motion、History Weight 和 SSAO 调试基线。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
@@ -70,7 +71,7 @@ cmake --build build-mingw --parallel
 
 - Scene 面板：查看主体、地面接收器与可选对照实例，切换 `assets/models` 中的 OBJ、DAE、glTF/GLB，使用原生文件选择器，输入其他模型路径，或把模型文件拖入窗口。CPU 导入期间会显示文件大小、耗时和活动进度，当前场景保持可用。
 - Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
-- Inspector / Renderer：切换 Forward / Deferred (hybrid)、G-Buffer Albedo/Encoded Normal/Metallic-Roughness/Depth 调试、PBR、IBL、天空盒、阴影、彩色透射阴影、HDR Caustics、Transmission、Geometric Glass Thickness、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整焦散模式/强度/尺度/方向/锐度/动画、折射距离/步数、体积厚度倍率、RGB 色散、环境强度、曝光、背景色、灯光与 FOV，并查看活动 Pass 和 GPU 时间。
+- Inspector / Renderer：切换 Forward / Deferred (hybrid)、G-Buffer Albedo/Encoded Normal/Metallic-Roughness/Depth/SSAO 调试、TAA Final/Motion/History Weight、PBR、IBL、天空盒、阴影、彩色透射阴影、HDR Caustics、Transmission、Geometric Glass Thickness、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整 SSAO Radius/Bias/Strength、TAA History Weight、焦散、折射、体积、色散、环境、曝光、灯光与 FOV，并查看活动 Pass 和 GPU 时间。
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
 - View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber / Crystal 四组体积玻璃参数。
 - View / `Glass caustics preset`：加载透明水晶球、白色接收地面与固定高机位，默认启用 Light-space RGB 焦散、彩色透射阴影和空间滤波；可即时切到 Projector / Decal 做美术对照。
@@ -183,6 +184,15 @@ cmake --build build-release --target instance-stress-benchmark
 
 Benchmark 分别记录 2,500 个 Sphere 的逐对象基线、Instancing、Instancing+Culling 和完整 LOD 四个阶段。RTX 4060 Laptop 的完整路径将 Draw Call 从 2,501 降至 19、CPU Frame P50 从 5.386 ms 降至 2.077 ms、GPU Frame P50 从 1.465 ms 降至 0.653 ms；算法、固定截图、三角形代价和边界见 `docs/instance-culling-lod.md`。
 
+GP-P1D TAA 与 SSAO 可重复执行：
+
+```powershell
+cmake --build build-release --target screen-space-visual-regression
+cmake --build build-release --target screen-space-benchmark
+```
+
+视觉矩阵覆盖 Baseline、SSAO Final/Debug、TAA Static/Moving、Motion Vector 与 History Weight。RTX 4060 Laptop、1080p、1×MSAA 下 Baseline / TAA moving / SSAO+TAA GPU P50 为 0.536 / 0.695 / 1.457 ms；算法、显存策略与对象运动边界见 `docs/taa-ssao.md`。
+
 `gpu-smoke` 目标会运行材质场景以及“成功场景后加载错误资产”的恢复测试，确保 GPU 路径使用真实上下文且失败导入保留当前场景：
 
 ```powershell
@@ -219,11 +229,12 @@ src/render/GpuModel.*    一个模型所拥有的 GPU Mesh 集合与统计
 src/render/Mesh.*        VAO/VBO、多档 EBO、实例矩阵 Buffer 与 Instanced Draw
 src/render/OpenGlDebug.* Debug 构建的 OpenGL 驱动诊断
 src/render/OpticalPathDebugRenderer.* 世界空间光路、交点、法线、TIR 与能量调试层
-src/render/PostProcessor.* HDR Bloom、ACES Tone Mapping 与最终 sRGB 输出
+src/render/PostProcessor.* TAA 历史重投影、HDR Bloom、ACES Tone Mapping 与最终 sRGB 输出
 src/render/RenderTarget.*Opaque/HDR/MSAA 场景、可采样深度与最终 LDR 离屏 Framebuffer
 src/render/Renderer.*    渲染状态、轻量 Pass 编排、相机参数与离屏绘制
 src/render/SceneDrawList.* 透明排序、视锥平面、包围球与屏幕尺寸 LOD 决策
 src/render/ShadowMap.*   方向光深度贴图
+src/render/SsaoRenderer.* G-Buffer 半球遮蔽与深度感知滤波
 src/render/Shader.*      GLSL 编译、链接与 uniform
 src/render/Texture2D.*   GPU 纹理 RAII、图像解码、缓存和回退纹理
 shaders/                 GPU 顶点和片元 Shader

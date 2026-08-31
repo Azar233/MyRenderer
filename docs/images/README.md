@@ -72,3 +72,10 @@ GPU-tolerant MAE and changed-pixel thresholds rather than byte equality.
   Forward/Deferred parity and scalability evidence with 32 point + 32 spot lights.
 - `gp_p1c_baseline.png` / `gp_p1c_optimized.png`: fixed 2,500-sphere scene
   before and after GPU Instancing, CPU Frustum Culling, and projected-size LOD.
+- `gp_p1d_baseline.png`, `gp_p1d_ssao_final.png`, and
+  `gp_p1d_ssao_debug.png`: fixed Deferred scene before SSAO, after ambient-only
+  composition, and the raw depth-aware occlusion view.
+- `gp_p1d_taa_static.png` / `gp_p1d_taa_motion.png`: 1x-MSAA temporal resolve
+  under a stationary and deterministically rotating camera.
+- `gp_p1d_motion_vectors.png` / `gp_p1d_history_weight.png`: reprojection motion
+  and accepted-history diagnostics used to inspect disocclusion and ghosting.

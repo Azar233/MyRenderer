@@ -120,6 +120,7 @@ add_executable(MyRenderer
     src/render/SceneDrawList.cpp
     src/render/Shader.cpp
     src/render/ShadowMap.cpp
+    src/render/SsaoRenderer.cpp
     src/render/SpectralBeamRenderer.cpp
     src/render/Texture2D.cpp
 )
@@ -408,6 +409,29 @@ if(BUILD_TESTING)
         COMMENT "Benchmarking GP-P1C baseline, instancing, culling, and LOD stages"
     )
 
+    add_custom_target(screen-space-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/screen-space-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/ScreenSpaceVisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing and comparing GP-P1D SSAO/TAA static and motion views"
+    )
+
+    add_custom_target(screen-space-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/screen-space-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/ScreenSpaceBenchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Benchmarking GP-P1D SSAO and static/moving TAA"
+    )
+
     find_program(MYRENDERER_NSYS_EXECUTABLE
         NAMES nsys nsys.exe
         HINTS
@@ -455,6 +479,15 @@ add_custom_target(gpu-smoke
             MYRENDERER_MSAA=4
             $<TARGET_FILE:MyRenderer>
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/glass_material_test.gltf
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_RENDER_PATH=1
+            MYRENDERER_GBUFFER_DEBUG=0
+            MYRENDERER_SSAO=1
+            MYRENDERER_TAA=1
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/pbr_material_test.gltf
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=4

@@ -235,8 +235,34 @@ int Application::run(const std::filesystem::path& initialModel) {
     }
     if (const char* value = std::getenv("MYRENDERER_GBUFFER_DEBUG")) {
         rendererSettings_.gBufferDebugView = static_cast<GBufferDebugView>(
-            std::clamp(std::atoi(value), 0, 4)
+            std::clamp(std::atoi(value), 0, 5)
         );
+    }
+    if (const char* value = std::getenv("MYRENDERER_SSAO")) {
+        rendererSettings_.ssaoEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_SSAO_RADIUS")) {
+        rendererSettings_.ssaoRadius = std::clamp(std::strtof(value, nullptr), 0.05f, 2.0f);
+    }
+    if (const char* value = std::getenv("MYRENDERER_SSAO_BIAS")) {
+        rendererSettings_.ssaoBias = std::clamp(std::strtof(value, nullptr), 0.0f, 0.15f);
+    }
+    if (const char* value = std::getenv("MYRENDERER_SSAO_STRENGTH")) {
+        rendererSettings_.ssaoStrength = std::clamp(std::strtof(value, nullptr), 0.1f, 3.0f);
+    }
+    if (const char* value = std::getenv("MYRENDERER_TAA")) {
+        rendererSettings_.temporalAaEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_TAA_HISTORY_WEIGHT")) {
+        rendererSettings_.temporalHistoryWeight = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 0.98f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_TAA_DEBUG")) {
+        rendererSettings_.temporalDebugView = std::clamp(std::atoi(value), 0, 2);
+    }
+    if (const char* value = std::getenv("MYRENDERER_TAA_MOTION_DEMO")) {
+        temporalMotionDemoEnabled_ = std::atoi(value) != 0;
     }
     if (const char* value = std::getenv("MYRENDERER_PBR")) rendererSettings_.pbrEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_IBL")) rendererSettings_.iblEnabled = std::atoi(value) != 0;
@@ -356,6 +382,9 @@ int Application::run(const std::filesystem::path& initialModel) {
         // Let newly uploaded materials and driver-specialized shader state settle
         // before recording an automated visual baseline.
         pendingScreenshotWarmupFrames_ = 2;
+        if (const char* value = std::getenv("MYRENDERER_SCREENSHOT_WARMUP")) {
+            pendingScreenshotWarmupFrames_ = std::clamp(std::atoi(value), 1, 240);
+        }
     }
     const char* recoveryModelValue = std::getenv("MYRENDERER_RECOVERY_TEST");
     const std::filesystem::path recoveryModel = recoveryModelValue == nullptr
@@ -386,6 +415,9 @@ int Application::run(const std::filesystem::path& initialModel) {
         previousFrameTime_ = currentTime;
         if (autoRotate_) {
             modelRotationDegrees_.y = std::fmod(modelRotationDegrees_.y + 25.0f * deltaTime, 360.0f);
+        }
+        if (temporalMotionDemoEnabled_) {
+            camera_.orbit(0.012f, 0.0f);
         }
         if (prismReelMode_ && model_ != nullptr && !pendingModelImport_.has_value()
             && prismReelWarmupFrames_ == 0) {
@@ -889,9 +921,10 @@ void Application::drawInspectorPanel() {
                 "Albedo",
                 "Encoded normal",
                 "Metallic / Roughness",
-                "Depth"
+                "Depth",
+                "SSAO"
             };
-            if (ImGui::Combo("G-buffer debug", &gBufferDebug, gBufferDebugViews, 5)) {
+            if (ImGui::Combo("G-buffer debug", &gBufferDebug, gBufferDebugViews, 6)) {
                 rendererSettings_.gBufferDebugView = static_cast<GBufferDebugView>(gBufferDebug);
             }
             ImGui::EndDisabled();
@@ -1308,6 +1341,31 @@ void Application::drawInspectorPanel() {
             ImGui::TextDisabled("Shadow map: %d x %d", renderer_->shadowResolution(), renderer_->shadowResolution());
 
             ImGui::SeparatorText("Post processing");
+            ImGui::BeginDisabled(rendererSettings_.renderPath != RenderPath::Deferred);
+            ImGui::Checkbox("SSAO", &rendererSettings_.ssaoEnabled);
+            ImGui::BeginDisabled(!rendererSettings_.ssaoEnabled);
+            ImGui::SliderFloat("SSAO radius", &rendererSettings_.ssaoRadius, 0.05f, 2.0f, "%.2f");
+            ImGui::SliderFloat("SSAO bias", &rendererSettings_.ssaoBias, 0.0f, 0.15f, "%.3f");
+            ImGui::SliderFloat("SSAO strength", &rendererSettings_.ssaoStrength, 0.1f, 3.0f, "%.2f");
+            ImGui::EndDisabled();
+            ImGui::EndDisabled();
+            ImGui::Checkbox("Temporal AA", &rendererSettings_.temporalAaEnabled);
+            ImGui::BeginDisabled(!rendererSettings_.temporalAaEnabled);
+            ImGui::SliderFloat(
+                "TAA history weight",
+                &rendererSettings_.temporalHistoryWeight,
+                0.0f,
+                0.98f,
+                "%.2f"
+            );
+            const char* temporalDebugViews[] = {"Final", "Motion vectors", "History weight"};
+            ImGui::Combo(
+                "TAA debug",
+                &rendererSettings_.temporalDebugView,
+                temporalDebugViews,
+                3
+            );
+            ImGui::EndDisabled();
             ImGui::Checkbox("ACES tone mapping", &rendererSettings_.toneMapping);
             ImGui::Checkbox("Bloom", &rendererSettings_.bloom);
             ImGui::SliderFloat("Exposure", &rendererSettings_.exposure, 0.1f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);

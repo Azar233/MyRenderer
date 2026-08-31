@@ -173,6 +173,7 @@ private:
     bool prismModelVisible_{true};
     bool benchmarkMode_{false};
     bool prismReelMode_{false};
+    bool temporalMotionDemoEnabled_{false};
     int localLightTierIndex_{1};
     VolumeGlassPreset volumeGlassPreset_{VolumeGlassPreset::Olive};
     PrismOpticalPreset prismOpticalPreset_{PrismOpticalPreset::CrownGlass};

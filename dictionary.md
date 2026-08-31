@@ -275,12 +275,12 @@
 | Light Stress Test（光源压力测试） | 固定物体、镜头和材质，只增加灯光数量，观察渲染成本如何增长。 | 100 个独立物体配 8/32/64 局部灯，对比 Forward/Deferred GPU P50/P95、Draw Call、显存与流量。 | 已实现 |
 | Light Volume（光体积） | 只在点光/聚光真正能影响的空间范围绘制光照，避免全屏像素遍历无关灯光。 | 当前 Deferred 仍对每个几何像素遍历全部局部灯；Light Volume/Tiled/Clustered 是后续优化。 | 计划 |
 | Attachment Traffic（附件流量） | RenderTarget 每帧因写入、读取和 MSAA Resolve 产生的数据量。 | Benchmark 根据格式和采样数输出下限估算；明确不是驱动硬件带宽 Counter。 | 已实现（估算） |
-| SSAO | 根据屏幕深度和法线近似物体缝隙中的环境遮蔽。 | GP-P1 候选效果。 | 计划 |
+| SSAO | 根据屏幕深度和法线近似物体缝隙中的环境遮蔽。 | GP-P1D 使用 16 样本观察空间半球与 5×5 深度感知滤波，只调制 Ambient/IBL。 | 已实现 |
 | SSR | 在屏幕深度/颜色中追踪反射，只能反射屏幕已有信息。 | GP-P1 候选效果。 | 计划 |
-| TAA | 融合当前帧与历史帧降低锯齿和闪烁，需要运动信息与稳定策略。 | 对焦散稳定也有价值。 | 计划 |
-| Motion Vector（运动向量） | 记录像素从上一帧到当前帧移动了多少。 | TAA History Reprojection 的基础。 | 计划 |
-| Temporal Reprojection（时序重投影） | 根据运动向量把上一帧结果映射到当前帧。 | TAA 与焦散时序稳定会使用。 | 计划 |
-| Jitter | 每帧轻微移动投影采样位置，用多帧积累获得更密集采样。 | TAA 计划使用 Halton 序列。 | 计划 |
+| TAA | 融合当前帧与历史帧降低锯齿和闪烁，需要运动信息与稳定策略。 | GP-P1D 在 HDR 后处理前执行，使用深度拒绝与 3×3 Neighborhood Clamp 控制拖影。 | 已实现 |
+| Motion Vector（运动向量） | 记录像素从上一帧到当前帧移动了多少。 | 由当前深度重建世界坐标并投影到上一帧，写入 RG16F；当前覆盖相机运动。 | 已实现（相机） |
+| Temporal Reprojection（时序重投影） | 根据运动向量把上一帧结果映射到当前帧。 | TAA 使用上一帧 Color/Depth ping-pong，越界或深度不兼容时拒绝历史。 | 已实现 |
+| Jitter | 每帧轻微移动投影采样位置，用多帧积累获得更密集采样。 | TAA 使用 8 样本 Halton(2,3) 序列偏移投影矩阵。 | 已实现 |
 | Frustum Culling（视锥剔除） | CPU/GPU 不提交相机视野外的物体。 | GP-P1C 从 View-Projection 提取六个平面，以世界空间包围球保守判断 2,500 个实例的可见性。 | 已实现（CPU） |
 | LOD（Level of Detail） | 根据距离或屏幕尺寸选择不同精度模型。 | GP-P1C 按投影像素半径选择三档顶点聚类索引；共享 Vertex Buffer，只切换 Element Buffer。 | 已实现（三档） |
 | Instancing（实例化） | 一次 Draw Call 绘制同一 Mesh 的多个不同 Transform 实例。 | GP-P1C 以 `glDrawElementsInstanced` 和 Mat4 Instance Buffer 合并同模型、Tint、LOD 的对象。 | 已实现 |

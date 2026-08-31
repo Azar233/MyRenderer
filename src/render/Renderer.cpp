@@ -24,6 +24,7 @@
 #include "render/SceneDrawList.h"
 #include "render/Shader.h"
 #include "render/ShadowMap.h"
+#include "render/SsaoRenderer.h"
 #include "render/SpectralBeamRenderer.h"
 #include "render/Texture2D.h"
 
@@ -38,6 +39,27 @@ struct InstanceBatch {
 
 bool sameTint(const glm::vec3& left, const glm::vec3& right) {
     return glm::all(glm::equal(left, right));
+}
+
+float halton(std::size_t index, unsigned int base) {
+    float result = 0.0f;
+    float fraction = 1.0f;
+    while (index > 0U) {
+        fraction /= static_cast<float>(base);
+        result += fraction * static_cast<float>(index % base);
+        index /= base;
+    }
+    return result;
+}
+
+float maximumMatrixDifference(const glm::mat4& left, const glm::mat4& right) {
+    float difference = 0.0f;
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            difference = std::max(difference, std::abs(left[column][row] - right[column][row]));
+        }
+    }
+    return difference;
 }
 
 } // namespace
@@ -60,6 +82,7 @@ Renderer::Renderer(
         debugFragmentShaderPath
     )),
     shadowMap_(std::make_unique<ShadowMap>()),
+    ssaoRenderer_(std::make_unique<SsaoRenderer>(vertexShaderPath.parent_path())),
     spectralBeamRenderer_(std::make_unique<SpectralBeamRenderer>(
         vertexShaderPath.parent_path() / "spectral_beam.vert",
         vertexShaderPath.parent_path() / "spectral_beam.frag"
@@ -88,7 +111,8 @@ Renderer::Renderer(
         vertexShaderPath.parent_path() / "fullscreen.vert",
         vertexShaderPath.parent_path() / "bloom_extract.frag",
         vertexShaderPath.parent_path() / "bloom_blur.frag",
-        vertexShaderPath.parent_path() / "postprocess.frag"
+        vertexShaderPath.parent_path() / "postprocess.frag",
+        vertexShaderPath.parent_path() / "temporal_aa.frag"
     )),
     renderTarget_(std::make_unique<RenderTarget>()),
     textureCache_(std::make_unique<TextureCache>()) {
@@ -242,9 +266,24 @@ void Renderer::render(
         }
     }
     const glm::mat4 view = camera.viewMatrix();
-    const glm::mat4 projection = camera.projectionMatrix(
+    glm::mat4 projection = camera.projectionMatrix(
         static_cast<float>(width) / static_cast<float>(height)
     );
+    const bool temporalAaActive = settings.temporalAaEnabled && !gBufferDebugActive;
+    if (temporalAaActive) {
+        const std::size_t sample = temporalFrameIndex_ % 8U + 1U;
+        const float jitterX = halton(sample, 2U) - 0.5f;
+        const float jitterY = halton(sample, 3U) - 0.5f;
+        projection[2][0] += 2.0f * jitterX / static_cast<float>(width);
+        projection[2][1] += 2.0f * jitterY / static_cast<float>(height);
+    }
+    const glm::mat4 currentViewProjection = projection * view;
+    const bool resetTemporalHistory = !previousViewProjectionValid_
+        || !lastTemporalAaEnabled_
+        || width != lastTemporalWidth_
+        || height != lastTemporalHeight_
+        || (previousViewProjectionValid_
+            && maximumMatrixDifference(currentViewProjection, previousViewProjection_) > 0.35f);
     submittedInstanceCount_ = 0U;
     visibleInstanceCount_ = 0U;
     culledInstanceCount_ = 0U;
@@ -748,6 +787,21 @@ void Renderer::render(
             gBuffer_->resolve();
         });
 
+        const bool ssaoActive = settings.ssaoEnabled
+            || settings.gBufferDebugView == GBufferDebugView::Ssao;
+        if (ssaoActive) {
+            sequence.add("SSAO", [&] {
+                ssaoRenderer_->render(
+                    *gBuffer_, view, projection,
+                    settings.ssaoRadius,
+                    settings.ssaoBias,
+                    settings.ssaoStrength,
+                    width, height
+                );
+                drawCallCount_ += 2U;
+            });
+        }
+
         sequence.add("Deferred lighting", [&] {
             renderTarget_->bindDeferredOpaqueScene(gBuffer_->framebuffer());
             glViewport(0, 0, width, height);
@@ -779,6 +833,8 @@ void Renderer::render(
             deferredLightingShader_->setInt("uShadowMap", 7);
             deferredLightingShader_->setInt("uTransmissionShadowMap", 8);
             deferredLightingShader_->setInt("uCausticsMap", 9);
+            deferredLightingShader_->setInt("uSsao", 10);
+            deferredLightingShader_->setBool("uSsaoEnabled", ssaoActive);
             deferredLightingShader_->setMat4(
                 "uInverseViewProjection",
                 glm::inverse(projection * view)
@@ -818,6 +874,7 @@ void Renderer::render(
             shadowMap_->bindTexture(7U);
             shadowMap_->bindTransmissionTexture(8U);
             causticsMap_->bindTexture(9U);
+            ssaoRenderer_->bindTexture(10U);
             glDisable(GL_DEPTH_TEST);
             glDisable(GL_BLEND);
             glBindVertexArray(fullscreenVertexArray_);
@@ -1060,17 +1117,31 @@ void Renderer::render(
     sequence.add(
         gBufferDebugActive
             ? "G-buffer debug output"
-            : (settings.bloom ? "Bloom + tone map" : "Tone map"),
+            : (temporalAaActive
+                ? (settings.bloom ? "TAA + bloom + tone map" : "TAA + tone map")
+                : (settings.bloom ? "Bloom + tone map" : "Tone map")),
         [&] {
-        postProcessor_->process(*renderTarget_, PostProcessSettings{
-            gBufferDebugActive ? false : settings.toneMapping,
-            gBufferDebugActive ? false : settings.bloom,
-            !gBufferDebugActive,
-            gBufferDebugActive ? 1.0f : settings.exposure,
-            settings.bloomThreshold,
-            settings.bloomIntensity
-        });
-        drawCallCount_ += !gBufferDebugActive && settings.bloom ? 10U : 1U;
+        PostProcessSettings postSettings;
+        postSettings.toneMapping = gBufferDebugActive ? false : settings.toneMapping;
+        postSettings.bloom = gBufferDebugActive ? false : settings.bloom;
+        postSettings.encodeSrgb = !gBufferDebugActive;
+        postSettings.exposure = gBufferDebugActive ? 1.0f : settings.exposure;
+        postSettings.bloomThreshold = settings.bloomThreshold;
+        postSettings.bloomIntensity = settings.bloomIntensity;
+        postSettings.temporalAa = temporalAaActive;
+        postSettings.temporalDebugView = temporalAaActive
+            ? settings.temporalDebugView
+            : 0;
+        postSettings.resetTemporalHistory = resetTemporalHistory;
+        postSettings.temporalHistoryWeight = settings.temporalHistoryWeight;
+        postSettings.depthTexture = renderTarget_->sceneDepthTexture();
+        postSettings.inverseCurrentViewProjection = glm::inverse(currentViewProjection);
+        postSettings.previousViewProjection = previousViewProjectionValid_
+            ? previousViewProjection_
+            : currentViewProjection;
+        postProcessor_->process(*renderTarget_, postSettings);
+        drawCallCount_ += (!gBufferDebugActive && settings.bloom ? 10U : 1U)
+            + (temporalAaActive ? 1U : 0U);
     });
     activePassNames_ = sequence.names();
     std::array<std::size_t, maxProfiledPasses_> activePassQuerySlots{};
@@ -1114,6 +1185,16 @@ void Renderer::render(
         timingQueryPending_[timingQuery] = true;
         nextTimingQuery_ = (timingQuery + 1U) % timingQueries_.size();
     }
+    previousViewProjectionValid_ = temporalAaActive;
+    lastTemporalAaEnabled_ = temporalAaActive;
+    lastTemporalWidth_ = width;
+    lastTemporalHeight_ = height;
+    if (temporalAaActive) {
+        previousViewProjection_ = currentViewProjection;
+        ++temporalFrameIndex_;
+    } else {
+        temporalFrameIndex_ = 0U;
+    }
 }
 
 unsigned int Renderer::colorTexture() const {
@@ -1150,6 +1231,7 @@ std::size_t Renderer::estimatedRenderMemoryBytes() const {
         + postProcessor_->estimatedBytes()
         + environmentMap_->estimatedBytes()
         + shadowMap_->estimatedBytes()
+        + ssaoRenderer_->estimatedBytes()
         + causticsMap_->estimatedBytes()
         + spectralBeamRenderer_->vertexBufferBytes();
 }

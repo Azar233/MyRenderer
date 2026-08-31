@@ -12,6 +12,7 @@ uniform sampler2D uBrdfLut;
 uniform sampler2D uShadowMap;
 uniform sampler2D uTransmissionShadowMap;
 uniform sampler2D uCausticsMap;
+uniform sampler2D uSsao;
 uniform mat4 uInverseViewProjection;
 uniform mat4 uLightViewProjection;
 uniform vec3 uCameraPosition;
@@ -32,6 +33,7 @@ uniform bool uIblEnabled;
 uniform bool uShadowsEnabled;
 uniform bool uColoredTransmissionShadowsEnabled;
 uniform bool uCausticsEnabled;
+uniform bool uSsaoEnabled;
 uniform int uGBufferDebugView;
 
 out vec4 fragmentColor;
@@ -142,6 +144,11 @@ void main() {
         fragmentColor = vec4(vec3(1.0 - linearized), 1.0);
         return;
     }
+    float ambientOcclusion = uSsaoEnabled ? texture(uSsao, vUv).r : 1.0;
+    if (uGBufferDebugView == 5) {
+        fragmentColor = vec4(vec3(ambientOcclusion), 1.0);
+        return;
+    }
     if (depth >= 0.999999) discard;
     vec3 normal = normalize(encodedNormal * 2.0 - 1.0);
     float metallic = material.r;
@@ -175,7 +182,7 @@ void main() {
             );
         }
         fragmentColor = vec4(
-            albedo * (uAmbientStrength + visibility * diffuse)
+            albedo * (uAmbientStrength * ambientOcclusion + visibility * diffuse)
                 + visibility * vec3(specular) + caustics * albedo + localLighting,
             1.0
         );
@@ -231,7 +238,7 @@ void main() {
             + specularIbl) * uEnvironmentIntensity;
     }
     fragmentColor = vec4(
-        ambient + visibility * direct + localDirect + caustics * albedo,
+        ambient * ambientOcclusion + visibility * direct + localDirect + caustics * albedo,
         1.0
     );
 }
