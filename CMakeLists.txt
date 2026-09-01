@@ -432,6 +432,29 @@ if(BUILD_TESTING)
         COMMENT "Benchmarking GP-P1D SSAO and static/moving TAA"
     )
 
+    add_custom_target(skinning-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/skinning-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/SkinningVisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing and comparing GP-P1E bind, animated, joint, and weight views"
+    )
+
+    add_custom_target(skinning-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/skinning-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/SkinningBenchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Benchmarking GP-P1E bind pose, GPU skinning, and debug output"
+    )
+
     find_program(MYRENDERER_NSYS_EXECUTABLE
         NAMES nsys nsys.exe
         HINTS
@@ -463,6 +486,13 @@ if(BUILD_TESTING)
 endif()
 
 add_custom_target(gpu-smoke
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_ANIMATION_DEMO=1
+            MYRENDERER_ANIMATION=1
+            MYRENDERER_ANIMATION_TIME=1.0
+            MYRENDERER_RENDER_PATH=1
+            $<TARGET_FILE:MyRenderer>
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=4

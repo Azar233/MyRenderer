@@ -284,6 +284,11 @@
 | Frustum Culling（视锥剔除） | CPU/GPU 不提交相机视野外的物体。 | GP-P1C 从 View-Projection 提取六个平面，以世界空间包围球保守判断 2,500 个实例的可见性。 | 已实现（CPU） |
 | LOD（Level of Detail） | 根据距离或屏幕尺寸选择不同精度模型。 | GP-P1C 按投影像素半径选择三档顶点聚类索引；共享 Vertex Buffer，只切换 Element Buffer。 | 已实现（三档） |
 | Instancing（实例化） | 一次 Draw Call 绘制同一 Mesh 的多个不同 Transform 实例。 | GP-P1C 以 `glDrawElementsInstanced` 和 Mat4 Instance Buffer 合并同模型、Tint、LOD 的对象。 | 已实现 |
+| Skinning（骨骼蒙皮） | 用多个关节变换按顶点权重混合，让网格随骨架变形。 | GP-P1E 每顶点最多四权重，由 Vertex Shader 执行 Linear Blend Skinning。 | 已实现（GPU） |
+| Bind Pose（绑定姿势） | 网格绑定到骨架时的基准姿势，是动画与逆绑定矩阵计算的起点。 | 关闭动画后仍应用 Bind Joint Palette；固定回归确认模型不跳变。 | 已实现 |
+| Inverse Bind Matrix（逆绑定矩阵） | 把绑定姿势顶点从 Mesh 空间转换到某个关节的局部绑定空间。 | 每个 Mesh 独立保存并按其烘焙节点变换校正，再与动画关节 Global Matrix 相乘。 | 已实现 |
+| Animation Sampling（动画采样） | 在当前时间从相邻关键帧计算节点的位移、旋转和缩放。 | Translation/Scale 线性插值，Rotation 使用 Quaternion Slerp，Clip 到末尾后循环。 | 已实现（单 Clip） |
+| Skin Palette（蒙皮矩阵调色板） | 一组供 Vertex Shader 按 Joint Index 查找的关节矩阵。 | OpenGL 3.3 Uniform Array 每 Mesh 最多上传 64 个 `mat4`。 | 已实现 |
 | GPU-driven Rendering | 由 GPU 完成可见性、批次和间接绘制命令生成，减少 CPU 提交。 | GP-P2 备选旗舰。 | 计划 |
 | Visual Regression（视觉回归） | 用固定场景、固定机位和容差比较重拍图片，确认代码修改没有破坏既有画面。 | Glass-4 已用 14 张 1080p 基线覆盖玻璃、色散、焦散和 MSAA；属于[回归测试](https://vibe-hub.org/regression-test)的一种。 | 已完成 |
 | Frame Capture（帧捕获） | 保存一段 CPU/GPU 图形调用、时间线和调试标记，供 RenderDoc、Nsight 等工具离线检查。 | Glass-4 保存带 `KHR_debug` Pass 范围的 Nsight Systems 报告。 | 已完成 |

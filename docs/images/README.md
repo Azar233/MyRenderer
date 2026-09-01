@@ -79,3 +79,7 @@ GPU-tolerant MAE and changed-pixel thresholds rather than byte equality.
   under a stationary and deterministically rotating camera.
 - `gp_p1d_motion_vectors.png` / `gp_p1d_history_weight.png`: reprojection motion
   and accepted-history diagnostics used to inspect disocclusion and ghosting.
+- `gp_p1e_bind_pose.png` / `gp_p1e_animated_pose.png`: original three-joint
+  glTF fixture with animation disabled and sampled at the Wave clip's 1-second pose.
+- `gp_p1e_joint_debug.png` / `gp_p1e_weight_debug.png`: interpolated joint-palette
+  influence colors and dominant vertex-weight diagnostics.

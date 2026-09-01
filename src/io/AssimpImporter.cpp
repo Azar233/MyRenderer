@@ -22,6 +22,7 @@
 #include <assimp/scene.h>
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/matrix.hpp>
 
 namespace {
 
@@ -59,6 +60,32 @@ glm::mat4 toMat4(const aiMatrix4x4& value) {
         value.a3, value.b3, value.c3, value.d3,
         value.a4, value.b4, value.c4, value.d4
     };
+}
+
+glm::quat toQuat(const aiQuaternion& value) {
+    return glm::normalize(glm::quat(value.w, value.x, value.y, value.z));
+}
+
+void addVertexInfluence(Vertex& vertex, std::uint32_t jointIndex, float weight) {
+    if (!(weight > 0.0f)) return;
+    int destination = -1;
+    for (int component = 0; component < 4; ++component) {
+        if (vertex.jointWeights[component] <= 0.0f) {
+            destination = component;
+            break;
+        }
+    }
+    if (destination < 0) {
+        destination = 0;
+        for (int component = 1; component < 4; ++component) {
+            if (vertex.jointWeights[component] < vertex.jointWeights[destination]) {
+                destination = component;
+            }
+        }
+        if (weight <= vertex.jointWeights[destination]) return;
+    }
+    vertex.jointIndices[destination] = jointIndex;
+    vertex.jointWeights[destination] = weight;
 }
 
 std::vector<std::uint8_t> decodeBase64(std::string_view input) {
@@ -261,6 +288,7 @@ struct ImportContext {
     ModelData& model;
     std::string& warnings;
     std::vector<ModelDiagnostic>& diagnostics;
+    const std::unordered_map<std::string, std::uint32_t>& nodeIndices;
 
     std::optional<std::uint32_t> appendMesh(
         const aiMesh& source,
@@ -322,6 +350,62 @@ struct ImportContext {
             model.boundsMin = glm::min(model.boundsMin, vertex.position);
             model.boundsMax = glm::max(model.boundsMax, vertex.position);
             mesh.vertices.push_back(vertex);
+        }
+
+        if (source.HasBones()) {
+            const unsigned int boneCount = std::min(source.mNumBones, 64U);
+            mesh.skinJoints.reserve(boneCount);
+            const glm::mat4 inverseMeshTransform = glm::inverse(toMat4(globalTransform));
+            for (unsigned int boneIndex = 0; boneIndex < boneCount; ++boneIndex) {
+                const aiBone& bone = *source.mBones[boneIndex];
+                const auto node = nodeIndices.find(bone.mName.C_Str());
+                if (node == nodeIndices.end()) {
+                    addWarning(
+                        warnings,
+                        diagnostics,
+                        ModelDiagnosticScope::Node,
+                        bone.mName.C_Str(),
+                        "Skipped skin joint without a matching scene node."
+                    );
+                    continue;
+                }
+                const std::uint32_t paletteIndex = static_cast<std::uint32_t>(
+                    mesh.skinJoints.size()
+                );
+                mesh.skinJoints.push_back(SkinJointData{
+                    node->second,
+                    toMat4(bone.mOffsetMatrix) * inverseMeshTransform
+                });
+                for (unsigned int weightIndex = 0; weightIndex < bone.mNumWeights; ++weightIndex) {
+                    const aiVertexWeight& influence = bone.mWeights[weightIndex];
+                    if (influence.mVertexId < mesh.vertices.size()) {
+                        addVertexInfluence(
+                            mesh.vertices[influence.mVertexId],
+                            paletteIndex,
+                            influence.mWeight
+                        );
+                    }
+                }
+            }
+            for (Vertex& vertex : mesh.vertices) {
+                const float sum = vertex.jointWeights.x + vertex.jointWeights.y
+                    + vertex.jointWeights.z + vertex.jointWeights.w;
+                if (sum > 1.0e-6f) {
+                    vertex.jointWeights /= sum;
+                } else if (!mesh.skinJoints.empty()) {
+                    vertex.jointIndices = glm::uvec4(0U);
+                    vertex.jointWeights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+                }
+            }
+            if (source.mNumBones > 64U) {
+                addWarning(
+                    warnings,
+                    diagnostics,
+                    ModelDiagnosticScope::Mesh,
+                    mesh.name,
+                    "Skin palette was truncated to the OpenGL 3.3 limit of 64 joints."
+                );
+            }
         }
 
         for (unsigned int faceIndex = 0; faceIndex < source.mNumFaces; ++faceIndex) {
@@ -535,8 +619,86 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
         result.model.materials.push_back(std::move(material));
     }
 
-    ImportContext context{*scene, result.model, result.warnings, result.diagnostics};
+    std::unordered_map<std::string, std::uint32_t> nodeIndices;
+    std::function<void(const aiNode&, std::int32_t)> appendSkeletonNode;
+    appendSkeletonNode = [&](const aiNode& source, std::int32_t parentIndex) {
+        aiVector3D scale(1.0f);
+        aiVector3D translation(0.0f);
+        aiQuaternion rotation;
+        source.mTransformation.Decompose(scale, rotation, translation);
+        const std::uint32_t nodeIndex = static_cast<std::uint32_t>(
+            result.model.skeletonNodes.size()
+        );
+        const std::string name = source.mName.length > 0U
+            ? source.mName.C_Str()
+            : "Node";
+        nodeIndices.emplace(name, nodeIndex);
+        result.model.skeletonNodes.push_back(SkeletonNodeData{
+            name,
+            parentIndex,
+            toVec3(translation),
+            toQuat(rotation),
+            toVec3(scale)
+        });
+        for (unsigned int childIndex = 0; childIndex < source.mNumChildren; ++childIndex) {
+            appendSkeletonNode(*source.mChildren[childIndex], static_cast<std::int32_t>(nodeIndex));
+        }
+    };
+    appendSkeletonNode(*scene->mRootNode, -1);
+
+    ImportContext context{
+        *scene,
+        result.model,
+        result.warnings,
+        result.diagnostics,
+        nodeIndices
+    };
     result.model.rootNode = context.appendNode(*scene->mRootNode, aiMatrix4x4{});
+    result.model.animations.reserve(scene->mNumAnimations);
+    for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex) {
+        const aiAnimation& sourceAnimation = *scene->mAnimations[animationIndex];
+        const double ticksPerSecond = sourceAnimation.mTicksPerSecond > 0.0
+            ? sourceAnimation.mTicksPerSecond
+            : 25.0;
+        AnimationClipData clip;
+        clip.name = sourceAnimation.mName.length > 0U
+            ? sourceAnimation.mName.C_Str()
+            : "Animation " + std::to_string(animationIndex + 1U);
+        clip.durationSeconds = static_cast<float>(
+            sourceAnimation.mDuration / ticksPerSecond
+        );
+        clip.channels.reserve(sourceAnimation.mNumChannels);
+        for (unsigned int channelIndex = 0; channelIndex < sourceAnimation.mNumChannels; ++channelIndex) {
+            const aiNodeAnim& sourceChannel = *sourceAnimation.mChannels[channelIndex];
+            const auto node = nodeIndices.find(sourceChannel.mNodeName.C_Str());
+            if (node == nodeIndices.end()) continue;
+            AnimationChannelData channel;
+            channel.nodeIndex = node->second;
+            channel.translations.reserve(sourceChannel.mNumPositionKeys);
+            for (unsigned int key = 0; key < sourceChannel.mNumPositionKeys; ++key) {
+                channel.translations.push_back(AnimationVectorKey{
+                    static_cast<float>(sourceChannel.mPositionKeys[key].mTime / ticksPerSecond),
+                    toVec3(sourceChannel.mPositionKeys[key].mValue)
+                });
+            }
+            channel.rotations.reserve(sourceChannel.mNumRotationKeys);
+            for (unsigned int key = 0; key < sourceChannel.mNumRotationKeys; ++key) {
+                channel.rotations.push_back(AnimationRotationKey{
+                    static_cast<float>(sourceChannel.mRotationKeys[key].mTime / ticksPerSecond),
+                    toQuat(sourceChannel.mRotationKeys[key].mValue)
+                });
+            }
+            channel.scales.reserve(sourceChannel.mNumScalingKeys);
+            for (unsigned int key = 0; key < sourceChannel.mNumScalingKeys; ++key) {
+                channel.scales.push_back(AnimationVectorKey{
+                    static_cast<float>(sourceChannel.mScalingKeys[key].mTime / ticksPerSecond),
+                    toVec3(sourceChannel.mScalingKeys[key].mValue)
+                });
+            }
+            clip.channels.push_back(std::move(channel));
+        }
+        result.model.animations.push_back(std::move(clip));
+    }
     if (result.model.meshes.empty()) {
         throw std::runtime_error("Imported model does not contain triangle meshes");
     }

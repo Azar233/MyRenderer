@@ -554,7 +554,7 @@ void Renderer::render(
                     continue;
                 }
                 shadowShader_->setMat4("uModel", item.modelMatrix);
-                item.model->drawDepth();
+                item.model->drawDepth(*shadowShader_);
                 drawCallCount_ += item.model->opaqueSubmeshCount();
             }
             glCullFace(GL_BACK);
@@ -835,6 +835,10 @@ void Renderer::render(
             deferredLightingShader_->setInt("uCausticsMap", 9);
             deferredLightingShader_->setInt("uSsao", 10);
             deferredLightingShader_->setBool("uSsaoEnabled", ssaoActive);
+            deferredLightingShader_->setBool(
+                "uSkinningDebugActive",
+                settings.skinningDebugView != 0
+            );
             deferredLightingShader_->setMat4(
                 "uInverseViewProjection",
                 glm::inverse(projection * view)
@@ -998,13 +1002,13 @@ void Renderer::render(
                     const std::array<float, 4> farClear{1.0e20f, 0.0f, 0.0f, 0.0f};
                     glClearBufferfv(GL_COLOR, 0, farClear.data());
                     glBlendEquation(GL_MIN);
-                    item.model->drawTransmissiveDepth();
+                    item.model->drawTransmissiveDepth(*glassThicknessShader_);
 
                     renderTarget_->bindGlassBackfaceThickness();
                     const std::array<float, 4> nearClear{0.0f, 0.0f, 0.0f, 0.0f};
                     glClearBufferfv(GL_COLOR, 0, nearClear.data());
                     glBlendEquation(GL_MAX);
-                    item.model->drawTransmissiveDepth();
+                    item.model->drawTransmissiveDepth(*glassThicknessShader_);
 
                     glBlendEquation(GL_FUNC_ADD);
                     glDisable(GL_BLEND);
@@ -1024,7 +1028,7 @@ void Renderer::render(
                         "uGlassObjectId",
                         static_cast<int>(draw.renderItemIndex + 1U)
                     );
-                    item.model->drawTransmissiveDepth();
+                    item.model->drawTransmissiveDepth(*glassThicknessShader_);
                     drawCallCount_ += item.model->transmissiveSubmeshCount() * 3U;
 
                     renderTarget_->bindHdrSceneForOverlay();

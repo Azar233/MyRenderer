@@ -5,6 +5,8 @@ in vec3 vWorldNormal;
 in vec2 vTexCoord0;
 in vec4 vWorldTangent;
 in vec4 vShadowPosition;
+in vec3 vSkinJointColor;
+in float vSkinDominantWeight;
 
 uniform vec4 uBaseColor;
 uniform sampler2D uBaseColorTexture;
@@ -76,6 +78,7 @@ uniform int uAlphaMode;
 uniform float uAlphaCutoff;
 uniform bool uDoubleSided;
 uniform int uGlassObjectId;
+uniform int uSkinningDebugView;
 
 out vec4 fragmentColor;
 
@@ -411,6 +414,15 @@ void main() {
     }
     float outputAlpha = uAlphaMode == 2 ? baseColorSample.a : 1.0;
     vec3 albedo = baseColorSample.rgb;
+    if (uSkinningDebugView != 0) {
+        float weight = clamp(vSkinDominantWeight, 0.0, 1.0);
+        if (uSkinningDebugView == 1) {
+            fragmentColor = vec4(vSkinJointColor, 1.0);
+        } else {
+            fragmentColor = vec4(1.0 - weight, weight, 0.15 + 0.35 * weight, 1.0);
+        }
+        return;
+    }
     vec2 materialSample = uHasMetallicRoughnessTexture
         ? texture(uMetallicRoughnessTexture, vTexCoord0).gb
         : vec2(1.0);

@@ -34,6 +34,7 @@ uniform bool uShadowsEnabled;
 uniform bool uColoredTransmissionShadowsEnabled;
 uniform bool uCausticsEnabled;
 uniform bool uSsaoEnabled;
+uniform bool uSkinningDebugActive;
 uniform int uGBufferDebugView;
 
 out vec4 fragmentColor;
@@ -126,6 +127,12 @@ void main() {
     vec3 albedo = texture(uGAlbedo, vUv).rgb;
     vec3 encodedNormal = texture(uGNormal, vUv).rgb;
     vec2 material = texture(uGMaterial, vUv).rg;
+
+    if (uSkinningDebugActive) {
+        if (depth >= 0.999999) discard;
+        fragmentColor = vec4(albedo, 1.0);
+        return;
+    }
 
     if (uGBufferDebugView == 1) {
         fragmentColor = vec4(albedo, 1.0);

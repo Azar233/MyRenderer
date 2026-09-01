@@ -505,7 +505,7 @@ Glass 阶段验收：Glass-2C 完成后，弯曲球体应达到 Khronos `KHR_mat
 - [x] 建立多光源压力场景：点光 / 聚光、至少三档灯光数量；记录 Forward 与 Deferred 在同一机器同一画面下的 GPU 时间、带宽和 Draw Call 差异。
 - [x] 实现实例化、CPU Frustum Culling 和 LOD 选择；用同一 Mesh 的大规模实例场景证明提交与几何优化，不以空场 FPS 作为结果。
 - [x] 从 SSAO、TAA、SSR 中选择两项实现，其中优先 TAA：需要 Motion Vector、Halton Jitter、History Reprojection、Neighborhood Clamp、静止/运动 Ghosting 对照。
-- [ ] 增加骨骼动画最小闭环：glTF Skin、Joint/Weight、Animation Sampling、GPU Skinning；提供 bind pose、动画和骨骼/权重调试视图。
+- [x] 增加骨骼动画最小闭环：glTF Skin、Joint/Weight、Animation Sampling、GPU Skinning；提供 bind pose、动画和骨骼/权重调试视图。
 - [ ] 给每项优化建立 Before / After Capture；报告必须同时写画质代价、CPU/GPU/显存变化，不能只写“FPS 提升”。
 
 > GP-P1A Deferred 基线完成（2026-08-25）：新增可切换的 Forward / Hybrid Deferred 路径；不透明物以 MRT 写入 RGBA8 Albedo、RGBA16F Encoded Normal、RG8 Metallic/Roughness 与 Depth24/Stencil8，再由全屏 Lighting Pass 重建世界坐标并计算 PBR/IBL/Shadow/Caustics；透明与玻璃保留 Forward Refractive Pass。Inspector 提供 Final + 4 种原始 Attachment 调试，调试时自动绕过天空盒、Overlay、透明和后处理。6 张 1080p 固定回归中 Forward/Deferred 最终画面 MAE 0.000517、变化像素 0.135%。RTX 4060 Laptop 4× MSAA 下 Forward/Deferred GPU P50 为 1.435/1.860 ms，显存估算为 291.2/469.1 MiB；当前单光源阶段不宣称性能收益。详见 `docs/deferred-shading.md`。下一项进入点光/聚光多光源压力场景与扩展性曲线。
@@ -515,6 +515,8 @@ Glass 阶段验收：Glass-2C 完成后，弯曲球体应达到 Khronos `KHR_mat
 > GP-P1C 实例提交与几何优化完成（2026-08-29）：新增 2,500 个 `sphere.obj` 实例的固定场景，按 GpuModel、Tint 与 LOD 使用 `glDrawElementsInstanced` 合批；CPU 从 View-Projection 提取六平面视锥，用保守世界包围球剔除，并按投影像素半径选择三档顶点聚类索引 LOD。RTX 4060 Laptop、1080p、4×MSAA 下，完整路径将 Draw Call 从 2,501 降至 19，提交三角形从 800,000 降至 477,636，CPU Frame P50 从 5.386 ms 降至 2.077 ms，GPU Frame P50 从 1.465 ms 降至 0.653 ms；2,390 个可见实例的 CPU 准备成本为 0.110 ms。已保存优化前后视觉基线和 Baseline / Instancing / +Culling / +LOD 四段 JSON，边界与复现命令见 `docs/instance-culling-lod.md`。下一项进入 TAA 与 SSAO/SSR 二选一。
 
 > GP-P1D TAA 与 SSAO 完成（2026-08-31）：TAA 使用 8 样本 Halton(2,3) Jitter、当前深度世界坐标重建、上一帧 View-Projection History Reprojection、历史深度拒绝与 3×3 Neighborhood Clamp，并以 RG16F 输出 Motion Vector、RGBA16F Alpha 输出历史接受权重；SSAO 使用 16 样本观察空间半球、G-Buffer Depth/Normal 和 5×5 深度感知滤波，仅调制 Ambient/IBL。7 张 1080p 固定回归覆盖 SSAO Final/Debug、TAA 静止/运动、Motion Vector 与 History Weight。RTX 4060 Laptop、1080p、1×MSAA 下 Baseline / TAA moving / SSAO+TAA 的 GPU P50 分别为 0.536 / 0.695 / 1.457 ms；SSAO 与 TAA Pass P50 分别约 0.728 / 0.230 ms。对象自身 Motion Vector 尚未实现，下一项进入 glTF Skin / Animation / GPU Skinning 最小闭环。详见 `docs/taa-ssao.md`。
+
+> GP-P1E 骨骼动画最小闭环完成（2026-09-01）：Assimp glTF 导入现保留每顶点四组 Joint/Weight、每 Mesh 独立 Skin Palette、Inverse Bind Matrix、完整节点层级与 Animation Channel；运行时线性采样 Translation/Scale、Quaternion Slerp Rotation，并为主渲染、Shadow、Transmission Shadow、Caustics 和 Glass Thickness Pass 上传最多 64 个关节矩阵执行 GPU Linear Blend Skinning。Inspector 支持 Bind Pose、Clip、播放/暂停、时间 Scrub、速度和 Joint Influence / Dominant Weight 调试。新增原创 3-Joint `skinning_test.gltf`、CPU 导入断言、4 张固定视觉回归和 3 组 1080p 基准；Bind/Animated GPU P50 为 0.592/0.675 ms，但小资产只用于正确性验证。动画混合、Root Motion、动态 Bounds 和骨骼 Motion Vector 属于已知后续项。详见 `docs/gpu-skinning.md`。
 
 #### GP-P2：旗舰方向三选一（只选一个做深）
 

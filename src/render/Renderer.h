@@ -160,6 +160,7 @@ struct RendererSettings {
     bool temporalAaEnabled{false};
     float temporalHistoryWeight{0.9f};
     int temporalDebugView{0};
+    int skinningDebugView{0};
 };
 
 struct RenderItem {

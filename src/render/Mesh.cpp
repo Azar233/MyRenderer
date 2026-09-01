@@ -181,6 +181,23 @@ Mesh::Mesh(const MeshData& data)
         static_cast<GLsizei>(sizeof(Vertex)),
         reinterpret_cast<void*>(offsetof(Vertex, tangent))
     );
+    glEnableVertexAttribArray(8);
+    glVertexAttribIPointer(
+        8,
+        4,
+        GL_UNSIGNED_INT,
+        static_cast<GLsizei>(sizeof(Vertex)),
+        reinterpret_cast<void*>(offsetof(Vertex, jointIndices))
+    );
+    glEnableVertexAttribArray(9);
+    glVertexAttribPointer(
+        9,
+        4,
+        GL_FLOAT,
+        GL_FALSE,
+        static_cast<GLsizei>(sizeof(Vertex)),
+        reinterpret_cast<void*>(offsetof(Vertex, jointWeights))
+    );
 
     glBindBuffer(GL_ARRAY_BUFFER, instanceVbo_);
     const glm::mat4 identityInstance(1.0f);

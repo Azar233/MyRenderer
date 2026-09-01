@@ -1,12 +1,15 @@
 #include "render/GpuModel.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
 #include <glad/gl.h>
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -25,6 +28,44 @@ glm::vec3 srgbToLinear(const glm::vec3& color) {
             : std::pow((value + 0.055f) / 1.055f, 2.4f);
     }
     return linear;
+}
+
+glm::vec3 sampleVector(
+    const std::vector<AnimationVectorKey>& keys,
+    float time,
+    const glm::vec3& fallback
+) {
+    if (keys.empty()) return fallback;
+    if (keys.size() == 1U || time <= keys.front().timeSeconds) return keys.front().value;
+    if (time >= keys.back().timeSeconds) return keys.back().value;
+    const auto upper = std::upper_bound(
+        keys.begin(), keys.end(), time,
+        [](float value, const AnimationVectorKey& key) { return value < key.timeSeconds; }
+    );
+    const auto lower = std::prev(upper);
+    const float span = std::max(upper->timeSeconds - lower->timeSeconds, 1.0e-6f);
+    return glm::mix(lower->value, upper->value, (time - lower->timeSeconds) / span);
+}
+
+glm::quat sampleRotation(
+    const std::vector<AnimationRotationKey>& keys,
+    float time,
+    const glm::quat& fallback
+) {
+    if (keys.empty()) return fallback;
+    if (keys.size() == 1U || time <= keys.front().timeSeconds) return keys.front().value;
+    if (time >= keys.back().timeSeconds) return keys.back().value;
+    const auto upper = std::upper_bound(
+        keys.begin(), keys.end(), time,
+        [](float value, const AnimationRotationKey& key) { return value < key.timeSeconds; }
+    );
+    const auto lower = std::prev(upper);
+    const float span = std::max(upper->timeSeconds - lower->timeSeconds, 1.0e-6f);
+    return glm::normalize(glm::slerp(
+        lower->value,
+        upper->value,
+        (time - lower->timeSeconds) / span
+    ));
 }
 
 } // namespace
@@ -114,13 +155,21 @@ GpuModel::GpuModel(
     }
 
     meshes_.reserve(data.meshes.size());
+    meshSkinJoints_.reserve(data.meshes.size());
     for (const auto& meshData : data.meshes) {
         auto mesh = std::make_unique<Mesh>(meshData);
         submeshCount_ += mesh->submeshCount();
         vertexCount_ += mesh->vertexCount();
         triangleCount_ += mesh->triangleCount();
         meshes_.push_back(std::move(mesh));
+        meshSkinJoints_.push_back(meshData.skinJoints);
+        jointCount_ += meshData.skinJoints.size();
     }
+
+    skeletonNodes_ = data.skeletonNodes;
+    animations_ = data.animations;
+    nodeGlobalTransforms_.resize(skeletonNodes_.size(), glm::mat4(1.0f));
+    updateAnimation(false, 0U, 0.0f);
 
     for (std::size_t meshIndex = 0; meshIndex < meshes_.size(); ++meshIndex) {
         const Mesh& mesh = *meshes_[meshIndex];
@@ -229,6 +278,7 @@ void GpuModel::drawOpaque(const Shader& shader, const glm::vec3& tint, bool cull
     shader.setBool("uInstanced", false);
     const glm::vec3 linearTint = srgbToLinear(tint);
     for (const DrawCommand& command : opaqueDrawCommands_) {
+        bindSkinning(shader, command.meshIndex);
         const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
         applyCullState(material, cullBackFaces);
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
@@ -246,6 +296,7 @@ void GpuModel::drawOpaqueInstanced(
     shader.setBool("uInstanced", true);
     const glm::vec3 linearTint = srgbToLinear(tint);
     for (const DrawCommand& command : opaqueDrawCommands_) {
+        bindSkinning(shader, command.meshIndex);
         const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
         applyCullState(material, cullBackFaces);
         meshes_[command.meshIndex]->drawSubmeshInstanced(
@@ -273,6 +324,7 @@ void GpuModel::drawTransparentSubmesh(
         throw std::out_of_range("Transparent submesh index is out of range");
     }
     const DrawCommand& command = transparentDrawCommands_[transparentSubmeshIndex];
+    bindSkinning(shader, command.meshIndex);
     const glm::vec3 linearTint = srgbToLinear(tint);
     const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
     applyCullState(material, cullBackFaces);
@@ -299,14 +351,16 @@ bool GpuModel::transparentSubmeshIsTransmissive(
         && materials_[static_cast<std::size_t>(materialIndex)].transmissionFactor > 0.0f;
 }
 
-void GpuModel::drawDepth() const {
+void GpuModel::drawDepth(const Shader& shader) const {
     for (const DrawCommand& command : opaqueDrawCommands_) {
+        bindSkinning(shader, command.meshIndex);
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
 }
 
-void GpuModel::drawTransmissiveDepth() const {
+void GpuModel::drawTransmissiveDepth(const Shader& shader) const {
     for (const DrawCommand& command : transmissiveDrawCommands_) {
+        bindSkinning(shader, command.meshIndex);
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
 }
@@ -314,8 +368,73 @@ void GpuModel::drawTransmissiveDepth() const {
 void GpuModel::drawTransmissive(const Shader& shader, const glm::vec3& tint) const {
     const glm::vec3 linearTint = srgbToLinear(tint);
     for (const DrawCommand& command : transmissiveDrawCommands_) {
+        bindSkinning(shader, command.meshIndex);
         bindMaterial(shader, linearTint, command.materialIndex);
         glDisable(GL_CULL_FACE);
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
+}
+
+const std::string& GpuModel::animationName(std::size_t index) const {
+    if (index >= animations_.size()) throw std::out_of_range("Animation index is out of range");
+    return animations_[index].name;
+}
+
+float GpuModel::animationDuration(std::size_t index) const {
+    if (index >= animations_.size()) return 0.0f;
+    return animations_[index].durationSeconds;
+}
+
+void GpuModel::updateAnimation(bool enabled, std::size_t clipIndex, float timeSeconds) {
+    const AnimationClipData* clip = enabled && clipIndex < animations_.size()
+        ? &animations_[clipIndex]
+        : nullptr;
+    float sampleTime = std::max(timeSeconds, 0.0f);
+    if (clip != nullptr && clip->durationSeconds > 1.0e-6f) {
+        sampleTime = std::fmod(sampleTime, clip->durationSeconds);
+    }
+    for (std::size_t nodeIndex = 0; nodeIndex < skeletonNodes_.size(); ++nodeIndex) {
+        const SkeletonNodeData& node = skeletonNodes_[nodeIndex];
+        glm::vec3 translation = node.bindTranslation;
+        glm::quat rotation = node.bindRotation;
+        glm::vec3 scale = node.bindScale;
+        if (clip != nullptr) {
+            const auto channel = std::find_if(
+                clip->channels.begin(), clip->channels.end(),
+                [&](const AnimationChannelData& candidate) {
+                    return candidate.nodeIndex == nodeIndex;
+                }
+            );
+            if (channel != clip->channels.end()) {
+                translation = sampleVector(channel->translations, sampleTime, translation);
+                rotation = sampleRotation(channel->rotations, sampleTime, rotation);
+                scale = sampleVector(channel->scales, sampleTime, scale);
+            }
+        }
+        const glm::mat4 local = glm::translate(glm::mat4(1.0f), translation)
+            * glm::mat4_cast(rotation)
+            * glm::scale(glm::mat4(1.0f), scale);
+        nodeGlobalTransforms_[nodeIndex] = node.parentIndex >= 0
+            ? nodeGlobalTransforms_[static_cast<std::size_t>(node.parentIndex)] * local
+            : local;
+    }
+}
+
+void GpuModel::bindSkinning(const Shader& shader, std::size_t meshIndex) const {
+    if (meshIndex >= meshSkinJoints_.size() || meshSkinJoints_[meshIndex].empty()) {
+        shader.setBool("uSkinningEnabled", false);
+        shader.setInt("uSkinningDebugView", 0);
+        return;
+    }
+    const auto& joints = meshSkinJoints_[meshIndex];
+    std::array<glm::mat4, 64> palette{};
+    for (std::size_t index = 0; index < joints.size() && index < palette.size(); ++index) {
+        const SkinJointData& joint = joints[index];
+        palette[index] = joint.nodeIndex < nodeGlobalTransforms_.size()
+            ? nodeGlobalTransforms_[joint.nodeIndex] * joint.inverseBindMatrix
+            : glm::mat4(1.0f);
+    }
+    shader.setBool("uSkinningEnabled", true);
+    shader.setInt("uSkinningDebugView", skinningDebugView_);
+    shader.setMat4Array("uJointMatrices[0]", palette.data(), std::min(joints.size(), palette.size()));
 }

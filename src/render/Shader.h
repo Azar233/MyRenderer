@@ -29,6 +29,7 @@ public:
     void setVec4(const char* name, const glm::vec4& value) const;
     void setVec4Array(const char* name, const glm::vec4* values, std::size_t count) const;
     void setMat4(const char* name, const glm::mat4& value) const;
+    void setMat4Array(const char* name, const glm::mat4* values, std::size_t count) const;
 
 private:
     static std::string readFile(const std::filesystem::path& path);

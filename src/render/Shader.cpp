@@ -123,6 +123,16 @@ void Shader::setMat4(const char* name, const glm::mat4& value) const {
     glUniformMatrix4fv(uniformLocation(name), 1, GL_FALSE, glm::value_ptr(value));
 }
 
+void Shader::setMat4Array(const char* name, const glm::mat4* values, std::size_t count) const {
+    if (values == nullptr || count == 0U) return;
+    glUniformMatrix4fv(
+        uniformLocation(name),
+        static_cast<GLsizei>(count),
+        GL_FALSE,
+        glm::value_ptr(values[0])
+    );
+}
+
 std::string Shader::readFile(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {

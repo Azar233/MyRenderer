@@ -174,6 +174,13 @@ private:
     bool benchmarkMode_{false};
     bool prismReelMode_{false};
     bool temporalMotionDemoEnabled_{false};
+    bool animationDemoEnabled_{false};
+    bool animationEnabled_{false};
+    bool animationPlaying_{true};
+    bool animationTimeFixed_{false};
+    float animationTimeSeconds_{0.0f};
+    float animationSpeed_{1.0f};
+    std::size_t animationClipIndex_{0U};
     int localLightTierIndex_{1};
     VolumeGlassPreset volumeGlassPreset_{VolumeGlassPreset::Olive};
     PrismOpticalPreset prismOpticalPreset_{PrismOpticalPreset::CrownGlass};

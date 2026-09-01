@@ -1,0 +1,73 @@
+{
+  "asset": {"version": "2.0", "generator": "MyRenderer GP-P1E fixture"},
+  "scene": 0,
+  "scenes": [{"name": "Skinning validation", "nodes": [0]}],
+  "nodes": [
+    {"name": "SceneRoot", "children": [1, 2]},
+    {"name": "SkinnedRibbon", "mesh": 0, "skin": 0},
+    {"name": "RootJoint", "children": [3]},
+    {"name": "MidJoint", "translation": [0, 1, 0], "children": [4]},
+    {"name": "TipJoint", "translation": [0, 1, 0]}
+  ],
+  "meshes": [{
+    "name": "WeightedRibbon",
+    "primitives": [{
+      "attributes": {
+        "POSITION": 0,
+        "NORMAL": 1,
+        "TEXCOORD_0": 2,
+        "JOINTS_0": 3,
+        "WEIGHTS_0": 4
+      },
+      "indices": 5,
+      "material": 0,
+      "mode": 4
+    }]
+  }],
+  "skins": [{
+    "name": "ThreeJointSkin",
+    "inverseBindMatrices": 6,
+    "skeleton": 2,
+    "joints": [2, 3, 4]
+  }],
+  "animations": [{
+    "name": "Wave",
+    "samplers": [{"input": 7, "output": 8, "interpolation": "LINEAR"}],
+    "channels": [{"sampler": 0, "target": {"node": 3, "path": "rotation"}}]
+  }],
+  "materials": [{
+    "name": "SkinningBlue",
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.08, 0.42, 0.92, 1.0],
+      "metallicFactor": 0.15,
+      "roughnessFactor": 0.32
+    },
+    "doubleSided": true
+  }],
+  "buffers": [{
+    "byteLength": 840,
+    "uri": "data:application/octet-stream;base64,KVyPvgAAAAAAAAAAKVyPPgAAAAAAAAAAKVyPvgAAAD8AAAAAKVyPPgAAAD8AAAAAKVyPvgAAgD8AAAAAKVyPPgAAgD8AAAAAKVyPvgAAwD8AAAAAKVyPPgAAwD8AAAAAKVyPvgAAAEAAAAAAKVyPPgAAAEAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA+AACAPwAAgD4AAAAAAAAAPwAAgD8AAAA/AAAAAAAAQD8AAIA/AABAPwAAAAAAAIA/AACAPwAAgD8AAAAAAAAAAAABAAAAAQAAAQAAAAEAAAABAgAAAQIAAAIAAAACAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAA/AAAAPwAAAAAAAAAAAAAAPwAAAD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAPwAAAD8AAAAAAAAAAAAAAD8AAAA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAQADAAAAAwACAAIAAwAFAAIABQAEAAQABQAHAAQABwAGAAYABwAJAAYACQAIAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAvwAAAAAAAIA/AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAMAAAAAAAACAPwAAAAAAAIA/AAAAQAAAQEAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAc9pk+yyZ0PwAAAAAAAAAAHPaZvssmdD8AAAAAAAAAAAAAAAAAAIA/"
+  }],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 120, "target": 34962},
+    {"buffer": 0, "byteOffset": 120, "byteLength": 120, "target": 34962},
+    {"buffer": 0, "byteOffset": 240, "byteLength": 80, "target": 34962},
+    {"buffer": 0, "byteOffset": 320, "byteLength": 40, "target": 34962},
+    {"buffer": 0, "byteOffset": 360, "byteLength": 160, "target": 34962},
+    {"buffer": 0, "byteOffset": 520, "byteLength": 48, "target": 34963},
+    {"buffer": 0, "byteOffset": 568, "byteLength": 192},
+    {"buffer": 0, "byteOffset": 760, "byteLength": 16},
+    {"buffer": 0, "byteOffset": 776, "byteLength": 64}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 10, "type": "VEC3", "min": [-0.28, 0, 0], "max": [0.28, 2, 0]},
+    {"bufferView": 1, "componentType": 5126, "count": 10, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5126, "count": 10, "type": "VEC2"},
+    {"bufferView": 3, "componentType": 5121, "count": 10, "type": "VEC4"},
+    {"bufferView": 4, "componentType": 5126, "count": 10, "type": "VEC4"},
+    {"bufferView": 5, "componentType": 5123, "count": 24, "type": "SCALAR"},
+    {"bufferView": 6, "componentType": 5126, "count": 3, "type": "MAT4"},
+    {"bufferView": 7, "componentType": 5126, "count": 4, "type": "SCALAR", "min": [0], "max": [3]},
+    {"bufferView": 8, "componentType": 5126, "count": 4, "type": "VEC4"}
+  ]
+}

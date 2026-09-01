@@ -23,6 +23,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - Point Light / Spot Light 局部光照与确定性压力场景：8/32/64 三档灯光、100 个独立物体、平滑有限半径逆平方衰减与聚光锥；GUI/Benchmark 对比 Forward/Deferred 的 GPU P50/P95、Draw Call、显存和估算 Attachment 流量。
 - GPU Instancing、CPU Frustum Culling 与屏幕尺寸 LOD：2,500 个共享 Sphere Mesh 的固定场景按模型/Tint/LOD 合批，六平面包围球剔除并切换三档聚类索引；1080p/4×MSAA 实测 Draw Call 2,501→19、CPU P50 5.386→2.077 ms、GPU P50 1.465→0.653 ms。
 - TAA 与 SSAO 屏幕空间管线：8 样本 Halton Jitter、深度反投影 Motion Vector、History Reprojection、历史深度拒绝、3×3 Neighborhood Clamp，以及 16 样本 SSAO + 5×5 深度感知滤波；提供静止/运动 Ghosting、Motion、History Weight 和 SSAO 调试基线。
+- glTF Skin 与 GPU 骨骼动画：每顶点四组 Joint/Weight、每 Mesh Skin Palette、Inverse Bind Matrix、节点层级、Clip/TRS 关键帧采样与 Vertex Shader Linear Blend Skinning；支持 Bind Pose、播放/暂停、时间拖动、速度和关节/权重调试。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
@@ -71,7 +72,7 @@ cmake --build build-mingw --parallel
 
 - Scene 面板：查看主体、地面接收器与可选对照实例，切换 `assets/models` 中的 OBJ、DAE、glTF/GLB，使用原生文件选择器，输入其他模型路径，或把模型文件拖入窗口。CPU 导入期间会显示文件大小、耗时和活动进度，当前场景保持可用。
 - Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
-- Inspector / Renderer：切换 Forward / Deferred (hybrid)、G-Buffer Albedo/Encoded Normal/Metallic-Roughness/Depth/SSAO 调试、TAA Final/Motion/History Weight、PBR、IBL、天空盒、阴影、彩色透射阴影、HDR Caustics、Transmission、Geometric Glass Thickness、ACES、Bloom、线框、背面剔除、法线贴图、地面网格、XYZ 轴线和 1x/4x MSAA；调整 SSAO Radius/Bias/Strength、TAA History Weight、焦散、折射、体积、色散、环境、曝光、灯光与 FOV，并查看活动 Pass 和 GPU 时间。
+- Inspector / Renderer：选择并播放 glTF Animation Clip、切换 Bind Pose、拖动动画时间、调整速度、查看 Joint Influence/Dominant Weight；同时可切换 Forward / Deferred、G-Buffer/SSAO/TAA 调试、PBR、IBL、阴影、玻璃、ACES、Bloom、Rasterization 和 1x/4x MSAA，并查看活动 Pass 与 GPU 时间。
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
 - View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber / Crystal 四组体积玻璃参数。
 - View / `Glass caustics preset`：加载透明水晶球、白色接收地面与固定高机位，默认启用 Light-space RGB 焦散、彩色透射阴影和空间滤波；可即时切到 Projector / Decal 做美术对照。
@@ -87,9 +88,9 @@ ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRe
 
 所有格式最终转换为相同的 `ModelData`、子网格、材质和纹理来源数据。渲染层统一解码并缓存外部或内嵌图像，基础色 Shader 将材质因子、可调 Tint 和基础色贴图相乘；没有贴图的材质使用白色纹理，无法解码或缺失的基础色贴图使用洋红棋盘并在状态区报告原因。基础色纹理使用 sRGB 内部格式，法线贴图保持线性数据；光照在线性空间完成，最终颜色仅进行一次 sRGB 编码。
 
-OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流（粗糙度在 G 通道、金属度在 B 通道），并支持基础 Alpha Mode、双面材质、`KHR_materials_transmission`、`KHR_materials_ior`、`KHR_materials_volume` 和 `KHR_materials_dispersion`。Alpha Blending 只做颜色覆盖率合成；Glass-1～2B 已完成透射、几何厚度、Beer-Lambert 吸收与色散。Glass-2C 按 `RenderItem` 重建 R32F 入口/出口深度、RGBA16F 出射法线和 R32UI 对象 ID，沿内部折射方向追踪真实退出点，再执行玻璃→空气的第二次 Snell 折射；无有效退出点时继续使用稳定的局部平行表面回退。对象级缓存解决独立玻璃实例互相串层，但同一 `RenderItem` 内的嵌套/凹形多壳体仍属于屏幕空间近似。环境光来自 Poly Haven 的 CC0 Radiance HDRI，并预计算标准 Split-Sum IBL。骨骼动画和 FBX 尚未启用。
+OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流，并支持 Alpha Mode、双面材质、Transmission、IOR、Volume 和 Dispersion。glTF Skin/Animation 支持最多四权重、每 Mesh 64 关节、单 Clip TRS 采样与 GPU Linear Blend Skinning；尚不支持动画混合、Root Motion、动态 Bounds、Morph Target 和 FBX。
 
-固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）、`glass_volume_sphere.gltf`（1,986 顶点闭合流形球体）和 `prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）。默认环境为 Poly Haven 的 2K `Delta 2` CC0 HDRI，来源和许可记录见 `assets/environments/README.md`。
+固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）、`glass_volume_sphere.gltf`（1,986 顶点闭合流形球体）、`prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）和 `skinning_test.gltf`（原创 3-Joint Wave 动画）。默认环境为 Poly Haven 的 2K `Delta 2` CC0 HDRI，来源和许可记录见 `assets/environments/README.md`。
 
 ## 自动测试
 
@@ -193,6 +194,15 @@ cmake --build build-release --target screen-space-benchmark
 
 视觉矩阵覆盖 Baseline、SSAO Final/Debug、TAA Static/Moving、Motion Vector 与 History Weight。RTX 4060 Laptop、1080p、1×MSAA 下 Baseline / TAA moving / SSAO+TAA GPU P50 为 0.536 / 0.695 / 1.457 ms；算法、显存策略与对象运动边界见 `docs/taa-ssao.md`。
 
+GP-P1E glTF 骨骼动画可重复执行：
+
+```powershell
+cmake --build build-release --target skinning-visual-regression
+cmake --build build-release --target skinning-benchmark
+```
+
+视觉回归覆盖 Bind Pose、1 秒动画姿势、Joint Influence 与 Dominant Weight。原创固定资产包含 3 个关节和一个 3 秒 Wave Clip；导入、采样、GPU Palette、性能数据与限制见 `docs/gpu-skinning.md`。
+
 `gpu-smoke` 目标会运行材质场景以及“成功场景后加载错误资产”的恢复测试，确保 GPU 路径使用真实上下文且失败导入保留当前场景：
 
 ```powershell
@@ -215,9 +225,9 @@ python tools/encode_prism5_reel.py build-release/prism5-reel-frames docs/media/p
 ```text
 src/app/Application.*    窗口、主循环、后台导入、ImGui 与模块整合
 src/app/FileDialog.*     Windows 原生模型文件选择器
-src/asset/ModelData.h    格式无关的顶点、材质、子网格、Mesh 与节点数据
+src/asset/ModelData.h    格式无关的顶点、材质、Mesh、Skin、骨架节点与 Animation Clip 数据
 src/io/ModelImporter.h   统一模型导入接口与导入结果
-src/io/AssimpImporter.*  DAE 与 glTF/GLB 静态模型导入适配
+src/io/AssimpImporter.*  DAE 与 glTF/GLB 模型、Skin 与 Animation 导入适配
 src/io/ObjLoader.*       OBJ 导入器：统一索引、UV、法线与 AABB
 src/optics/PrismOptics.* 无 OpenGL 依赖的三棱镜求交、双界面折射、Fresnel 与 TIR
 src/optics/PrismDemo.*   Prism 参数、四组光学 Preset、White Point 与实时求解入口

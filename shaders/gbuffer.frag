@@ -3,6 +3,8 @@
 in vec3 vWorldNormal;
 in vec2 vTexCoord0;
 in vec4 vWorldTangent;
+in vec3 vSkinJointColor;
+in float vSkinDominantWeight;
 
 uniform vec4 uBaseColor;
 uniform sampler2D uBaseColorTexture;
@@ -15,6 +17,7 @@ uniform float uMetallicFactor;
 uniform float uRoughnessFactor;
 uniform int uAlphaMode;
 uniform float uAlphaCutoff;
+uniform int uSkinningDebugView;
 
 layout (location = 0) out vec4 gAlbedo;
 layout (location = 1) out vec4 gEncodedNormal;
@@ -23,6 +26,15 @@ layout (location = 2) out vec2 gMetallicRoughness;
 void main() {
     vec4 baseColor = uBaseColor * texture(uBaseColorTexture, vTexCoord0);
     if (uAlphaMode == 1 && baseColor.a < uAlphaCutoff) discard;
+
+    if (uSkinningDebugView != 0) {
+        float weight = clamp(vSkinDominantWeight, 0.0, 1.0);
+        if (uSkinningDebugView == 1) {
+            baseColor.rgb = vSkinJointColor;
+        } else {
+            baseColor.rgb = vec3(1.0 - weight, weight, 0.15 + 0.35 * weight);
+        }
+    }
 
     vec3 normal = normalize(vWorldNormal);
     if (uNormalMappingEnabled && uHasNormalTexture) {

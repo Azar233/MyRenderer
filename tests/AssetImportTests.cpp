@@ -204,6 +204,34 @@ int main() {
             "KHR_materials_dispersion should survive import"
         );
 
+        const ModelImportResult skinning = assimp.load(asset("skinning_test.gltf"));
+        require(skinning.model.meshes.size() == 1U, "skinning fixture should import one mesh");
+        require(
+            skinning.model.meshes.front().skinJoints.size() == 3U,
+            "glTF skin should preserve its three-joint palette"
+        );
+        require(
+            skinning.model.animations.size() == 1U,
+            "glTF animation clip should survive import"
+        );
+        require(
+            skinning.model.animations.front().durationSeconds > 2.99f,
+            "animation duration should be converted to seconds"
+        );
+        require(
+            !skinning.model.animations.front().channels.empty()
+                && skinning.model.animations.front().channels.front().rotations.size() == 4U,
+            "rotation keyframes should survive animation import"
+        );
+        for (const Vertex& vertex : skinning.model.meshes.front().vertices) {
+            const float weightSum = vertex.jointWeights.x + vertex.jointWeights.y
+                + vertex.jointWeights.z + vertex.jointWeights.w;
+            require(
+                weightSum > 0.999f && weightSum < 1.001f,
+                "skinning weights should be normalized per vertex"
+            );
+        }
+
         const ModelImportResult dae = assimp.load(asset("textured_quad.dae"));
         require(!dae.model.meshes.empty(), "DAE fixture should import a mesh");
         require(!dae.model.textures.empty(), "DAE fixture should import its external texture reference");

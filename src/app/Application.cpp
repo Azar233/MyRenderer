@@ -264,6 +264,21 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_TAA_MOTION_DEMO")) {
         temporalMotionDemoEnabled_ = std::atoi(value) != 0;
     }
+    if (const char* value = std::getenv("MYRENDERER_ANIMATION_DEMO")) {
+        animationDemoEnabled_ = std::atoi(value) != 0;
+        animationEnabled_ = animationDemoEnabled_;
+    }
+    if (const char* value = std::getenv("MYRENDERER_ANIMATION")) {
+        animationEnabled_ = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_ANIMATION_TIME")) {
+        animationTimeSeconds_ = std::max(std::strtof(value, nullptr), 0.0f);
+        animationTimeFixed_ = true;
+        animationPlaying_ = false;
+    }
+    if (const char* value = std::getenv("MYRENDERER_SKIN_DEBUG")) {
+        rendererSettings_.skinningDebugView = std::clamp(std::atoi(value), 0, 2);
+    }
     if (const char* value = std::getenv("MYRENDERER_PBR")) rendererSettings_.pbrEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_IBL")) rendererSettings_.iblEnabled = std::atoi(value) != 0;
     if (const char* value = std::getenv("MYRENDERER_SHADOWS")) rendererSettings_.shadowsEnabled = std::atoi(value) != 0;
@@ -360,13 +375,15 @@ int Application::run(const std::filesystem::path& initialModel) {
 
     std::filesystem::path modelToLoad = initialModel;
     if (modelToLoad.empty()) {
-        const auto defaultModel = prismDemoEnabled_
+        const auto defaultModel = animationDemoEnabled_
+            ? sourceRoot_ / "assets" / "models" / "skinning_test.gltf"
+            : (prismDemoEnabled_
             ? sourceRoot_ / "assets" / "models" / "prism_spectrum.gltf"
             : (glassCausticsDemoEnabled_
                 ? sourceRoot_ / "assets" / "models" / "glass_volume_sphere.gltf"
                 : (instanceStressDemoEnabled_
                     ? sourceRoot_ / "assets" / "models" / "sphere.obj"
-                    : sourceRoot_ / "assets" / "models" / "cube.obj"));
+                    : sourceRoot_ / "assets" / "models" / "cube.obj")));
         modelToLoad = std::filesystem::exists(defaultModel)
             ? defaultModel
             : (availableModels_.empty() ? std::filesystem::path{} : availableModels_.front());
@@ -418,6 +435,17 @@ int Application::run(const std::filesystem::path& initialModel) {
         }
         if (temporalMotionDemoEnabled_) {
             camera_.orbit(0.012f, 0.0f);
+        }
+        if (model_ != nullptr && model_->hasSkinning()) {
+            if (animationEnabled_ && animationPlaying_ && !animationTimeFixed_) {
+                animationTimeSeconds_ += deltaTime * animationSpeed_;
+            }
+            model_->updateAnimation(
+                animationEnabled_,
+                animationClipIndex_,
+                animationTimeSeconds_
+            );
+            model_->setSkinningDebugView(rendererSettings_.skinningDebugView);
         }
         if (prismReelMode_ && model_ != nullptr && !pendingModelImport_.has_value()
             && prismReelWarmupFrames_ == 0) {
@@ -908,6 +936,58 @@ void Application::drawInspectorPanel() {
         }
 
         if (ImGui::BeginTabItem("Renderer")) {
+            ImGui::SeparatorText("GPU skinning & animation");
+            const bool hasSkinning = model_ != nullptr && model_->hasSkinning();
+            ImGui::BeginDisabled(!hasSkinning);
+            ImGui::Checkbox("Enable animation", &animationEnabled_);
+            ImGui::SameLine();
+            ImGui::Checkbox("Play", &animationPlaying_);
+            if (hasSkinning && model_->animationCount() > 0U) {
+                animationClipIndex_ = std::min(
+                    animationClipIndex_,
+                    model_->animationCount() - 1U
+                );
+                if (ImGui::BeginCombo(
+                    "Animation clip",
+                    model_->animationName(animationClipIndex_).c_str()
+                )) {
+                    for (std::size_t clip = 0; clip < model_->animationCount(); ++clip) {
+                        const bool selected = clip == animationClipIndex_;
+                        if (ImGui::Selectable(model_->animationName(clip).c_str(), selected)) {
+                            animationClipIndex_ = clip;
+                            animationTimeSeconds_ = 0.0f;
+                        }
+                        if (selected) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                const float duration = model_->animationDuration(animationClipIndex_);
+                ImGui::SliderFloat(
+                    "Animation time",
+                    &animationTimeSeconds_,
+                    0.0f,
+                    std::max(duration, 0.01f),
+                    "%.3f s"
+                );
+                ImGui::SliderFloat("Playback speed", &animationSpeed_, 0.0f, 3.0f, "%.2fx");
+            }
+            const char* skinDebugViews[] = {"Final", "Joint influence", "Dominant weight"};
+            ImGui::Combo(
+                "Skinning debug",
+                &rendererSettings_.skinningDebugView,
+                skinDebugViews,
+                3
+            );
+            if (hasSkinning) {
+                ImGui::TextDisabled(
+                    "%zu palette joints | %zu animation clip(s)",
+                    model_->jointCount(),
+                    model_->animationCount()
+                );
+            } else {
+                ImGui::TextDisabled("Current asset has no skin palette");
+            }
+            ImGui::EndDisabled();
             ImGui::SeparatorText("PBR & environment");
             int renderPath = static_cast<int>(rendererSettings_.renderPath);
             const char* renderPaths[] = {"Forward", "Deferred (hybrid)"};
@@ -1993,6 +2073,21 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
     loadedDecodedTextureCount_ = model_->loadedTextureCount();
     loadedFallbackTextureCount_ = model_->fallbackTextureCount();
     loadedTextureMemoryBytes_ = model_->textureMemoryBytes();
+    animationClipIndex_ = 0U;
+    if (!animationTimeFixed_) animationTimeSeconds_ = 0.0f;
+    if (model_->hasSkinning()) {
+        animationEnabled_ = animationDemoEnabled_
+            || std::getenv("MYRENDERER_ANIMATION") == nullptr
+            || animationEnabled_;
+        rendererSettings_.showGrid = false;
+        rendererSettings_.showAxes = false;
+        showGroundPlane_ = false;
+        rendererSettings_.skyboxEnabled = false;
+        rendererSettings_.backgroundColor = glm::vec3(0.012f, 0.016f, 0.026f);
+        rendererSettings_.bloom = false;
+        rendererSettings_.shadowsEnabled = false;
+        camera_.setOrbitPose(glm::vec3(0.0f, 0.6f, 0.0f), 0.0f, 4.0f, 3.6f, 38.0f);
+    }
     modelCenter_ = 0.5f * (loaded.model.boundsMin + loaded.model.boundsMax);
     modelNormalizationScale_ = 1.4f / maximumExtent;
     resetObjectTransform();
@@ -2107,6 +2202,8 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
                    + std::to_string(loadedTextureCount_) + " textures, "
                    + std::to_string(loadedDecodedTextureCount_) + " decoded, "
                    + std::to_string(loadedFallbackTextureCount_) + " fallback; "
+                   + std::to_string(model_->jointCount()) + " joints, "
+                   + std::to_string(model_->animationCount()) + " animations; "
                    + std::to_string(static_cast<int>(lastLoadTotalMilliseconds_)) + " ms)";
     std::cout << statusMessage_ << '\n';
     for (const ModelDiagnostic& diagnostic : modelDiagnostics_) {
@@ -2596,6 +2693,12 @@ void Application::writePrismBenchmarkReport() {
            << "  \"renderPath\": "
            << std::quoted(rendererSettings_.renderPath == RenderPath::Deferred
                 ? "deferred" : "forward") << ",\n"
+           << "  \"skinningEnabled\": "
+           << (model_ != nullptr && model_->hasSkinning() ? "true" : "false") << ",\n"
+           << "  \"animationEnabled\": " << (animationEnabled_ ? "true" : "false") << ",\n"
+           << "  \"skinningDebugView\": " << rendererSettings_.skinningDebugView << ",\n"
+           << "  \"jointCount\": " << (model_ == nullptr ? 0U : model_->jointCount()) << ",\n"
+           << "  \"animationCount\": " << (model_ == nullptr ? 0U : model_->animationCount()) << ",\n"
            << "  \"spectralSamples\": " << rendererSettings_.prismSpectrum.samples.size() << ",\n"
            << "  \"lightStressScene\": " << (lightStressDemoEnabled_ ? "true" : "false") << ",\n"
            << "  \"instanceStressScene\": " << (instanceStressDemoEnabled_ ? "true" : "false") << ",\n"

@@ -46,8 +46,8 @@ public:
         std::size_t transparentSubmeshIndex,
         bool cullBackFaces
     ) const;
-    void drawDepth() const;
-    void drawTransmissiveDepth() const;
+    void drawDepth(const Shader& shader) const;
+    void drawTransmissiveDepth(const Shader& shader) const;
     void drawTransmissive(const Shader& shader, const glm::vec3& tint) const;
     const glm::vec3& transparentSubmeshCenter(std::size_t transparentSubmeshIndex) const;
 
@@ -67,6 +67,13 @@ public:
     std::size_t loadedTextureCount() const { return loadedTextureCount_; }
     std::size_t fallbackTextureCount() const { return fallbackTextureCount_; }
     std::size_t textureMemoryBytes() const { return textureMemoryBytes_; }
+    bool hasSkinning() const { return jointCount_ > 0U; }
+    std::size_t jointCount() const { return jointCount_; }
+    std::size_t animationCount() const { return animations_.size(); }
+    const std::string& animationName(std::size_t index) const;
+    float animationDuration(std::size_t index) const;
+    void updateAnimation(bool enabled, std::size_t clipIndex, float timeSeconds);
+    void setSkinningDebugView(int view) { skinningDebugView_ = view; }
 
 private:
     struct GpuMaterial {
@@ -104,8 +111,13 @@ private:
         std::int32_t materialIndex
     ) const;
     void applyCullState(const GpuMaterial* material, bool cullBackFaces) const;
+    void bindSkinning(const Shader& shader, std::size_t meshIndex) const;
 
     std::vector<std::unique_ptr<Mesh>> meshes_;
+    std::vector<std::vector<SkinJointData>> meshSkinJoints_;
+    std::vector<SkeletonNodeData> skeletonNodes_;
+    std::vector<AnimationClipData> animations_;
+    std::vector<glm::mat4> nodeGlobalTransforms_;
     std::vector<GpuMaterial> materials_;
     std::vector<std::shared_ptr<Texture2D>> textures_;
     std::vector<bool> textureFallbacks_;
@@ -121,6 +133,8 @@ private:
     std::size_t loadedTextureCount_{0};
     std::size_t fallbackTextureCount_{0};
     std::size_t textureMemoryBytes_{0};
+    std::size_t jointCount_{0};
+    int skinningDebugView_{0};
     glm::vec3 boundsCenter_{0.0f};
     float boundsRadius_{0.0f};
 };
