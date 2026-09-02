@@ -9,6 +9,7 @@ layout (location = 8) in uvec4 aJointIndices;
 layout (location = 9) in vec4 aJointWeights;
 
 uniform mat4 uModel;
+uniform mat4 uNodeTransform;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform mat4 uLightViewProjection;
@@ -30,7 +31,7 @@ vec3 jointColor(uint jointIndex) {
 }
 
 void main() {
-    mat4 model = uInstanced ? aInstanceModel : uModel;
+    mat4 model = (uInstanced ? aInstanceModel : uModel) * uNodeTransform;
     mat4 skin = mat4(1.0);
     if (uSkinningEnabled) {
         skin = uJointMatrices[aJointIndices.x] * aJointWeights.x

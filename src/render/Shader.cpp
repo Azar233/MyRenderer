@@ -9,7 +9,24 @@
 #include <glad/gl.h>
 #include <glm/gtc/type_ptr.hpp>
 
+namespace {
+
+std::vector<Shader*>& shaderRegistry() {
+    static std::vector<Shader*> registry;
+    return registry;
+}
+
+std::filesystem::file_time_type shaderWriteTime(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto time = std::filesystem::last_write_time(path, error);
+    return error ? std::filesystem::file_time_type::min() : time;
+}
+
+} // namespace
+
 Shader::Shader(const std::filesystem::path& vertexPath, const std::filesystem::path& fragmentPath) {
+    stagePaths_[0] = vertexPath;
+    stagePaths_[2] = fragmentPath;
     const std::string vertexSource = readFile(vertexPath);
     const std::string fragmentSource = readFile(fragmentPath);
     const unsigned int vertexShader = compile(GL_VERTEX_SHADER, vertexSource, vertexPath);
@@ -38,6 +55,8 @@ Shader::Shader(const std::filesystem::path& vertexPath, const std::filesystem::p
     glDetachShader(program_, fragmentShader);
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
+    captureWriteTimes();
+    shaderRegistry().push_back(this);
 }
 
 Shader::Shader(
@@ -45,6 +64,10 @@ Shader::Shader(
     const std::filesystem::path& geometryPath,
     const std::filesystem::path& fragmentPath
 ) {
+    stagePaths_[0] = vertexPath;
+    stagePaths_[1] = geometryPath;
+    stagePaths_[2] = fragmentPath;
+    hasGeometryStage_ = true;
     const unsigned int vertexShader = compile(GL_VERTEX_SHADER, readFile(vertexPath), vertexPath);
     const unsigned int geometryShader = compile(GL_GEOMETRY_SHADER, readFile(geometryPath), geometryPath);
     const unsigned int fragmentShader = compile(GL_FRAGMENT_SHADER, readFile(fragmentPath), fragmentPath);
@@ -74,11 +97,65 @@ Shader::Shader(
     glDeleteShader(vertexShader);
     glDeleteShader(geometryShader);
     glDeleteShader(fragmentShader);
+    captureWriteTimes();
+    shaderRegistry().push_back(this);
 }
 
 Shader::~Shader() {
+    auto& registry = shaderRegistry();
+    registry.erase(std::remove(registry.begin(), registry.end(), this), registry.end());
     if (program_ != 0U) {
         glDeleteProgram(program_);
+    }
+}
+
+Shader::ReloadReport Shader::reloadChangedShaders() {
+    ReloadReport report;
+    const std::vector<Shader*> shaders = shaderRegistry();
+    for (Shader* shader : shaders) {
+        if (shader == nullptr) continue;
+        std::string error;
+        if (shader->reloadIfChanged(error)) {
+            ++report.reloaded;
+        } else if (!error.empty()) {
+            ++report.failed;
+            if (!report.message.empty()) report.message += '\n';
+            report.message += error;
+        }
+    }
+    return report;
+}
+
+bool Shader::reloadIfChanged(std::string& error) {
+    bool changed = false;
+    for (std::size_t index = 0; index < stagePaths_.size(); ++index) {
+        if (stagePaths_[index].empty()) continue;
+        changed |= shaderWriteTime(stagePaths_[index]) != writeTimes_[index];
+    }
+    if (!changed) return false;
+
+    try {
+        if (hasGeometryStage_) {
+            Shader candidate(stagePaths_[0], stagePaths_[1], stagePaths_[2]);
+            std::swap(program_, candidate.program_);
+        } else {
+            Shader candidate(stagePaths_[0], stagePaths_[2]);
+            std::swap(program_, candidate.program_);
+        }
+        captureWriteTimes();
+        return true;
+    } catch (const std::exception& exception) {
+        captureWriteTimes();
+        error = exception.what();
+        return false;
+    }
+}
+
+void Shader::captureWriteTimes() {
+    for (std::size_t index = 0; index < stagePaths_.size(); ++index) {
+        writeTimes_[index] = stagePaths_[index].empty()
+            ? std::filesystem::file_time_type::min()
+            : shaderWriteTime(stagePaths_[index]);
     }
 }
 

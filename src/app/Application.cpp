@@ -13,6 +13,16 @@
 #include <iostream>
 #include <stdexcept>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 #include <glm/ext/matrix_transform.hpp>
@@ -34,6 +44,33 @@
 #include "render/Renderer.h"
 
 namespace {
+
+std::filesystem::path findRuntimeRoot() {
+    std::vector<std::filesystem::path> candidates;
+#ifdef _WIN32
+    std::wstring executablePath(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(
+        nullptr,
+        executablePath.data(),
+        static_cast<DWORD>(executablePath.size())
+    );
+    if (length > 0 && length < executablePath.size()) {
+        executablePath.resize(length);
+        candidates.push_back(std::filesystem::path(executablePath).parent_path());
+    }
+#endif
+    std::error_code error;
+    candidates.push_back(std::filesystem::current_path(error));
+    candidates.emplace_back(MYRENDERER_SOURCE_DIR);
+    for (const std::filesystem::path& candidate : candidates) {
+        if (!candidate.empty()
+            && std::filesystem::is_directory(candidate / "shaders", error)
+            && std::filesystem::is_directory(candidate / "assets", error)) {
+            return std::filesystem::absolute(candidate, error).lexically_normal();
+        }
+    }
+    return std::filesystem::path(MYRENDERER_SOURCE_DIR);
+}
 
 std::string lowercase(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
@@ -175,7 +212,7 @@ ModelData makeGlassCheckerboardData() {
 } // namespace
 
 Application::Application()
-    : sourceRoot_(std::filesystem::path(MYRENDERER_SOURCE_DIR)) {
+    : sourceRoot_(findRuntimeRoot()) {
 }
 
 Application::~Application() {
@@ -264,6 +301,12 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_TAA_MOTION_DEMO")) {
         temporalMotionDemoEnabled_ = std::atoi(value) != 0;
     }
+    if (const char* value = std::getenv("MYRENDERER_OBJECT_MOTION_DEMO")) {
+        objectMotionDemoEnabled_ = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_SCENE_FOUNDATION_DEMO")) {
+        sceneFoundationDemoEnabled_ = std::atoi(value) != 0;
+    }
     if (const char* value = std::getenv("MYRENDERER_ANIMATION_DEMO")) {
         animationDemoEnabled_ = std::atoi(value) != 0;
         animationEnabled_ = animationDemoEnabled_;
@@ -275,6 +318,11 @@ int Application::run(const std::filesystem::path& initialModel) {
         animationTimeSeconds_ = std::max(std::strtof(value, nullptr), 0.0f);
         animationTimeFixed_ = true;
         animationPlaying_ = false;
+    }
+    if (const char* value = std::getenv("MYRENDERER_ANIMATION_FRAME_STEP")) {
+        animationFrameStep_ = std::max(std::strtof(value, nullptr), 0.0f);
+        animationPlaying_ = animationFrameStep_ > 0.0f;
+        animationTimeFixed_ = false;
     }
     if (const char* value = std::getenv("MYRENDERER_SKIN_DEBUG")) {
         rendererSettings_.skinningDebugView = std::clamp(std::atoi(value), 0, 2);
@@ -433,11 +481,16 @@ int Application::run(const std::filesystem::path& initialModel) {
         if (autoRotate_) {
             modelRotationDegrees_.y = std::fmod(modelRotationDegrees_.y + 25.0f * deltaTime, 360.0f);
         }
+        if (objectMotionDemoEnabled_ && model_ != nullptr && !pendingModelImport_.has_value()) {
+            modelRotationDegrees_.y = static_cast<float>(objectMotionDemoFrame_++ * 6);
+        }
         if (temporalMotionDemoEnabled_) {
             camera_.orbit(0.012f, 0.0f);
         }
         if (model_ != nullptr && model_->hasSkinning()) {
-            if (animationEnabled_ && animationPlaying_ && !animationTimeFixed_) {
+            if (animationEnabled_ && animationFrameStep_ > 0.0f) {
+                animationTimeSeconds_ = static_cast<float>(animationDemoFrame_++) * animationFrameStep_;
+            } else if (animationEnabled_ && animationPlaying_ && !animationTimeFixed_) {
                 animationTimeSeconds_ += deltaTime * animationSpeed_;
             }
             model_->updateAnimation(
@@ -766,115 +819,6 @@ void Application::drawMainMenu() {
     ImGui::EndMainMenuBar();
 }
 
-void Application::drawScenePanel() {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float menuHeight = ImGui::GetFrameHeight();
-    const ImVec2 contentPosition(viewport->Pos.x, viewport->Pos.y + menuHeight);
-    const ImVec2 contentSize(viewport->Size.x, viewport->Size.y - menuHeight);
-    ImGui::SetNextWindowPos(contentPosition, ImGuiCond_Once);
-    ImGui::SetNextWindowSize(ImVec2(285.0f, contentSize.y), ImGuiCond_Once);
-    if (!ImGui::Begin("Scene")) {
-        ImGui::End();
-        return;
-    }
-
-    ImGui::SeparatorText("Scene objects");
-    if (model_) {
-        const std::string currentMeshLabel = currentModelPath_.filename().string() + "##CurrentMesh";
-        ImGui::TreeNodeEx(currentMeshLabel.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_DefaultOpen);
-        ImGui::TreePop();
-        ImGui::TextDisabled("Meshes: %zu", loadedMeshCount_);
-        ImGui::TextDisabled("Submeshes: %zu", loadedSubmeshCount_);
-        ImGui::TextDisabled("Vertices: %zu", loadedVertexCount_);
-        ImGui::TextDisabled("Triangles: %zu", loadedTriangleCount_);
-        if (showGroundPlane_) {
-            ImGui::TreeNodeEx("Ground receiver", ImGuiTreeNodeFlags_Leaf);
-            ImGui::TreePop();
-        }
-        if (showComparisonObject_) {
-            ImGui::TreeNodeEx("Comparison instance", ImGuiTreeNodeFlags_Leaf);
-            ImGui::TreePop();
-        }
-        if (lightStressDemoEnabled_) {
-            ImGui::TreeNodeEx("Stress instances x100", ImGuiTreeNodeFlags_Leaf);
-            ImGui::TreePop();
-            ImGui::TextDisabled("Local lights: %zu", rendererSettings_.localLights.size());
-        }
-        if (instanceStressDemoEnabled_) {
-            ImGui::TreeNodeEx("Instance stress x2500", ImGuiTreeNodeFlags_Leaf);
-            ImGui::TreePop();
-            ImGui::TextDisabled(
-                "Visible / culled: %zu / %zu",
-                renderer_->visibleInstanceCount(),
-                renderer_->culledInstanceCount()
-            );
-        }
-        if (rendererSettings_.showPrismIncidentBeam) {
-            ImGui::TreeNodeEx("Incident beam (Prism-0 placeholder)", ImGuiTreeNodeFlags_Leaf);
-            ImGui::TreePop();
-        }
-    } else {
-        ImGui::TextDisabled("No model loaded");
-    }
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Model assets");
-    for (const auto& path : availableModels_) {
-        const bool selected = !currentModelPath_.empty() && path.filename() == currentModelPath_.filename();
-        const std::string assetLabel = path.filename().string() + "##Asset_" + path.string();
-        if (ImGui::Selectable(assetLabel.c_str(), selected)) {
-            loadModel(path);
-        }
-    }
-    if (availableModels_.empty()) {
-        ImGui::TextDisabled("No supported model files found");
-    }
-    if (unsupportedModelCount_ > 0) {
-        ImGui::Spacing();
-        ImGui::TextDisabled("%zu model(s) await a format importer", unsupportedModelCount_);
-    }
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Open path");
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##ModelPath", modelPathBuffer_.data(), modelPathBuffer_.size());
-    const bool loadInProgress = pendingModelImport_.has_value();
-    ImGui::BeginDisabled(loadInProgress);
-    if (ImGui::Button("Browse...", ImVec2(-1.0f, 0.0f))) {
-        std::string dialogError;
-        const auto selected = openModelFileDialog(dialogError);
-        if (selected.has_value()) {
-            const std::string selectedPath = selected->string();
-            std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", selectedPath.c_str());
-            loadModel(*selected);
-        } else if (!dialogError.empty()) {
-            statusMessage_ = "Open failed: " + dialogError;
-        }
-    }
-    if (ImGui::Button("Load entered path", ImVec2(-1.0f, 0.0f))) {
-        loadModel(std::filesystem::u8path(modelPathBuffer_.data()));
-    }
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("You can also drop OBJ, DAE, glTF or GLB files onto the window.");
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Status");
-    ImGui::TextWrapped("%s", statusMessage_.c_str());
-    if (pendingModelImport_.has_value()) {
-        const double elapsed = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - pendingModelImport_->startedAt
-        ).count();
-        const float activity = static_cast<float>(std::fmod(elapsed * 0.35, 1.0));
-        ImGui::ProgressBar(activity, ImVec2(-1.0f, 0.0f), "Importing on CPU...");
-        ImGui::TextDisabled(
-            "%.2f MiB | %.1f s elapsed | current scene stays active",
-            static_cast<double>(pendingModelImport_->fileSize) / (1024.0 * 1024.0),
-            elapsed
-        );
-    }
-    drawDiagnostics();
-    ImGui::End();
-}
 
 void Application::drawInspectorPanel() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -894,13 +838,34 @@ void Application::drawInspectorPanel() {
     if (ImGui::BeginTabBar("InspectorTabs")) {
         if (ImGui::BeginTabItem("Object")) {
             ImGui::SeparatorText("Transform");
-            ImGui::DragFloat3("Position", &modelPosition_.x, 0.01f, 0.0f, 0.0f, "%.2f");
-            ImGui::DragFloat3("Rotation", &modelRotationDegrees_.x, 0.25f, -360.0f, 360.0f, "%.1f deg");
-            ImGui::SliderFloat("Scale", &modelScale_, 0.1f, 4.0f, "%.2f");
-            ImGui::Checkbox("Auto rotate", &autoRotate_);
-            if (ImGui::Button("Reset transform", ImVec2(-1.0f, 0.0f))) {
-                resetObjectTransform();
-                camera_.reset(modelPosition_);
+            SceneEntity* selectedEntity = scene_.find(selectedSceneEntity_);
+            const bool customEntity = selectedEntity != nullptr
+                && selectedSceneEntity_ != primaryEntity_
+                && selectedSceneEntity_ != comparisonEntity_
+                && selectedSceneEntity_ != backdropEntity_
+                && selectedSceneEntity_ != groundEntity_;
+            if (customEntity) {
+                ImGui::TextDisabled("%s (#%llu)", selectedEntity->name.c_str(),
+                    static_cast<unsigned long long>(selectedEntity->id));
+                ImGui::DragFloat3("Position", &selectedEntity->transform.translation.x, 0.01f, 0.0f, 0.0f, "%.2f");
+                ImGui::DragFloat3("Rotation", &selectedEntity->transform.rotationDegrees.x, 0.25f, -360.0f, 360.0f, "%.1f deg");
+                ImGui::DragFloat3("Scale", &selectedEntity->transform.scale.x, 0.01f, 0.05f, 8.0f, "%.2f");
+                ImGui::ColorEdit3("Entity tint", &selectedEntity->tint.x);
+                if (ImGui::Button("Reset transform", ImVec2(-1.0f, 0.0f))) {
+                    const glm::mat4 assetTransform = selectedEntity->transform.assetTransform;
+                    selectedEntity->transform = SceneTransform{};
+                    selectedEntity->transform.assetTransform = assetTransform;
+                    selectedEntity->motionHistoryValid = false;
+                }
+            } else {
+                ImGui::DragFloat3("Position", &modelPosition_.x, 0.01f, 0.0f, 0.0f, "%.2f");
+                ImGui::DragFloat3("Rotation", &modelRotationDegrees_.x, 0.25f, -360.0f, 360.0f, "%.1f deg");
+                ImGui::SliderFloat("Scale", &modelScale_, 0.1f, 4.0f, "%.2f");
+                ImGui::Checkbox("Auto rotate", &autoRotate_);
+                if (ImGui::Button("Reset transform", ImVec2(-1.0f, 0.0f))) {
+                    resetObjectTransform();
+                    camera_.reset(modelPosition_);
+                }
             }
 
             ImGui::SeparatorText("Stage");
@@ -936,6 +901,17 @@ void Application::drawInspectorPanel() {
         }
 
         if (ImGui::BeginTabItem("Renderer")) {
+            ImGui::SeparatorText("Shader development");
+            ImGui::Checkbox("Shader hot reload", &rendererSettings_.shaderHotReloadEnabled);
+            if (renderer_ != nullptr) {
+                if (renderer_->shaderReloadFailed()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.36f, 0.30f, 1.0f));
+                    ImGui::TextWrapped("%s", renderer_->shaderReloadStatus().c_str());
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::TextDisabled("%s", renderer_->shaderReloadStatus().c_str());
+                }
+            }
             ImGui::SeparatorText("GPU skinning & animation");
             const bool hasSkinning = model_ != nullptr && model_->hasSkinning();
             ImGui::BeginDisabled(!hasSkinning);
@@ -1500,7 +1476,8 @@ void Application::drawInspectorPanel() {
                     / (1024.0 * 1024.0)
             );
             ImGui::Text("Active passes: %zu", renderer_->activePassNames().size());
-            for (const auto& passName : renderer_->activePassNames()) {
+            for (std::size_t passIndex = 0; passIndex < renderer_->activePassNames().size(); ++passIndex) {
+                const auto& passName = renderer_->activePassNames()[passIndex];
                 const auto timing = std::find_if(
                     renderer_->gpuPassTimings().begin(),
                     renderer_->gpuPassTimings().end(),
@@ -1512,6 +1489,16 @@ void Application::drawInspectorPanel() {
                     ImGui::BulletText("%s: %.3f ms", passName.c_str(), timing->milliseconds);
                 } else {
                     ImGui::BulletText("%s: collecting...", passName.c_str());
+                }
+                if (passIndex < renderer_->activePassContexts().size()
+                    && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                    const RenderPassContext& context = renderer_->activePassContexts()[passIndex];
+                    ImGui::BeginTooltip();
+                    ImGui::TextDisabled("Inputs");
+                    for (const std::string& input : context.inputs) ImGui::BulletText("%s", input.c_str());
+                    ImGui::TextDisabled("Outputs");
+                    for (const std::string& output : context.outputs) ImGui::BulletText("%s", output.c_str());
+                    ImGui::EndTooltip();
                 }
             }
             ImGui::Text("Triangles: %zu", model_ ? loadedTriangleCount_ : 0U);
@@ -1583,14 +1570,9 @@ void Application::drawViewportPanel() {
     const glm::mat4 normalization =
         glm::scale(glm::mat4(1.0f), glm::vec3(modelNormalizationScale_))
         * glm::translate(glm::mat4(1.0f), -modelCenter_);
-    glm::mat4 modelMatrix = glm::translate(glm::mat4(1.0f), modelPosition_);
-    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.z), glm::vec3(0.0f, 0.0f, 1.0f));
-    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.y), glm::vec3(0.0f, 1.0f, 0.0f));
-    modelMatrix = glm::rotate(modelMatrix, glm::radians(modelRotationDegrees_.x), glm::vec3(1.0f, 0.0f, 0.0f));
-    modelMatrix = glm::scale(modelMatrix, glm::vec3(modelScale_));
-    modelMatrix *= normalization;
-
     std::vector<RenderItem> renderItems;
+    scene_.beginFrame();
+    syncSceneEntities(normalization);
     if (model_ != nullptr && instanceStressDemoEnabled_) {
         static constexpr std::array<glm::vec3, 6> instanceTints{
             glm::vec3(0.82f, 0.34f, 0.22f),
@@ -1670,67 +1652,8 @@ void Application::drawViewportPanel() {
             }
         }
     }
-    if (model_ != nullptr && !lightStressDemoEnabled_ && !instanceStressDemoEnabled_
-        && (!prismDemoEnabled_ || prismModelVisible_)) {
-        renderItems.push_back(RenderItem{
-            model_.get(),
-            modelMatrix,
-            rendererSettings_.baseColor,
-            true,
-            true
-        });
-        if (showComparisonObject_) {
-            glm::mat4 comparisonMatrix = glm::translate(
-                glm::mat4(1.0f),
-                modelPosition_ + (glassVolumeDemoEnabled_
-                    ? glm::vec3(0.92f, 0.0f, 0.0f)
-                    : glm::vec3(0.95f, 0.0f, 0.35f))
-            );
-            if (!glassVolumeDemoEnabled_) {
-                comparisonMatrix = glm::rotate(
-                    comparisonMatrix,
-                    glm::radians(-28.0f),
-                    glm::vec3(0.0f, 1.0f, 0.0f)
-                );
-            }
-            comparisonMatrix = glm::scale(
-                comparisonMatrix,
-                glm::vec3(modelScale_ * (glassVolumeDemoEnabled_ ? 0.88f : 0.50f))
-            );
-            comparisonMatrix *= normalization;
-            renderItems.push_back(RenderItem{
-                model_.get(),
-                comparisonMatrix,
-                glassVolumeDemoEnabled_
-                    ? glm::vec3(1.0f)
-                    : glm::vec3(0.72f, 0.82f, 1.0f),
-                true,
-                true
-            });
-        }
-    }
-    if (glassVolumeDemoEnabled_ && !glassCausticsDemoEnabled_
-        && glassBackdropModel_ != nullptr) {
-        renderItems.push_back(RenderItem{
-            glassBackdropModel_.get(),
-            glm::mat4(1.0f),
-            glm::vec3(1.0f),
-            true,
-            false
-        });
-    }
-    if (showGroundPlane_ && groundModel_ != nullptr) {
-        const glm::mat4 groundMatrix = glm::translate(
-            glm::mat4(1.0f),
-            glm::vec3(modelPosition_.x, modelPosition_.y + groundOffset_ * modelScale_, modelPosition_.z)
-        );
-        renderItems.push_back(RenderItem{
-            groundModel_.get(),
-            groundMatrix,
-            groundColor_,
-            true,
-            false
-        });
+    if (!lightStressDemoEnabled_ && !instanceStressDemoEnabled_) {
+        renderItems = scene_.buildRenderItems();
     }
     rendererSettings_.causticsReceiverPlaneY =
         modelPosition_.y + groundOffset_ * modelScale_ + 0.002f;
@@ -2190,6 +2113,14 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
         }
     }
 
+    rebuildSceneEntities();
+    if (sceneFoundationDemoEnabled_) {
+        camera_.setOrbitPose(glm::vec3(0.0f, -0.05f, 0.0f), -18.0f, 24.0f, 8.8f, 42.0f);
+        rendererSettings_.showGrid = false;
+        rendererSettings_.showAxes = false;
+        showGroundPlane_ = true;
+        groundOffset_ = -0.82f;
+    }
     const std::string pathString = currentModelPath_.string();
     std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", pathString.c_str());
     statusMessage_ = "Loaded " + currentModelPath_.filename().string() + " ("
@@ -2278,6 +2209,7 @@ void Application::resetObjectTransform() {
     modelRotationDegrees_ = glm::vec3(0.0f);
     modelScale_ = 1.0f;
 }
+
 
 void Application::rebuildLocalLights() {
     static constexpr std::array<int, 3> tierCounts{8, 32, 64};

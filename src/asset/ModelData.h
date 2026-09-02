@@ -82,6 +82,11 @@ struct SubmeshData {
 
 struct MeshData {
     std::string name;
+    // Static meshes remain in their source-local space and are instanced by
+    // ModelNodeData. Skinned meshes retain the legacy baked bind transform so
+    // their joint palette semantics stay stable until per-skin mesh spaces are
+    // represented explicitly.
+    bool vertexTransformBaked{false};
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<SubmeshData> submeshes;

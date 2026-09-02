@@ -12,6 +12,9 @@
 #include <glm/vec4.hpp>
 
 #include "optics/PrismOptics.h"
+#include "render/OpenGlStateCache.h"
+#include "render/RenderPassSequence.h"
+#include "render/RenderItem.h"
 
 class Camera;
 class CausticsMap;
@@ -161,15 +164,7 @@ struct RendererSettings {
     float temporalHistoryWeight{0.9f};
     int temporalDebugView{0};
     int skinningDebugView{0};
-};
-
-struct RenderItem {
-    const GpuModel* model{nullptr};
-    glm::mat4 modelMatrix{1.0f};
-    glm::vec3 tint{1.0f};
-    bool visible{true};
-    bool castsShadow{true};
-    bool instanceCandidate{false};
+    bool shaderHotReloadEnabled{true};
 };
 
 class Renderer {
@@ -216,6 +211,7 @@ public:
     std::size_t renderedInstanceTriangleCount() const { return renderedInstanceTriangleCount_; }
     double instancePreparationMilliseconds() const { return instancePreparationMilliseconds_; }
     const std::vector<std::string>& activePassNames() const { return activePassNames_; }
+    const std::vector<RenderPassContext>& activePassContexts() const { return activePassContexts_; }
     const std::vector<GpuPassTiming>& gpuPassTimings() const { return gpuPassTimings_; }
     int shadowResolution() const;
     int renderWidth() const;
@@ -223,6 +219,8 @@ public:
     std::size_t estimatedRenderMemoryBytes() const;
     std::size_t estimatedOpaqueTrafficBytesPerFrame() const;
     TextureCache& textureCache();
+    const std::string& shaderReloadStatus() const { return shaderReloadStatus_; }
+    bool shaderReloadFailed() const { return shaderReloadFailed_; }
 
 private:
     std::unique_ptr<Shader> shader_;
@@ -281,6 +279,7 @@ private:
     bool hasPrismBeamGpuTime_{false};
     bool hasCausticsGpuTime_{false};
     std::vector<std::string> activePassNames_;
+    std::vector<RenderPassContext> activePassContexts_;
     std::vector<GpuPassTiming> gpuPassTimings_;
     RenderPath activeRenderPath_{RenderPath::Forward};
     glm::mat4 previousViewProjection_{1.0f};
@@ -289,4 +288,8 @@ private:
     int lastTemporalHeight_{0};
     bool previousViewProjectionValid_{false};
     bool lastTemporalAaEnabled_{false};
+    std::size_t shaderReloadPollFrame_{0U};
+    std::string shaderReloadStatus_{"Watching shader files"};
+    bool shaderReloadFailed_{false};
+    OpenGlStateCache stateCache_;
 };

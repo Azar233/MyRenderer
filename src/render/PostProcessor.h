@@ -21,6 +21,7 @@ struct PostProcessSettings {
     bool resetTemporalHistory{false};
     float temporalHistoryWeight{0.9f};
     unsigned int depthTexture{0};
+    unsigned int objectMotionTexture{0};
     glm::mat4 inverseCurrentViewProjection{1.0f};
     glm::mat4 previousViewProjection{1.0f};
 };

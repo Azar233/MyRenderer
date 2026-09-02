@@ -2,6 +2,7 @@
 #include "io/GltfMaterialExtensions.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <functional>
@@ -289,6 +290,7 @@ struct ImportContext {
     std::string& warnings;
     std::vector<ModelDiagnostic>& diagnostics;
     const std::unordered_map<std::string, std::uint32_t>& nodeIndices;
+    std::unordered_map<unsigned int, std::uint32_t> staticMeshIndices;
 
     std::optional<std::uint32_t> appendMesh(
         const aiMesh& source,
@@ -308,15 +310,19 @@ struct ImportContext {
 
         MeshData mesh;
         mesh.name = source.mName.length > 0U ? source.mName.C_Str() : nodeName;
+        mesh.vertexTransformBaked = source.HasBones();
         mesh.vertices.reserve(source.mNumVertices);
 
-        aiMatrix3x3 normalMatrix(globalTransform);
+        const aiMatrix4x4 vertexTransform = mesh.vertexTransformBaked
+            ? globalTransform
+            : aiMatrix4x4{};
+        aiMatrix3x3 normalMatrix(vertexTransform);
         normalMatrix.Inverse().Transpose();
-        const bool mirrored = aiMatrix3x3(globalTransform).Determinant() < 0.0f;
+        const bool mirrored = aiMatrix3x3(vertexTransform).Determinant() < 0.0f;
 
         for (unsigned int vertexIndex = 0; vertexIndex < source.mNumVertices; ++vertexIndex) {
             Vertex vertex;
-            const aiVector3D transformedPosition = globalTransform * source.mVertices[vertexIndex];
+            const aiVector3D transformedPosition = vertexTransform * source.mVertices[vertexIndex];
             vertex.position = toVec3(transformedPosition);
 
             if (source.HasNormals()) {
@@ -347,8 +353,6 @@ struct ImportContext {
 
             mesh.boundsMin = glm::min(mesh.boundsMin, vertex.position);
             mesh.boundsMax = glm::max(mesh.boundsMax, vertex.position);
-            model.boundsMin = glm::min(model.boundsMin, vertex.position);
-            model.boundsMax = glm::max(model.boundsMax, vertex.position);
             mesh.vertices.push_back(vertex);
         }
 
@@ -441,6 +445,27 @@ struct ImportContext {
         return modelMeshIndex;
     }
 
+    void extendModelBounds(const MeshData& mesh, const aiMatrix4x4& nodeTransform) {
+        const std::array<glm::vec3, 8> corners{
+            glm::vec3(mesh.boundsMin.x, mesh.boundsMin.y, mesh.boundsMin.z),
+            glm::vec3(mesh.boundsMax.x, mesh.boundsMin.y, mesh.boundsMin.z),
+            glm::vec3(mesh.boundsMin.x, mesh.boundsMax.y, mesh.boundsMin.z),
+            glm::vec3(mesh.boundsMax.x, mesh.boundsMax.y, mesh.boundsMin.z),
+            glm::vec3(mesh.boundsMin.x, mesh.boundsMin.y, mesh.boundsMax.z),
+            glm::vec3(mesh.boundsMax.x, mesh.boundsMin.y, mesh.boundsMax.z),
+            glm::vec3(mesh.boundsMin.x, mesh.boundsMax.y, mesh.boundsMax.z),
+            glm::vec3(mesh.boundsMax.x, mesh.boundsMax.y, mesh.boundsMax.z)
+        };
+        const glm::mat4 transform = mesh.vertexTransformBaked
+            ? glm::mat4(1.0f)
+            : toMat4(nodeTransform);
+        for (const glm::vec3& corner : corners) {
+            const glm::vec3 transformed = glm::vec3(transform * glm::vec4(corner, 1.0f));
+            model.boundsMin = glm::min(model.boundsMin, transformed);
+            model.boundsMax = glm::max(model.boundsMax, transformed);
+        }
+    }
+
     ModelNodeData appendNode(const aiNode& source, const aiMatrix4x4& parentTransform) {
         ModelNodeData node;
         node.name = source.mName.length > 0U ? source.mName.C_Str() : "Node";
@@ -459,9 +484,20 @@ struct ImportContext {
                 );
                 continue;
             }
-            const auto modelMeshIndex = appendMesh(*scene.mMeshes[sceneMeshIndex], globalTransform, node.name);
+            const aiMesh& sceneMesh = *scene.mMeshes[sceneMeshIndex];
+            std::optional<std::uint32_t> modelMeshIndex;
+            const auto cached = staticMeshIndices.find(sceneMeshIndex);
+            if (!sceneMesh.HasBones() && cached != staticMeshIndices.end()) {
+                modelMeshIndex = cached->second;
+            } else {
+                modelMeshIndex = appendMesh(sceneMesh, globalTransform, node.name);
+                if (modelMeshIndex.has_value() && !sceneMesh.HasBones()) {
+                    staticMeshIndices.emplace(sceneMeshIndex, *modelMeshIndex);
+                }
+            }
             if (modelMeshIndex.has_value()) {
                 node.meshIndices.push_back(*modelMeshIndex);
+                extendModelBounds(model.meshes[*modelMeshIndex], globalTransform);
             }
         }
 
@@ -651,7 +687,8 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
         result.model,
         result.warnings,
         result.diagnostics,
-        nodeIndices
+        nodeIndices,
+        {}
     };
     result.model.rootNode = context.appendNode(*scene->mRootNode, aiMatrix4x4{});
     result.model.animations.reserve(scene->mNumAnimations);

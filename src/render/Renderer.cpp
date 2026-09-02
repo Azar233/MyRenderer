@@ -146,6 +146,18 @@ void Renderer::render(
 ) {
     width = std::max(width, 1);
     height = std::max(height, 1);
+    if (settings.shaderHotReloadEnabled && shaderReloadPollFrame_++ % 15U == 0U) {
+        const Shader::ReloadReport reload = Shader::reloadChangedShaders();
+        if (reload.failed > 0U) {
+            shaderReloadFailed_ = true;
+            shaderReloadStatus_ = reload.message;
+        } else if (reload.reloaded > 0U) {
+            shaderReloadFailed_ = false;
+            shaderReloadStatus_ = "Reloaded " + std::to_string(reload.reloaded)
+                + " shader program(s)";
+            previousViewProjectionValid_ = false;
+        }
+    }
     renderTarget_->resize(width, height, settings.msaaSamples);
     const bool deferredActive = settings.renderPath == RenderPath::Deferred;
     activeRenderPath_ = settings.renderPath;
@@ -538,7 +550,7 @@ void Renderer::render(
             }
         }
     }
-    RenderPassSequence sequence;
+    RenderPassSequence sequence(width, height);
     if (settings.shadowsEnabled) {
         sequence.add("Shadow map", [&] {
             shadowMap_->bindForWriting();
@@ -755,24 +767,43 @@ void Renderer::render(
             const std::array<float, 4> clearAlbedo{0.0f, 0.0f, 0.0f, 0.0f};
             const std::array<float, 4> clearNormal{0.5f, 0.5f, 1.0f, 0.0f};
             const std::array<float, 4> clearMaterial{0.0f, 1.0f, 0.0f, 0.0f};
+            const std::array<float, 4> clearMotion{0.0f, 0.0f, 0.0f, 0.0f};
             glClearBufferfv(GL_COLOR, 0, clearAlbedo.data());
             glClearBufferfv(GL_COLOR, 1, clearNormal.data());
             glClearBufferfv(GL_COLOR, 2, clearMaterial.data());
+            glClearBufferfv(GL_COLOR, 3, clearMotion.data());
             glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
             glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
 
             gBufferShader_->use();
             gBufferShader_->setMat4("uView", view);
             gBufferShader_->setMat4("uProjection", projection);
+            gBufferShader_->setMat4("uCurrentViewProjection", currentViewProjection);
+            gBufferShader_->setMat4(
+                "uPreviousViewProjection",
+                previousViewProjectionValid_ ? previousViewProjection_ : currentViewProjection
+            );
             gBufferShader_->setBool("uNormalMappingEnabled", settings.normalMapping);
             for (const RenderItem& item : renderItems) {
                 if (!item.visible || item.model == nullptr) continue;
                 if (settings.instanceOptimizationEnabled && item.instanceCandidate) continue;
                 gBufferShader_->setMat4("uModel", item.modelMatrix);
+                gBufferShader_->setMat4("uPreviousModel", item.previousModelMatrix);
+                const bool transformMoved = maximumMatrixDifference(
+                    item.modelMatrix,
+                    item.previousModelMatrix
+                ) > 1.0e-6f;
+                gBufferShader_->setBool(
+                    "uMotionHistoryValid",
+                    item.motionHistoryValid
+                        && (transformMoved || item.model->hasSkinningMotion())
+                );
                 item.model->drawOpaque(*gBufferShader_, item.tint, settings.cullBackFaces);
                 drawCallCount_ += item.model->opaqueSubmeshCount();
             }
             for (const InstanceBatch& batch : instanceBatches) {
+                gBufferShader_->setBool("uMotionHistoryValid", false);
+                gBufferShader_->setMat4("uPreviousModel", glm::mat4(1.0f));
                 batch.model->drawOpaqueInstanced(
                     *gBufferShader_,
                     batch.tint,
@@ -1139,6 +1170,7 @@ void Renderer::render(
         postSettings.resetTemporalHistory = resetTemporalHistory;
         postSettings.temporalHistoryWeight = settings.temporalHistoryWeight;
         postSettings.depthTexture = renderTarget_->sceneDepthTexture();
+        postSettings.objectMotionTexture = deferredActive ? gBuffer_->motionTexture() : 0U;
         postSettings.inverseCurrentViewProjection = glm::inverse(currentViewProjection);
         postSettings.previousViewProjection = previousViewProjectionValid_
             ? previousViewProjection_
@@ -1148,19 +1180,26 @@ void Renderer::render(
             + (temporalAaActive ? 1U : 0U);
     });
     activePassNames_ = sequence.names();
+    activePassContexts_ = sequence.contexts();
     std::array<std::size_t, maxProfiledPasses_> activePassQuerySlots{};
     activePassQuerySlots.fill(passTimingPending_.size());
     const bool hasDebugGroups = GLAD_GL_KHR_debug != 0
         && glPushDebugGroup != nullptr
         && glPopDebugGroup != nullptr;
     sequence.run(
-        [&](std::size_t passIndex, const std::string& name) {
+        [&](std::size_t passIndex, const RenderPassContext& context) {
+            stateCache_.invalidate();
+            stateCache_.apply(context.state);
+            if (context.viewportWidth > 0 && context.viewportHeight > 0) {
+                glViewport(0, 0, context.viewportWidth, context.viewportHeight);
+            }
+            if (context.clearMask != 0U) glClear(context.clearMask);
             if (hasDebugGroups) {
                 glPushDebugGroup(
                     GL_DEBUG_SOURCE_APPLICATION,
                     static_cast<GLuint>(passIndex + 1U),
                     -1,
-                    name.c_str()
+                    context.name.c_str()
                 );
             }
             if (passIndex >= maxProfiledPasses_) return;
@@ -1170,13 +1209,13 @@ void Renderer::render(
             glQueryCounter(passStartQueries_[slot], GL_TIMESTAMP);
             activePassQuerySlots[passIndex] = slot;
         },
-        [&](std::size_t passIndex, const std::string& name) {
+        [&](std::size_t passIndex, const RenderPassContext& context) {
             if (passIndex < maxProfiledPasses_) {
                 const std::size_t slot = activePassQuerySlots[passIndex];
                 if (slot < passTimingPending_.size()) {
                     glQueryCounter(passEndQueries_[slot], GL_TIMESTAMP);
                     passTimingPending_[slot] = true;
-                    passTimingNames_[slot] = name;
+                    passTimingNames_[slot] = context.name;
                     nextPassTimingRing_[passIndex] =
                         (nextPassTimingRing_[passIndex] + 1U) % passTimingRingSize_;
                 }
@@ -1184,6 +1223,8 @@ void Renderer::render(
             if (hasDebugGroups) glPopDebugGroup();
         }
     );
+    stateCache_.invalidate();
+    stateCache_.apply(RenderState{});
     if (timingQuery < timingQueries_.size()) {
         glEndQuery(GL_TIME_ELAPSED);
         timingQueryPending_[timingQuery] = true;

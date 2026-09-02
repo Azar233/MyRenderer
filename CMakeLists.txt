@@ -17,6 +17,7 @@ include(FetchContent)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
@@ -71,6 +72,7 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(glfw glm glad tinyobjloader imgui assimp)
+FetchContent_GetProperties(glad SOURCE_DIR MYRENDERER_GLAD_FETCH_SOURCE_DIR)
 
 add_subdirectory(${glad_SOURCE_DIR}/cmake ${glad_BINARY_DIR}/cmake)
 glad_add_library(glad_gl_core_33 REPRODUCIBLE API gl:core=3.3)
@@ -98,6 +100,7 @@ add_executable(MyRenderer
     src/main.cpp
     src/app/AppIcon.cpp
     src/app/Application.cpp
+    src/app/ApplicationScene.cpp
     src/app/FileDialog.cpp
     src/io/AssimpImporter.cpp
     src/io/GltfMaterialExtensions.cpp
@@ -113,6 +116,7 @@ add_executable(MyRenderer
     src/render/GpuModel.cpp
     src/render/Mesh.cpp
     src/render/OpenGlDebug.cpp
+    src/render/OpenGlStateCache.cpp
     src/render/OpticalPathDebugRenderer.cpp
     src/render/PostProcessor.cpp
     src/render/RenderTarget.cpp
@@ -123,6 +127,7 @@ add_executable(MyRenderer
     src/render/SsaoRenderer.cpp
     src/render/SpectralBeamRenderer.cpp
     src/render/Texture2D.cpp
+    src/scene/Scene.cpp
 )
 
 if(WIN32)
@@ -212,6 +217,36 @@ if(BUILD_TESTING)
         target_compile_options(MyRendererSceneTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME scene-draw-list COMMAND MyRendererSceneTests)
+
+    add_executable(MyRendererSceneGraphTests
+        tests/SceneTests.cpp
+        src/scene/Scene.cpp
+    )
+    target_include_directories(MyRendererSceneGraphTests PRIVATE src)
+    target_link_libraries(MyRendererSceneGraphTests PRIVATE glm::glm)
+    if(MSVC)
+        target_compile_options(MyRendererSceneGraphTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererSceneGraphTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME scene-graph COMMAND MyRendererSceneGraphTests)
+
+    add_executable(MyRendererShaderHotReloadTests
+        tests/ShaderHotReloadTests.cpp
+        src/render/Shader.cpp
+    )
+    target_include_directories(MyRendererShaderHotReloadTests PRIVATE src)
+    target_link_libraries(MyRendererShaderHotReloadTests PRIVATE glad_gl_core_33 glfw glm::glm)
+    if(MSVC)
+        target_compile_options(MyRendererShaderHotReloadTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererShaderHotReloadTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_custom_target(shader-hot-reload-smoke
+        COMMAND $<TARGET_FILE:MyRendererShaderHotReloadTests>
+        DEPENDS MyRendererShaderHotReloadTests
+        COMMENT "Verifying fail-safe Shader hot reload with a real OpenGL context"
+    )
 
     add_executable(MyRendererPrismOpticsTests
         tests/PrismOpticsTests.cpp
@@ -455,6 +490,41 @@ if(BUILD_TESTING)
         COMMENT "Benchmarking GP-P1E bind pose, GPU skinning, and debug output"
     )
 
+    add_custom_target(foundation-visual-regression
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/foundation-visual-current
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/FoundationVisualRegression.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing SR-P0 scene entities and dynamic motion vectors"
+    )
+
+    add_custom_target(renderer-regression-suite
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/RendererRegressionSuite.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running the complete deterministic renderer visual regression suite"
+    )
+
+    add_custom_target(renderer-benchmark-suite
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/RendererBenchmarkSuite.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running the complete renderer benchmark suite"
+    )
+
     find_program(MYRENDERER_NSYS_EXECUTABLE
         NAMES nsys nsys.exe
         HINTS
@@ -566,3 +636,40 @@ add_custom_target(gpu-smoke
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Running MyRenderer with a real OpenGL context"
 )
+
+install(TARGETS MyRenderer RUNTIME DESTINATION . COMPONENT Runtime)
+install(DIRECTORY shaders/ DESTINATION shaders COMPONENT Runtime)
+install(
+    DIRECTORY assets/
+    DESTINATION assets
+    COMPONENT Runtime
+    PATTERN "models/bunny*" EXCLUDE
+    PATTERN "models/cow.dae" EXCLUDE
+    PATTERN "models/dragon2.dae" EXCLUDE
+    PATTERN "models/spot*" EXCLUDE
+    PATTERN "models/textures/spot*" EXCLUDE
+    PATTERN "models/textures/hmap.jpg" EXCLUDE
+)
+install(FILES README.md LICENSE THIRD_PARTY_NOTICES.md ASSET_LICENSES.md DESTINATION . COMPONENT Runtime)
+install(FILES ${glfw_SOURCE_DIR}/LICENSE.md DESTINATION licenses RENAME GLFW-LICENSE.md COMPONENT Runtime)
+install(FILES ${glm_SOURCE_DIR}/copying.txt DESTINATION licenses RENAME GLM-LICENSE.txt COMPONENT Runtime)
+install(FILES ${MYRENDERER_GLAD_FETCH_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME GLAD-LICENSE.txt COMPONENT Runtime)
+install(FILES ${tinyobjloader_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME TINYOBJLOADER-LICENSE.txt COMPONENT Runtime)
+install(FILES ${imgui_SOURCE_DIR}/LICENSE.txt DESTINATION licenses RENAME IMGUI-LICENSE.txt COMPONENT Runtime)
+install(FILES ${assimp_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME ASSIMP-LICENSE.txt COMPONENT Runtime)
+
+set(CPACK_GENERATOR "ZIP")
+set(CPACK_PACKAGE_NAME "MyRenderer")
+set(CPACK_PACKAGE_VENDOR "MyRenderer contributors")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(MYRENDERER_PACKAGE_ARCH "x64")
+else()
+    set(MYRENDERER_PACKAGE_ARCH "x86")
+endif()
+set(CPACK_PACKAGE_FILE_NAME "MyRenderer-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${MYRENDERER_PACKAGE_ARCH}")
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+set(CPACK_COMPONENTS_ALL Runtime)
+set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
+include(CPack)

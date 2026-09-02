@@ -24,6 +24,9 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - GPU Instancing、CPU Frustum Culling 与屏幕尺寸 LOD：2,500 个共享 Sphere Mesh 的固定场景按模型/Tint/LOD 合批，六平面包围球剔除并切换三档聚类索引；1080p/4×MSAA 实测 Draw Call 2,501→19、CPU P50 5.386→2.077 ms、GPU P50 1.465→0.653 ms。
 - TAA 与 SSAO 屏幕空间管线：8 样本 Halton Jitter、深度反投影 Motion Vector、History Reprojection、历史深度拒绝、3×3 Neighborhood Clamp，以及 16 样本 SSAO + 5×5 深度感知滤波；提供静止/运动 Ghosting、Motion、History Weight 和 SSAO 调试基线。
 - glTF Skin 与 GPU 骨骼动画：每顶点四组 Joint/Weight、每 Mesh Skin Palette、Inverse Bind Matrix、节点层级、Clip/TRS 关键帧采样与 Vertex Shader Linear Blend Skinning；支持 Bind Pose、播放/暂停、时间拖动、速度和关节/权重调试。
+- 轻量 Scene/Entity/Transform 场景图：父子层级、显隐、选择、复制/删除、独立 Tint 材质实例，以及同一 Mesh 的多 Node/多 Entity 几何复用。
+- 显式 Render Pass Context 与 OpenGL State Cache；Shader 文件改动可热重载，编译失败时保留上一可用 Program 并在 Inspector 显示日志。
+- 相机、刚体对象与骨骼的统一 Temporal History；G-Buffer 输出动态 Motion Vector，TAA 可处理对象与蒙皮运动。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
@@ -70,7 +73,7 @@ cmake --build build-mingw --parallel
 
 ## GUI 操作
 
-- Scene 面板：查看主体、地面接收器与可选对照实例，切换 `assets/models` 中的 OBJ、DAE、glTF/GLB，使用原生文件选择器，输入其他模型路径，或把模型文件拖入窗口。CPU 导入期间会显示文件大小、耗时和活动进度，当前场景保持可用。
+- Scene 面板：查看、选择、显隐、复制/删除 Entity，调整父子关系，并切换 `assets/models` 中的 OBJ、DAE、glTF/GLB；也可使用原生文件选择器、输入路径或拖放文件。CPU 导入期间当前场景保持可用。
 - Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
 - Inspector / Renderer：选择并播放 glTF Animation Clip、切换 Bind Pose、拖动动画时间、调整速度、查看 Joint Influence/Dominant Weight；同时可切换 Forward / Deferred、G-Buffer/SSAO/TAA 调试、PBR、IBL、阴影、玻璃、ACES、Bloom、Rasterization 和 1x/4x MSAA，并查看活动 Pass 与 GPU 时间。
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
@@ -88,7 +91,7 @@ ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRe
 
 所有格式最终转换为相同的 `ModelData`、子网格、材质和纹理来源数据。渲染层统一解码并缓存外部或内嵌图像，基础色 Shader 将材质因子、可调 Tint 和基础色贴图相乘；没有贴图的材质使用白色纹理，无法解码或缺失的基础色贴图使用洋红棋盘并在状态区报告原因。基础色纹理使用 sRGB 内部格式，法线贴图保持线性数据；光照在线性空间完成，最终颜色仅进行一次 sRGB 编码。
 
-OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流，并支持 Alpha Mode、双面材质、Transmission、IOR、Volume 和 Dispersion。glTF Skin/Animation 支持最多四权重、每 Mesh 64 关节、单 Clip TRS 采样与 GPU Linear Blend Skinning；尚不支持动画混合、Root Motion、动态 Bounds、Morph Target 和 FBX。
+OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流，并支持 Alpha Mode、双面材质、Transmission、IOR、Volume 和 Dispersion。glTF Skin/Animation 支持最多四权重、每 Mesh 64 关节、单 Clip TRS 采样、GPU Linear Blend Skinning、上一帧骨骼 Motion Vector 与保守动态 Bounds；尚不支持动画混合、Root Motion、Morph Target 和 FBX。
 
 固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）、`glass_volume_sphere.gltf`（1,986 顶点闭合流形球体）、`prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）和 `skinning_test.gltf`（原创 3-Joint Wave 动画）。默认环境为 Poly Haven 的 2K `Delta 2` CC0 HDRI，来源和许可记录见 `assets/environments/README.md`。
 
@@ -208,6 +211,17 @@ cmake --build build-release --target skinning-benchmark
 ```powershell
 cmake --build build-mingw --target gpu-smoke
 ```
+
+SR-P0 场景基础与全部视觉/性能入口：
+
+```powershell
+cmake --build build-release --target foundation-visual-regression
+cmake --build build-release --target renderer-regression-suite
+cmake --build build-release --target renderer-benchmark-suite
+cmake --build build-release --target package
+```
+
+`package` 生成可独立运行的 ZIP，程序优先从可执行文件旁的 `shaders` / `assets` 解析资源。项目、依赖与资产授权分别见 [`LICENSE`](LICENSE)、[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 和 [`ASSET_LICENSES.md`](ASSET_LICENSES.md)；SR-P0 设计与边界见 [`docs/scene-rendering-foundation.md`](docs/scene-rendering-foundation.md)。
 
 Prism-5 提供三组可重复的作品集验收目标：
 

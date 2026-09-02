@@ -6,6 +6,7 @@ layout (location = 8) in uvec4 aJointIndices;
 layout (location = 9) in vec4 aJointWeights;
 
 uniform mat4 uModel;
+uniform mat4 uNodeTransform;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform bool uSkinningEnabled;
@@ -21,8 +22,9 @@ void main() {
             + uJointMatrices[aJointIndices.z] * aJointWeights.z
             + uJointMatrices[aJointIndices.w] * aJointWeights.w
         : mat4(1.0);
-    vec4 worldPosition = uModel * skin * vec4(aPosition, 1.0);
-    mat3 normalMatrix = transpose(inverse(mat3(uModel)));
+    mat4 model = uModel * uNodeTransform;
+    vec4 worldPosition = model * skin * vec4(aPosition, 1.0);
+    mat3 normalMatrix = transpose(inverse(mat3(model)));
     vec4 viewPosition = uView * worldPosition;
     vViewDepth = -viewPosition.z;
     vWorldNormal = normalize(normalMatrix * mat3(skin) * aNormal);

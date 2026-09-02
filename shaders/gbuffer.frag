@@ -5,6 +5,9 @@ in vec2 vTexCoord0;
 in vec4 vWorldTangent;
 in vec3 vSkinJointColor;
 in float vSkinDominantWeight;
+in vec4 vCurrentClipPosition;
+in vec4 vPreviousClipPosition;
+in float vMotionValid;
 
 uniform vec4 uBaseColor;
 uniform sampler2D uBaseColorTexture;
@@ -22,6 +25,7 @@ uniform int uSkinningDebugView;
 layout (location = 0) out vec4 gAlbedo;
 layout (location = 1) out vec4 gEncodedNormal;
 layout (location = 2) out vec2 gMetallicRoughness;
+layout (location = 3) out vec4 gMotion;
 
 void main() {
     vec4 baseColor = uBaseColor * texture(uBaseColorTexture, vTexCoord0);
@@ -53,4 +57,10 @@ void main() {
     gAlbedo = baseColor;
     gEncodedNormal = vec4(normal * 0.5 + 0.5, 1.0);
     gMetallicRoughness = clamp(metallicRoughness, vec2(0.0, 0.04), vec2(1.0));
+    gMotion = vec4(0.0);
+    if (vMotionValid > 0.5 && vCurrentClipPosition.w > 0.0 && vPreviousClipPosition.w > 0.0) {
+        vec2 currentUv = vCurrentClipPosition.xy / vCurrentClipPosition.w * 0.5 + 0.5;
+        vec2 previousUv = vPreviousClipPosition.xy / vPreviousClipPosition.w * 0.5 + 0.5;
+        gMotion = vec4(currentUv - previousUv, 1.0, 0.0);
+    }
 }

@@ -6,6 +6,8 @@ uniform sampler2D uCurrentColor;
 uniform sampler2D uCurrentDepth;
 uniform sampler2D uHistoryColor;
 uniform sampler2D uHistoryDepth;
+uniform sampler2D uObjectMotion;
+uniform bool uObjectMotionAvailable;
 uniform mat4 uInverseCurrentViewProjection;
 uniform mat4 uPreviousViewProjection;
 uniform bool uHistoryValid;
@@ -23,6 +25,10 @@ void main() {
     vec4 previousClip = uPreviousViewProjection * vec4(world.xyz, 1.0);
     vec3 previousNdc = previousClip.xyz / max(abs(previousClip.w), 0.00001);
     vec2 previousUv = previousNdc.xy * 0.5 + 0.5;
+    vec4 objectMotion = uObjectMotionAvailable
+        ? texture(uObjectMotion, vUv)
+        : vec4(0.0);
+    if (objectMotion.z > 0.5) previousUv = vUv - objectMotion.xy;
     resolvedMotion = vUv - previousUv;
     resolvedDepth = currentDepth;
 

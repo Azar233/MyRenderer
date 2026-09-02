@@ -57,7 +57,7 @@ public:
     std::size_t triangleCount() const { return triangleCount_; }
     std::size_t lodTriangleCount(std::size_t lodLevel) const;
     const glm::vec3& boundsCenter() const { return boundsCenter_; }
-    float boundsRadius() const { return boundsRadius_; }
+    float boundsRadius() const { return dynamicBoundsRadius_; }
     std::size_t materialCount() const { return materials_.size(); }
     std::size_t textureCount() const { return textures_.size(); }
     std::size_t opaqueSubmeshCount() const { return opaqueDrawCommands_.size(); }
@@ -74,6 +74,7 @@ public:
     float animationDuration(std::size_t index) const;
     void updateAnimation(bool enabled, std::size_t clipIndex, float timeSeconds);
     void setSkinningDebugView(int view) { skinningDebugView_ = view; }
+    bool hasSkinningMotion() const { return skinningMotionValid_; }
 
 private:
     struct GpuMaterial {
@@ -103,6 +104,7 @@ private:
         std::size_t submeshIndex{0};
         std::int32_t materialIndex{-1};
         glm::vec3 localCenter{0.0f};
+        glm::mat4 nodeTransform{1.0f};
     };
 
     const GpuMaterial* bindMaterial(
@@ -112,12 +114,16 @@ private:
     ) const;
     void applyCullState(const GpuMaterial* material, bool cullBackFaces) const;
     void bindSkinning(const Shader& shader, std::size_t meshIndex) const;
+    void bindNodeTransform(const Shader& shader, const DrawCommand& command) const;
 
     std::vector<std::unique_ptr<Mesh>> meshes_;
     std::vector<std::vector<SkinJointData>> meshSkinJoints_;
+    std::vector<bool> meshVertexTransformBaked_;
     std::vector<SkeletonNodeData> skeletonNodes_;
     std::vector<AnimationClipData> animations_;
     std::vector<glm::mat4> nodeGlobalTransforms_;
+    std::vector<glm::mat4> previousNodeGlobalTransforms_;
+    std::vector<glm::mat4> bindNodeGlobalTransforms_;
     std::vector<GpuMaterial> materials_;
     std::vector<std::shared_ptr<Texture2D>> textures_;
     std::vector<bool> textureFallbacks_;
@@ -137,4 +143,8 @@ private:
     int skinningDebugView_{0};
     glm::vec3 boundsCenter_{0.0f};
     float boundsRadius_{0.0f};
+    float dynamicBoundsRadius_{0.0f};
+    bool animationPoseInitialized_{false};
+    bool previousSkinningValid_{false};
+    bool skinningMotionValid_{false};
 };

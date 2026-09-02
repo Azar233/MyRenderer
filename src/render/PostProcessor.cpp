@@ -134,6 +134,8 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
         temporalShader_->setInt("uCurrentDepth", 1);
         temporalShader_->setInt("uHistoryColor", 2);
         temporalShader_->setInt("uHistoryDepth", 3);
+        temporalShader_->setInt("uObjectMotion", 4);
+        temporalShader_->setBool("uObjectMotionAvailable", settings.objectMotionTexture != 0U);
         temporalShader_->setBool("uHistoryValid", historyValid_);
         temporalShader_->setFloat(
             "uHistoryWeight",
@@ -152,6 +154,8 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
         glBindTexture(GL_TEXTURE_2D, historyColorTextures_[historyIndex_]);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, historyDepthTextures_[historyIndex_]);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, settings.objectMotionTexture);
         drawFullscreen();
         historyIndex_ = destination;
         historyValid_ = true;

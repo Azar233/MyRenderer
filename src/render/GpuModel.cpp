@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <stdexcept>
 
 #include <glad/gl.h>
@@ -80,6 +81,7 @@ GpuModel::GpuModel(
       linearWhiteTexture_(textureCache.linearWhiteTexture()) {
     boundsCenter_ = 0.5f * (data.boundsMin + data.boundsMax);
     boundsRadius_ = glm::length(0.5f * (data.boundsMax - data.boundsMin));
+    dynamicBoundsRadius_ = boundsRadius_;
     textures_.reserve(data.textures.size());
     textureFallbacks_.reserve(data.textures.size());
     for (const auto& textureData : data.textures) {
@@ -156,6 +158,7 @@ GpuModel::GpuModel(
 
     meshes_.reserve(data.meshes.size());
     meshSkinJoints_.reserve(data.meshes.size());
+    meshVertexTransformBaked_.reserve(data.meshes.size());
     for (const auto& meshData : data.meshes) {
         auto mesh = std::make_unique<Mesh>(meshData);
         submeshCount_ += mesh->submeshCount();
@@ -163,16 +166,23 @@ GpuModel::GpuModel(
         triangleCount_ += mesh->triangleCount();
         meshes_.push_back(std::move(mesh));
         meshSkinJoints_.push_back(meshData.skinJoints);
+        meshVertexTransformBaked_.push_back(meshData.vertexTransformBaked);
         jointCount_ += meshData.skinJoints.size();
     }
 
     skeletonNodes_ = data.skeletonNodes;
     animations_ = data.animations;
     nodeGlobalTransforms_.resize(skeletonNodes_.size(), glm::mat4(1.0f));
+    previousNodeGlobalTransforms_.resize(skeletonNodes_.size(), glm::mat4(1.0f));
     updateAnimation(false, 0U, 0.0f);
+    bindNodeGlobalTransforms_ = nodeGlobalTransforms_;
 
-    for (std::size_t meshIndex = 0; meshIndex < meshes_.size(); ++meshIndex) {
+    const auto appendMeshCommands = [&](std::size_t meshIndex, const glm::mat4& nodeTransform) {
+        if (meshIndex >= meshes_.size()) return;
         const Mesh& mesh = *meshes_[meshIndex];
+        const glm::mat4 effectiveNodeTransform = meshVertexTransformBaked_[meshIndex]
+            ? glm::mat4(1.0f)
+            : nodeTransform;
         for (std::size_t submeshIndex = 0; submeshIndex < mesh.submeshCount(); ++submeshIndex) {
             const std::int32_t materialIndex = mesh.submeshMaterialIndex(submeshIndex);
             const bool isBlended = materialIndex >= 0
@@ -183,7 +193,11 @@ GpuModel::GpuModel(
                 meshIndex,
                 submeshIndex,
                 materialIndex,
-                mesh.submeshCenter(submeshIndex)
+                glm::vec3(
+                    effectiveNodeTransform
+                    * glm::vec4(mesh.submeshCenter(submeshIndex), 1.0f)
+                ),
+                effectiveNodeTransform
             };
             (isBlended ? transparentDrawCommands_ : opaqueDrawCommands_).push_back(command);
             if (materialIndex >= 0
@@ -191,6 +205,22 @@ GpuModel::GpuModel(
                 && materials_[static_cast<std::size_t>(materialIndex)].transmissionFactor > 0.0f) {
                 transmissiveDrawCommands_.push_back(command);
             }
+        }
+    };
+    std::function<void(const ModelNodeData&, const glm::mat4&)> appendNodeCommands;
+    appendNodeCommands = [&](const ModelNodeData& node, const glm::mat4& parentTransform) {
+        const glm::mat4 nodeTransform = parentTransform * node.localTransform;
+        for (const std::uint32_t meshIndex : node.meshIndices) {
+            appendMeshCommands(static_cast<std::size_t>(meshIndex), nodeTransform);
+        }
+        for (const ModelNodeData& child : node.children) {
+            appendNodeCommands(child, nodeTransform);
+        }
+    };
+    appendNodeCommands(data.rootNode, glm::mat4(1.0f));
+    if (opaqueDrawCommands_.empty() && transparentDrawCommands_.empty()) {
+        for (std::size_t meshIndex = 0; meshIndex < meshes_.size(); ++meshIndex) {
+            appendMeshCommands(meshIndex, glm::mat4(1.0f));
         }
     }
 }
@@ -278,6 +308,7 @@ void GpuModel::drawOpaque(const Shader& shader, const glm::vec3& tint, bool cull
     shader.setBool("uInstanced", false);
     const glm::vec3 linearTint = srgbToLinear(tint);
     for (const DrawCommand& command : opaqueDrawCommands_) {
+        bindNodeTransform(shader, command);
         bindSkinning(shader, command.meshIndex);
         const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
         applyCullState(material, cullBackFaces);
@@ -296,6 +327,7 @@ void GpuModel::drawOpaqueInstanced(
     shader.setBool("uInstanced", true);
     const glm::vec3 linearTint = srgbToLinear(tint);
     for (const DrawCommand& command : opaqueDrawCommands_) {
+        bindNodeTransform(shader, command);
         bindSkinning(shader, command.meshIndex);
         const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
         applyCullState(material, cullBackFaces);
@@ -324,6 +356,7 @@ void GpuModel::drawTransparentSubmesh(
         throw std::out_of_range("Transparent submesh index is out of range");
     }
     const DrawCommand& command = transparentDrawCommands_[transparentSubmeshIndex];
+    bindNodeTransform(shader, command);
     bindSkinning(shader, command.meshIndex);
     const glm::vec3 linearTint = srgbToLinear(tint);
     const GpuMaterial* material = bindMaterial(shader, linearTint, command.materialIndex);
@@ -353,6 +386,7 @@ bool GpuModel::transparentSubmeshIsTransmissive(
 
 void GpuModel::drawDepth(const Shader& shader) const {
     for (const DrawCommand& command : opaqueDrawCommands_) {
+        bindNodeTransform(shader, command);
         bindSkinning(shader, command.meshIndex);
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
@@ -360,6 +394,7 @@ void GpuModel::drawDepth(const Shader& shader) const {
 
 void GpuModel::drawTransmissiveDepth(const Shader& shader) const {
     for (const DrawCommand& command : transmissiveDrawCommands_) {
+        bindNodeTransform(shader, command);
         bindSkinning(shader, command.meshIndex);
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
@@ -368,11 +403,16 @@ void GpuModel::drawTransmissiveDepth(const Shader& shader) const {
 void GpuModel::drawTransmissive(const Shader& shader, const glm::vec3& tint) const {
     const glm::vec3 linearTint = srgbToLinear(tint);
     for (const DrawCommand& command : transmissiveDrawCommands_) {
+        bindNodeTransform(shader, command);
         bindSkinning(shader, command.meshIndex);
         bindMaterial(shader, linearTint, command.materialIndex);
         glDisable(GL_CULL_FACE);
         meshes_[command.meshIndex]->drawSubmesh(command.submeshIndex);
     }
+}
+
+void GpuModel::bindNodeTransform(const Shader& shader, const DrawCommand& command) const {
+    shader.setMat4("uNodeTransform", command.nodeTransform);
 }
 
 const std::string& GpuModel::animationName(std::size_t index) const {
@@ -386,6 +426,8 @@ float GpuModel::animationDuration(std::size_t index) const {
 }
 
 void GpuModel::updateAnimation(bool enabled, std::size_t clipIndex, float timeSeconds) {
+    previousSkinningValid_ = animationPoseInitialized_ && !nodeGlobalTransforms_.empty();
+    if (previousSkinningValid_) previousNodeGlobalTransforms_ = nodeGlobalTransforms_;
     const AnimationClipData* clip = enabled && clipIndex < animations_.size()
         ? &animations_[clipIndex]
         : nullptr;
@@ -418,23 +460,69 @@ void GpuModel::updateAnimation(bool enabled, std::size_t clipIndex, float timeSe
             ? nodeGlobalTransforms_[static_cast<std::size_t>(node.parentIndex)] * local
             : local;
     }
+    skinningMotionValid_ = false;
+    if (previousSkinningValid_) {
+        for (std::size_t nodeIndex = 0; nodeIndex < nodeGlobalTransforms_.size(); ++nodeIndex) {
+            for (int column = 0; column < 4 && !skinningMotionValid_; ++column) {
+                for (int row = 0; row < 4; ++row) {
+                    if (std::abs(
+                        nodeGlobalTransforms_[nodeIndex][column][row]
+                        - previousNodeGlobalTransforms_[nodeIndex][column][row]
+                    ) > 1.0e-6f) {
+                        skinningMotionValid_ = true;
+                        break;
+                    }
+                }
+            }
+            if (skinningMotionValid_) break;
+        }
+    }
+    dynamicBoundsRadius_ = boundsRadius_;
+    if (bindNodeGlobalTransforms_.size() == nodeGlobalTransforms_.size()) {
+        float maximumJointDisplacement = 0.0f;
+        for (std::size_t nodeIndex = 0; nodeIndex < nodeGlobalTransforms_.size(); ++nodeIndex) {
+            maximumJointDisplacement = std::max(
+                maximumJointDisplacement,
+                glm::length(
+                    glm::vec3(nodeGlobalTransforms_[nodeIndex][3])
+                    - glm::vec3(bindNodeGlobalTransforms_[nodeIndex][3])
+                )
+            );
+        }
+        // Translation-only growth misses vertices swept by a rotating joint. One
+        // additional bind-pose radius conservatively covers that rotational arc.
+        dynamicBoundsRadius_ += boundsRadius_ + maximumJointDisplacement;
+    }
+    animationPoseInitialized_ = true;
 }
 
 void GpuModel::bindSkinning(const Shader& shader, std::size_t meshIndex) const {
     if (meshIndex >= meshSkinJoints_.size() || meshSkinJoints_[meshIndex].empty()) {
         shader.setBool("uSkinningEnabled", false);
+        shader.setBool("uPreviousSkinningValid", false);
         shader.setInt("uSkinningDebugView", 0);
         return;
     }
     const auto& joints = meshSkinJoints_[meshIndex];
     std::array<glm::mat4, 64> palette{};
+    std::array<glm::mat4, 64> previousPalette{};
     for (std::size_t index = 0; index < joints.size() && index < palette.size(); ++index) {
         const SkinJointData& joint = joints[index];
         palette[index] = joint.nodeIndex < nodeGlobalTransforms_.size()
             ? nodeGlobalTransforms_[joint.nodeIndex] * joint.inverseBindMatrix
             : glm::mat4(1.0f);
+        previousPalette[index] = previousSkinningValid_
+            && joint.nodeIndex < previousNodeGlobalTransforms_.size()
+            ? previousNodeGlobalTransforms_[joint.nodeIndex] * joint.inverseBindMatrix
+            : palette[index];
     }
     shader.setBool("uSkinningEnabled", true);
     shader.setInt("uSkinningDebugView", skinningDebugView_);
     shader.setMat4Array("uJointMatrices[0]", palette.data(), std::min(joints.size(), palette.size()));
+    shader.setBool("uPreviousSkinningValid", previousSkinningValid_);
+    shader.setMat4Array(
+        "uPreviousJointMatrices[0]",
+        previousPalette.data(),
+        std::min(joints.size(), previousPalette.size())
+    );
 }

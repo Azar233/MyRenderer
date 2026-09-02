@@ -10,12 +10,14 @@
 #include <string>
 #include <vector>
 
+#include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
 #include "io/ModelImporter.h"
 #include "optics/PrismDemo.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
+#include "scene/Scene.h"
 
 struct GLFWwindow;
 class GpuModel;
@@ -63,6 +65,8 @@ private:
     std::filesystem::path resolvePath(const std::filesystem::path& path) const;
     std::filesystem::path nextScreenshotPath() const;
     void resetObjectTransform();
+    void rebuildSceneEntities();
+    void syncSceneEntities(const glm::mat4& normalization);
     void activatePrismDemoPreset(bool loadFixture);
     void activateGlassCausticsPreset();
     void applyVolumeGlassPreset(VolumeGlassPreset preset);
@@ -87,6 +91,13 @@ private:
     std::vector<std::unique_ptr<ModelImporter>> importers_;
     Camera camera_;
     RendererSettings rendererSettings_;
+    Scene scene_;
+    SceneEntityId primaryEntity_{invalidSceneEntityId};
+    SceneEntityId comparisonEntity_{invalidSceneEntityId};
+    SceneEntityId backdropEntity_{invalidSceneEntityId};
+    SceneEntityId groundEntity_{invalidSceneEntityId};
+    SceneEntityId selectedSceneEntity_{invalidSceneEntityId};
+    std::vector<SceneEntityId> foundationDemoEntities_;
 
     std::filesystem::path sourceRoot_;
     std::filesystem::path currentModelPath_;
@@ -174,12 +185,17 @@ private:
     bool benchmarkMode_{false};
     bool prismReelMode_{false};
     bool temporalMotionDemoEnabled_{false};
+    bool objectMotionDemoEnabled_{false};
+    int objectMotionDemoFrame_{0};
+    bool sceneFoundationDemoEnabled_{false};
     bool animationDemoEnabled_{false};
     bool animationEnabled_{false};
     bool animationPlaying_{true};
     bool animationTimeFixed_{false};
     float animationTimeSeconds_{0.0f};
     float animationSpeed_{1.0f};
+    float animationFrameStep_{0.0f};
+    int animationDemoFrame_{0};
     std::size_t animationClipIndex_{0U};
     int localLightTierIndex_{1};
     VolumeGlassPreset volumeGlassPreset_{VolumeGlassPreset::Olive};

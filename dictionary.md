@@ -278,7 +278,10 @@
 | SSAO | 根据屏幕深度和法线近似物体缝隙中的环境遮蔽。 | GP-P1D 使用 16 样本观察空间半球与 5×5 深度感知滤波，只调制 Ambient/IBL。 | 已实现 |
 | SSR | 在屏幕深度/颜色中追踪反射，只能反射屏幕已有信息。 | GP-P1 候选效果。 | 计划 |
 | TAA | 融合当前帧与历史帧降低锯齿和闪烁，需要运动信息与稳定策略。 | GP-P1D 在 HDR 后处理前执行，使用深度拒绝与 3×3 Neighborhood Clamp 控制拖影。 | 已实现 |
-| Motion Vector（运动向量） | 记录像素从上一帧到当前帧移动了多少。 | 由当前深度重建世界坐标并投影到上一帧，写入 RG16F；当前覆盖相机运动。 | 已实现（相机） |
+| Motion Vector（运动向量） | 记录像素从上一帧到当前帧移动了多少。 | G-Buffer RGBA16F Attachment 同时覆盖相机、刚体 Model 与骨骼 Joint Palette 的上一帧位置。 | 已实现（相机/对象/骨骼） |
+| Scene Graph（场景图） | 用父子层级组织场景物体；父对象移动时子对象跟随。 | 轻量 Scene/Entity/Transform 支持层级、显隐、选择、复制和共享 Mesh 实例。 | 已实现 |
+| Shader Hot Reload（着色器热重载） | 程序运行时重新编译改过的 Shader，不必重启应用。 | 候选 Program 成功后才替换；失败保留旧 Program 并显示日志。 | 已实现 |
+| Render Pass Context | 每个渲染阶段对输入、输出、Viewport、清理和图形状态的显式声明。 | RenderPassSequence 在进入 Pass 前应用 Context 与 State Cache，并输出 Debug Label。 | 已实现（轻量） |
 | Temporal Reprojection（时序重投影） | 根据运动向量把上一帧结果映射到当前帧。 | TAA 使用上一帧 Color/Depth ping-pong，越界或深度不兼容时拒绝历史。 | 已实现 |
 | Jitter | 每帧轻微移动投影采样位置，用多帧积累获得更密集采样。 | TAA 使用 8 样本 Halton(2,3) 序列偏移投影矩阵。 | 已实现 |
 | Frustum Culling（视锥剔除） | CPU/GPU 不提交相机视野外的物体。 | GP-P1C 从 View-Projection 提取六个平面，以世界空间包围球保守判断 2,500 个实例的可见性。 | 已实现（CPU） |

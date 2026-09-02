@@ -9,17 +9,27 @@ layout (location = 8) in uvec4 aJointIndices;
 layout (location = 9) in vec4 aJointWeights;
 
 uniform mat4 uModel;
+uniform mat4 uNodeTransform;
 uniform mat4 uView;
 uniform mat4 uProjection;
+uniform mat4 uCurrentViewProjection;
+uniform mat4 uPreviousViewProjection;
+uniform mat4 uPreviousModel;
 uniform bool uInstanced;
+uniform bool uMotionHistoryValid;
 uniform bool uSkinningEnabled;
 uniform mat4 uJointMatrices[64];
+uniform bool uPreviousSkinningValid;
+uniform mat4 uPreviousJointMatrices[64];
 
 out vec3 vWorldNormal;
 out vec2 vTexCoord0;
 out vec4 vWorldTangent;
 out vec3 vSkinJointColor;
 out float vSkinDominantWeight;
+out vec4 vCurrentClipPosition;
+out vec4 vPreviousClipPosition;
+out float vMotionValid;
 
 vec3 jointColor(uint jointIndex) {
     float joint = float(jointIndex) + 1.0;
@@ -27,7 +37,7 @@ vec3 jointColor(uint jointIndex) {
 }
 
 void main() {
-    mat4 model = uInstanced ? aInstanceModel : uModel;
+    mat4 model = (uInstanced ? aInstanceModel : uModel) * uNodeTransform;
     mat4 skin = mat4(1.0);
     if (uSkinningEnabled) {
         skin = uJointMatrices[aJointIndices.x] * aJointWeights.x
@@ -36,6 +46,15 @@ void main() {
             + uJointMatrices[aJointIndices.w] * aJointWeights.w;
     }
     vec4 worldPosition = model * skin * vec4(aPosition, 1.0);
+    mat4 previousSkin = mat4(1.0);
+    if (uSkinningEnabled && uPreviousSkinningValid) {
+        previousSkin = uPreviousJointMatrices[aJointIndices.x] * aJointWeights.x
+            + uPreviousJointMatrices[aJointIndices.y] * aJointWeights.y
+            + uPreviousJointMatrices[aJointIndices.z] * aJointWeights.z
+            + uPreviousJointMatrices[aJointIndices.w] * aJointWeights.w;
+    }
+    vec4 previousWorldPosition = uPreviousModel * uNodeTransform
+        * previousSkin * vec4(aPosition, 1.0);
     vec3 localNormal = normalize(mat3(skin) * aNormal);
     vec3 localTangent = normalize(mat3(skin) * aTangent.xyz);
     mat3 normalMatrix = transpose(inverse(mat3(model)));
@@ -47,5 +66,10 @@ void main() {
         + jointColor(aJointIndices.z) * aJointWeights.z
         + jointColor(aJointIndices.w) * aJointWeights.w;
     vSkinDominantWeight = max(max(aJointWeights.x, aJointWeights.y), max(aJointWeights.z, aJointWeights.w));
-    gl_Position = uProjection * uView * worldPosition;
+    vCurrentClipPosition = uCurrentViewProjection * worldPosition;
+    vPreviousClipPosition = uPreviousViewProjection * previousWorldPosition;
+    vMotionValid = uMotionHistoryValid && (!uSkinningEnabled || uPreviousSkinningValid)
+        ? 1.0
+        : 0.0;
+    gl_Position = vCurrentClipPosition;
 }

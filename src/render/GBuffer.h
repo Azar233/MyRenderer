@@ -25,6 +25,7 @@ public:
     unsigned int albedoTexture() const { return albedoTexture_; }
     unsigned int normalTexture() const { return normalTexture_; }
     unsigned int materialTexture() const { return materialTexture_; }
+    unsigned int motionTexture() const { return motionTexture_; }
     unsigned int depthTexture() const { return depthTexture_; }
     std::size_t estimatedBytes() const;
 
@@ -34,10 +35,12 @@ private:
     unsigned int albedoTexture_{0};
     unsigned int normalTexture_{0};
     unsigned int materialTexture_{0};
+    unsigned int motionTexture_{0};
     unsigned int depthTexture_{0};
     unsigned int multisampleAlbedo_{0};
     unsigned int multisampleNormal_{0};
     unsigned int multisampleMaterial_{0};
+    unsigned int multisampleMotion_{0};
     unsigned int multisampleDepthStencil_{0};
     int width_{0};
     int height_{0};

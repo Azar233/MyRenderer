@@ -564,6 +564,8 @@ TA 路线验收：一个未参与开发的使用者能在文档指导下导入�
 
 ### 8.7 推荐执行顺序（默认选择）
 
+> 路线更新（2026-09-01）：GP-P1 已完成到骨骼动画最小闭环，项目目标随后明确为“场景渲染、路径追踪参考、风格化 Shader 与自然现象”。本节保留为历史路线；新的默认优先级、阶段门槛和取舍以第 9 节为准。
+
 1. P0 架构拆分、Shader 热重载、glTF 材质完整性、标准 IBL。
 2. P0 视觉回归、Benchmark、GPU Debug Label、RenderDoc / Nsight 前后对比。
 3. 若以棱镜分光为近期目标：按 `Glass-0～Glass-2A → Prism-0～Prism-5` 推进；随后按 `Glass-2B → Glass-2C → Glass-3 → Glass-4` 补齐真实厚度、弯曲双界面折射、通用焦散和最终展示，不让通用体积/焦散阻塞专用 Hero Demo。
@@ -584,3 +586,167 @@ TA 路线验收：一个未参与开发的使用者能在文档指导下导入�
 - NVIDIA [Nsight Graphics Features](https://developer.nvidia.com/nsight-graphics-features) 覆盖 Frame Capture、GPU Trace、Shader Profiling 和 GPU Pipeline State 检查，适合作为性能案例的证据工具。
 
 > 岗位页面会随招聘状态变化；本节提取的是长期能力信号，不把某一条在招职位当作唯一目标岗位。
+
+## 9. 面向场景渲染、路径追踪与自然现象的重排路线（2026-09-01）
+
+### 9.1 新的项目定位与范围
+
+项目后续定位为 **Scene Rendering Lab**：复用同一套 glTF 资产、Scene、材质、相机和灯光数据，提供实时 PBR、Stylized/NPR 与渐进式 Path Tracing 三种可对照输出；自然场景选择一个“海岸 / 海岛天气”作为长期 Hero Scene，逐步加入物理天空、水体、体积云、极光与天气状态。项目仍然不是完整游戏引擎，不扩张到玩法、音频、网络或通用编辑器。
+
+| 方向 | 是否适合 | 当前决策 | 原因与边界 |
+| --- | --- | --- | --- |
+| 骨骼动画 | 适合，但不是主线 | 保留当前最小闭环，暂停功能扩张 | 已能验证动态顶点、阴影一致性和 glTF Animation；角色混合树、Root Motion、Morph Target 对自然场景收益低 |
+| 渐进式路径追踪 | 很适合，列为核心主线 | 先做 CPU Reference Path Tracer，再迁移 GPU | 可复用现有资产/PBR 数据，并为实时光栅、玻璃和风格化结果提供 Ground Truth / 对照图 |
+| 实时光线追踪 | 适合，但放在后段 | Vulkan Raster Baseline 稳定后再做 Ray Query / RT Pipeline | 当前 OpenGL 3.3 没有 Compute Shader 或标准硬件光追接口；不应把 Vulkan、BVH、Shader Binding Table 和降噪一次性塞进当前 Renderer |
+| 风格化场景 | 很适合，短周期高回报 | 作为独立 Render Mode，小范围完成一套 NPR 套件 | 直接复用 G-Buffer、深度、法线、后处理和调试 UI，能与真实感模式形成清晰对照 |
+| 海洋 / 水体 | 很适合，建议作为自然场景旗舰 | 先做 Gerstner 水面渲染，再做 FFT Ocean；浅水交互单独立项 | Gerstner Wave 是解析动画，不宣称流体模拟；FFT 是频谱海面合成；Shallow Water 才是局部水体动力学求解 |
+| 体积云 | 很适合 | 在物理天空、Temporal Framework 与低分辨率体积合成稳定后实现 | 需要 Ray March、噪声/Weather Map、云影、时序重投影与性能分档，不能只做一张静态噪声图 |
+| 极光 | 适合，作为体积框架复用案例 | 放在体积云之后，用可控帘幕密度场实现 | 目标是可导演的 Aurora Curtain 与体积发光，不宣称完整磁层/等离子体物理模拟 |
+| 天气效果 | 适合，但必须拆分 | 用 Weather State 驱动天空、云、雾、风、降水、湿润和闪电 | 不做一套“全物理耦合天气模拟”；每个子效果有独立质量档位、调试视图和性能预算 |
+
+路线原则：**一个长期 Hero Scene、三个渲染模式、分阶段共用基础设施。** 不同时启动路径追踪、Vulkan、FFT 海洋和体积云；每阶段完成可复现验收后再进入下一阶段。
+
+### 9.2 骨骼动画模块的后续决策
+
+- [x] 保留 glTF Skin / Joint / Weight / Clip Sampling / GPU Skinning 最小闭环及固定回归资产。
+- [ ] 近期只做兼容性维护，不实现 Animation Blending、State Machine、IK、Root Motion、Morph Target 或 FBX Animation。
+- [ ] 在统一动态 Motion Vector 阶段补上一帧 Model Matrix 与上一帧 Skin Palette，解决动画配合 TAA 时的 Ghosting。
+- [ ] 为 Skinned Mesh 增加保守动态 Bounds；只有它真正进入多对象 Scene / Culling 时再实现逐帧 Bounds 更新或离线包围范围。
+- [ ] 到 Vulkan Ray Tracing 阶段，用同一资产对比 Static BLAS、Rigid TLAS Update 与 Skinned BLAS Refit/Rebuild 成本；在此之前不为光追提前扩张动画系统。
+
+结论：骨骼动画的必要程度是“资产兼容与动态几何验证需要，角色系统不需要”。现有投入已经达到合适深度，不应继续抢占路径追踪和自然场景预算。
+
+### 9.3 SR-P0：先收口共用基础（预计 2～4 周）
+
+这一阶段从 8.2、8.4 和现有已知限制中只抽取后续场景真正依赖的事项；其余 P0 包装任务后移，不机械清空旧清单。
+
+- [x] 拆分 `Application.cpp`，把 Scene 面板与 Scene 同步逻辑迁入独立编译单元；窗口、Inspector、Viewport、导入和 Demo/Preset 继续保留明确成员边界，后续按改动热点渐进拆分。
+- [x] 建立最小 `Scene` / `Entity` / `Transform` 列表：多对象、父子关系、显隐、选择、复制/删除和独立 Tint 材质实例；不引入完整 ECS。
+- [x] glTF Node Transform 与 Mesh Geometry 解耦，同一 Mesh 多实例只保存一份 GPU 几何；为后续 CPU BVH、TLAS 和场景编辑建立稳定语义。
+- [x] 将 `RenderPassSequence` 升级为显式 Pass Context：输入/输出、尺寸、清理、状态、Debug Label；增加集中式 OpenGL State Cache，先不做通用 Render Graph。
+- [x] 增加 Shader Hot Reload：失败时保留上一 Program，并在 UI 显示编译/链接日志；为 NPR、水体和体积效果迭代服务。
+- [x] 统一 Temporal Framework：相机、对象和骨骼上一帧变换、History Reset、Jitter 与 Dynamic Motion Vector；TAA 不再只覆盖相机运动。
+- [x] 把现有分散的 Visual Regression / Benchmark 汇总为 `renderer-regression-suite` / `renderer-benchmark-suite` 统一入口，并保留各专项报告。
+- [x] 增加 Windows CI、项目/依赖/资产许可证清单和 CPack Release ZIP；运行时优先从可执行文件目录解析资源。
+
+SR-P0 验收：同一场景包含至少 10 个独立 Entity 与 2 个共享 Mesh 实例；对象移动时 Motion Vector 正确，TAA 无明显拖影；Shader 编译失败不黑屏；所有现有玻璃、Deferred、TAA/SSAO、Skinning 回归继续通过。
+
+> SR-P0 完成（2026-09-02）：新增轻量 Scene Graph、10 对象共享几何固定场景、glTF Node/Mesh 实例语义、显式 Pass Context、OpenGL State Cache 与失效安全 Shader Hot Reload。G-Buffer 新增对象/骨骼 Motion Vector，GpuModel 保存上一帧节点/关节矩阵并使用保守动态包围球；三张固定回归分别验证多 Entity、刚体运动和 Skinning 运动。工程侧新增统一回归/基准目标、Windows CI、MIT 项目许可证、第三方/资产清单以及不依赖源码目录的 CPack ZIP。架构、复现命令和当前边界见 `docs/scene-rendering-foundation.md`。下一阶段进入 SR-P1 静态 Reference Path Tracer，先定义共享 `SceneSnapshot` 和可单元测试的 Ray/AABB/Triangle/BVH。
+
+### 9.4 SR-P1：静态 Reference Path Tracer（预计 4～6 周）
+
+先做 CPU 渐进式参考渲染器，用正确性和可测试性隔离 Vulkan/API 复杂度。它不是旧 Whitted Renderer 的简单迁回，而是与当前 glTF Metallic-Roughness、Transmission、IOR、Volume 和 HDRI 对齐的 Monte Carlo Path Tracer。
+
+- [ ] 定义只读 `SceneSnapshot`，由实时 Scene 导出实例化 Mesh、世界变换、材质、纹理、相机、灯光与环境；Rasterizer 和 Path Tracer 不各自解析资产。
+- [ ] 实现可单元测试的 Ray/AABB、Ray/Triangle、Surface Interaction、BVH Build/Traversal；先 Median Split，再用数据决定是否升级 SAH。
+- [ ] 实现 Progressive Accumulation、确定性随机种子、Samples Per Pixel、Max Depth、Russian Roulette 和可取消后台渲染。
+- [ ] 对齐 glTF PBR BSDF：Lambert/Disney Diffuse、GGX Specular、Metallic、Roughness、Emissive；随后加入 Dielectric Transmission、Fresnel、IOR 与 Beer-Lambert Volume。
+- [ ] 实现 Next Event Estimation 与 Multiple Importance Sampling，支持方向光、点/聚光、面光源和 HDR Environment Importance Sampling。
+- [ ] 输出线性 HDR 与 Tone-mapped PNG；保留 Albedo、Normal、Depth、Direct、Indirect、Sample Count 与 Variance 调试层。
+- [ ] 建立原创 Cornell-style 场景、`pbr_material_test.gltf` 和 Volume Glass 三组固定对照；同机位输出 Raster / Path Traced / Difference。
+- [ ] 在正确性稳定后再加线程池、BVH 构建/遍历 Profile 和 Tile 调度；不以“多线程跑起来”代替能量与采样验证。
+
+SR-P1 验收：固定随机种子可复现；增加 SPP 后误差总体下降；Diffuse、Metal、Roughness、Emissive、Glass 与 HDRI 有独立对照；报告明确采样噪声、Firefly、收敛速度、BVH 时间和当前不支持项。
+
+### 9.5 SR-P2：Stylized / NPR 渲染模式（预计 2～3 周）
+
+该阶段是短周期视觉成果，严格复用现有 Scene、灯光、G-Buffer 和后处理，不再造一套资产系统。
+
+- [ ] 增加 PBR / Stylized Render Mode，支持 Toon Ramp、可控明暗分层、分层高光、Rim Light 与 Shadow Tint。
+- [ ] 实现一种稳定描边主路径：优先 Screen-space Depth/Normal Edge；可选 Inverted Hull 只用于适合的封闭模型。
+- [ ] 增加 Face/Direction Map、Dither、Height Fog、Bloom 与 Color Grading LUT 的风格化组合，但不做通用节点材质编辑器。
+- [ ] 提供 Clean Toon、Painterly、Night Aurora 三组 Preset；同一套参数至少在角色、建筑和自然场景三类资产上可复用。
+- [ ] 提供 Lighting Bands、Rim、Outline、Fog、LUT 调试视图和 Low/High 两档性能数据。
+
+SR-P2 验收：同一相机可一键切换 PBR 与三种 Stylized Preset；参数不是只适配一个模型；轮廓在分辨率变化、TAA 和透明物体附近有明确边界与回归图。
+
+### 9.6 SR-P3：自然场景地基与实时水面（预计 4～6 周）
+
+先建立室外光照一致性，再做水。海面首先是一套可实时导演的 Surface Synthesis 与 Water Shading，不提前宣称流体模拟。
+
+#### Atmosphere-0：物理天空与室外光照
+
+- [ ] 实现 Rayleigh / Mie Atmosphere LUT 或等价可验证方案，统一太阳方向、天空颜色、Aerial Perspective、方向光和 IBL 更新。
+- [ ] 增加昼夜时间、太阳/月亮、曝光与雾参数；提供 Transmittance、Sky View、Aerial Perspective 调试视图。
+- [ ] 把稳定 CSM、Texel Snapping、Bias 调试和室外场景 Bounds 拟合作为本阶段依赖；PCSS 仅在 CSM 正确后作为可选质量档。
+
+#### Water-0：实时海面渲染
+
+- [ ] 使用 Projected Grid、Clipmap 或可解释的相机相关 LOD 承载大范围海面；避免固定高细分平面无限扩展。
+- [ ] 先实现多组 Gerstner Waves，输出解析位移、法线、切线与速度；在 UI 中明确标注为 Wave Synthesis，不称为 Fluid Simulation。
+- [ ] 复用现有 Fresnel、IOR、Transmission、Beer-Lambert、环境反射和屏幕空间折射；加入水深着色、岸边 Foam、Whitecap 与 Underwater Fog。
+- [ ] 让水面参与 Shadow、Motion Vector、TAA 和深度合成；提供 Displacement、Normal、Depth/Absorption、Foam 与 Reflection/Refraction 调试视图。
+- [ ] 建立 Calm / Windy / Storm 三组海况，记录网格档位、波数、反射质量和屏幕覆盖率对应的 GPU 时间。
+
+SR-P3 验收：同一个海岸 Hero Scene 可从正午平静海面连续切到日落风浪；太阳、天空、雾、水面反射/折射和阴影方向一致；相机移动与波浪动画在 TAA 下稳定。
+
+### 9.7 SR-P4：体积云、极光与天气系统（预计 6～10 周，拆分交付）
+
+#### Volume-0：统一体积框架
+
+- [ ] 建立 Half/Quarter Resolution Ray March、Depth-aware Upsample、Blue-noise Jitter、Temporal Reprojection 与 History Rejection。
+- [ ] 先用 Height Fog / Local Fog Volume 验证密度、吸收、单次散射、相函数和与不透明深度的合成顺序。
+
+#### Cloud-0：体积云
+
+- [ ] 使用 Shape Noise + Detail Noise + Weather Map 控制覆盖率、云型、高度和侵蚀；噪声可离线生成，运行时不强求 Compute。
+- [ ] 实现 Sun Light March、近似多重散射、Powder/Silver Lining、云影和与物理天空一致的日夜光照。
+- [ ] 提供 Coverage、Density、Light Transmittance、Step Count、History Weight 和 Cloud Shadow 调试视图；按 1080p Low/High 档记录预算。
+
+#### Aurora-0：可导演极光
+
+- [ ] 用 Spline / Flow Map 定义 Aurora Curtain 足迹，以距离场或窄带密度场生成帘幕；叠加时变细节和高度方向发光分布。
+- [ ] 在体积框架中积分 Emission/Absorption，并通过 HDR/Bloom 与夜空、云和地面反照联动；提供 Curtain、Density、Emission 与 Composite 调试视图。
+- [ ] 明确这是实时视觉模型，不宣称磁层粒子或等离子体全物理模拟。
+
+#### Weather-0：状态驱动的天气组合
+
+- [ ] 定义 Weather State / Preset，统一驱动太阳、云量、风、雾、降水、地表湿润、闪电和音画之外的曝光变化。
+- [ ] 第一版降雨使用实例化 Rain Streak / Splash、Depth Collision 与 Wetness/Puddle 材质响应；大规模 GPU 粒子放到现代 Compute 后端。
+- [ ] 支持 Clear → Overcast → Storm 的确定性 Timeline，记录每个子系统 GPU 时间，并允许独立关闭排查耦合问题。
+
+SR-P4 验收：同一 Hero Scene 有晴天、暴风雨和极光夜三种完整 Preset；每种状态不是单独换背景图，而是共享太阳/天空/云/雾/水面/地表参数；所有体积效果有分辨率与步数档位，避免填充率失控。
+
+### 9.8 SR-P5：现代 GPU 后端、实时光追与真正的水体计算（预计 8～12+ 周）
+
+当前 OpenGL 3.3 Rasterizer 继续作为稳定对照，不直接升级成混杂的“OpenGL 4.6 + Vulkan 双重抽象”。先复用格式无关 Scene/Asset 数据，在旁路建立最小 Vulkan Renderer；同一场景画面稳定后再加入 Compute 与 Ray Tracing。
+
+- [ ] 完成 Vulkan 静态 glTF Raster Baseline：Dynamic Rendering、Descriptor、资源上传、Frame-in-flight、同步验证和 RenderDoc Capture；不先设计通用 RHI。
+- [ ] 为每个唯一 Mesh 建 BLAS、每个 Scene Entity 建 TLAS Instance；先实现静态场景与刚体 Transform Update。
+- [ ] 用 `VK_KHR_ray_query` 做混合 Ray-traced Shadow / Reflection，与 Shadow Map / SSR 保留同机位质量和性能对照。
+- [ ] 再实现 `VK_KHR_ray_tracing_pipeline` 渐进式 GPU Path Tracing，共享 SR-P1 的 BSDF、灯光语义和验收场景；加入时空积累与基础降噪。
+- [ ] 骨骼动画只作为动态几何专项：测量 BLAS Refit/Rebuild、显存和同步代价；默认 Hero Scene 不依赖动画角色。
+- [ ] 实现 Compute FFT Ocean：Tessendorf Spectrum、Inverse FFT、Choppy Displacement、Normal/Jacobian 与 Whitecap，并与 Gerstner Low 档同场景对照。
+- [ ] 将 Shallow Water 单独实现为局部 Height-field Solver，支持障碍、Impulse 与边界条件；不与远海 FFT 在第一版强行双向耦合。
+- [ ] 大规模 Rain/Snow Particle、3D Noise 生成和体积预计算可在 Compute 后端迁移；每项迁移必须保留 OpenGL Low 档或离线生成回退。
+
+SR-P5 验收：Vulkan 与 OpenGL 能加载同一 SceneSnapshot；Ray Query 至少完成阴影或反射中的一项可信案例；GPU Path Tracer 与 CPU Reference 在固定场景中趋势一致；FFT Ocean 和浅水求解明确展示频谱合成与动力学模拟的区别。
+
+### 9.9 默认执行顺序与阶段门槛
+
+1. **现在先做 SR-P0**：Scene/Entity、Node/Instance 语义、Application 拆分、Pass Context、Shader Hot Reload、Dynamic Motion Vector。
+2. **随后做 SR-P1**：静态 CPU Reference Path Tracer，先建立光线、BVH、BSDF、采样与 Ground Truth 能力。
+3. **用 SR-P2 做一次短周期视觉交付**：完成 Stylized/NPR 三 Preset，不扩成材质编辑器。
+4. **进入 SR-P3 长期 Hero Scene**：物理天空 → 室外阴影 → Gerstner 海面 → 水体材质与泡沫。
+5. **按 SR-P4 分三次交付**：体积框架/雾 → 体积云 → 极光与天气组合；每次都可独立发布。
+6. **最后进入 SR-P5**：Vulkan Baseline → Ray Query → GPU Path Tracing → FFT Ocean / Shallow Water / GPU Weather。
+7. **作品集包装贯穿阶段**：每一阶段必须同时留下 Hero Shot、Debug View、Before/After、GPU Capture、性能表、失败边界和复现命令，不集中到最后补证据。
+
+阶段门槛：若当前阶段没有固定场景、自动回归、性能预算和限制说明，则不开始下一个大型效果。单人排期中同一时间只允许一个“底层系统任务”和一个“小型视觉打磨任务”，不并行开四个旗舰模块。
+
+### 9.10 暂缓或明确不做
+
+- 暂缓动画混合树、IK、Root Motion、Morph Target、FBX Animation 和角色 Gameplay。
+- 暂缓完整 ECS、通用 Render Graph、通用节点材质编辑器和编辑器 Undo/Redo 系统。
+- 暂缓把所有 OpenGL 类抽象成大一统 RHI；Vulkan 第一版允许独立后端，通过 `SceneSnapshot` 共享数据。
+- 暂缓全物理海气耦合、SPH 大规模液体、Navier-Stokes 3D 天气、磁流体极光模拟；先做视觉可信、可解释、可测的实时模型。
+- 暂缓实时光追体积云和水体多次散射；Raster/Compute 版本达到画质与性能基线后再评估 Ray Tracing 的真实收益。
+
+### 9.11 技术依据
+
+- Khronos OpenGL 4.3 Core 首次提供 Compute Shader；当前 OpenGL 3.3 主路径不适合承载 FFT 海洋、大规模 GPU 粒子或通用 Compute Path Tracing：[OpenGL 4.3 Core Specification](https://registry.khronos.org/OpenGL/specs/gl/glspec43.core.pdf)。
+- Vulkan 实时光追依赖 Acceleration Structure、Ray Query 或 Ray Tracing Pipeline；BLAS/TLAS 的构建、更新和同步本身就是独立工程阶段：[Khronos Vulkan Ray Tracing Guide](https://docs.vulkan.org/guide/latest/extensions/ray_tracing.html)。
+- 频谱海面与 FFT 路线参考 Jerry Tessendorf 的原始课程讲义：[Simulating Ocean Water](https://jtessen.people.clemson.edu/reports/papers_files/coursenotes2004.pdf)。
+- 体积云的 Shape/Detail Noise、Weather Control、Lighting 与性能分档参考 Guerrilla 的原始分享：[The Real-Time Volumetric Cloudscapes of Horizon Zero Dawn](https://www.guerrilla-games.com/read/the-real-time-volumetric-cloudscapes-of-horizon-zero-dawn)。
+- 物理天空可从 Rayleigh/Mie 预计算散射建立正确性基线：[Precomputed Atmospheric Scattering](https://onlinelibrary.wiley.com/doi/pdf/10.1111/j.1467-8659.2008.01245.x)。
+- Aurora Curtain、距离场与 GPU 体积积分的可行性参考原论文：[Interactive Volume Rendering Aurora on the GPU](https://www.cs.uaf.edu/~olawlor/papers/2010/aurora/lawlor_aurora_2010.pdf)。

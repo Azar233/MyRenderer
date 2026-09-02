@@ -61,6 +61,11 @@ void GBuffer::resize(int width, int height, int samples) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, width_, height_, 0, GL_RG, GL_UNSIGNED_BYTE, nullptr);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, materialTexture_, 0);
 
+    glGenTextures(1, &motionTexture_);
+    configureTexture(motionTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width_, height_, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, motionTexture_, 0);
+
     glGenTextures(1, &depthTexture_);
     configureTexture(depthTexture_);
     glTexImage2D(
@@ -81,10 +86,11 @@ void GBuffer::resize(int width, int height, int samples) {
         depthTexture_,
         0
     );
-    const std::array<unsigned int, 3> drawBuffers{
+    const std::array<unsigned int, 4> drawBuffers{
         GL_COLOR_ATTACHMENT0,
         GL_COLOR_ATTACHMENT1,
-        GL_COLOR_ATTACHMENT2
+        GL_COLOR_ATTACHMENT2,
+        GL_COLOR_ATTACHMENT3
     };
     glDrawBuffers(static_cast<GLsizei>(drawBuffers.size()), drawBuffers.data());
     requireComplete("resolved G-buffer");
@@ -107,6 +113,11 @@ void GBuffer::resize(int width, int height, int samples) {
         glBindRenderbuffer(GL_RENDERBUFFER, multisampleMaterial_);
         glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples_, GL_RG8, width_, height_);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_RENDERBUFFER, multisampleMaterial_);
+
+        glGenRenderbuffers(1, &multisampleMotion_);
+        glBindRenderbuffer(GL_RENDERBUFFER, multisampleMotion_);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples_, GL_RGBA16F, width_, height_);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_RENDERBUFFER, multisampleMotion_);
 
         glGenRenderbuffers(1, &multisampleDepthStencil_);
         glBindRenderbuffer(GL_RENDERBUFFER, multisampleDepthStencil_);
@@ -137,10 +148,11 @@ void GBuffer::bindForGeometry() const {
         GL_FRAMEBUFFER,
         samples_ > 1 ? multisampleFramebuffer_ : framebuffer_
     );
-    const std::array<unsigned int, 3> drawBuffers{
+    const std::array<unsigned int, 4> drawBuffers{
         GL_COLOR_ATTACHMENT0,
         GL_COLOR_ATTACHMENT1,
-        GL_COLOR_ATTACHMENT2
+        GL_COLOR_ATTACHMENT2,
+        GL_COLOR_ATTACHMENT3
     };
     glDrawBuffers(static_cast<GLsizei>(drawBuffers.size()), drawBuffers.data());
 }
@@ -149,7 +161,7 @@ void GBuffer::resolve() const {
     if (samples_ <= 1) return;
     glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampleFramebuffer_);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer_);
-    for (unsigned int attachment = 0; attachment < 3U; ++attachment) {
+    for (unsigned int attachment = 0; attachment < 4U; ++attachment) {
         glReadBuffer(GL_COLOR_ATTACHMENT0 + attachment);
         glDrawBuffer(GL_COLOR_ATTACHMENT0 + attachment);
         glBlitFramebuffer(
@@ -189,7 +201,7 @@ std::size_t GBuffer::estimatedBytes() const {
     if (width_ <= 0 || height_ <= 0) return 0U;
     const std::size_t pixels = static_cast<std::size_t>(width_)
         * static_cast<std::size_t>(height_);
-    const std::size_t resolvedBytes = pixels * (4U + 8U + 2U + 4U);
+    const std::size_t resolvedBytes = pixels * (4U + 8U + 2U + 8U + 4U);
     const std::size_t multisampleBytes = samples_ > 1
         ? resolvedBytes * static_cast<std::size_t>(samples_)
         : 0U;
@@ -198,10 +210,12 @@ std::size_t GBuffer::estimatedBytes() const {
 
 void GBuffer::destroy() {
     if (multisampleDepthStencil_ != 0U) glDeleteRenderbuffers(1, &multisampleDepthStencil_);
+    if (multisampleMotion_ != 0U) glDeleteRenderbuffers(1, &multisampleMotion_);
     if (multisampleMaterial_ != 0U) glDeleteRenderbuffers(1, &multisampleMaterial_);
     if (multisampleNormal_ != 0U) glDeleteRenderbuffers(1, &multisampleNormal_);
     if (multisampleAlbedo_ != 0U) glDeleteRenderbuffers(1, &multisampleAlbedo_);
     if (depthTexture_ != 0U) glDeleteTextures(1, &depthTexture_);
+    if (motionTexture_ != 0U) glDeleteTextures(1, &motionTexture_);
     if (materialTexture_ != 0U) glDeleteTextures(1, &materialTexture_);
     if (normalTexture_ != 0U) glDeleteTextures(1, &normalTexture_);
     if (albedoTexture_ != 0U) glDeleteTextures(1, &albedoTexture_);
@@ -212,10 +226,12 @@ void GBuffer::destroy() {
     albedoTexture_ = 0U;
     normalTexture_ = 0U;
     materialTexture_ = 0U;
+    motionTexture_ = 0U;
     depthTexture_ = 0U;
     multisampleAlbedo_ = 0U;
     multisampleNormal_ = 0U;
     multisampleMaterial_ = 0U;
+    multisampleMotion_ = 0U;
     multisampleDepthStencil_ = 0U;
     width_ = 0;
     height_ = 0;
