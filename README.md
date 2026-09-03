@@ -1,6 +1,6 @@
 # MyRenderer
 
-一个独立的 C++17 / OpenGL 3.3 GPU 光栅化渲染器。项目从 Dandelion 图形学实验框架中保留了模型、相机、材质与实时预览的设计思路，但不包含 CPU 软光栅化、光线追踪、物理模拟和半边网格模块。
+一个独立的 C++17 / OpenGL 3.3 GPU 光栅化渲染器与 Scene Rendering Lab。项目从 Dandelion 图形学实验框架中保留了模型、相机、材质与实时预览的设计思路；当前正在新增独立的 CPU Reference Path Tracer，不包含旧 CPU 软光栅化、物理模拟和半边网格模块。
 
 当前版本可以加载 OBJ、DAE、glTF 2.0 和 GLB 静态模型，将网格与纹理上传到 GPU，按子网格材质范围通过 `glDrawElements` 完成多材质渲染，并在 Dear ImGui 界面中实时调整模型与渲染参数。
 
@@ -27,6 +27,7 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - 轻量 Scene/Entity/Transform 场景图：父子层级、显隐、选择、复制/删除、独立 Tint 材质实例，以及同一 Mesh 的多 Node/多 Entity 几何复用。
 - 显式 Render Pass Context 与 OpenGL State Cache；Shader 文件改动可热重载，编译失败时保留上一可用 Program 并在 Inspector 显示日志。
 - 相机、刚体对象与骨骼的统一 Temporal History；G-Buffer 输出动态 Motion Vector，TAA 可处理对象与蒙皮运动。
+- SR-P1A CPU Reference Path Tracer 基础：实时 Scene/Camera 可导出共享只读 `SceneSnapshot`，保留 Mesh Instance、材质/纹理来源、相机与灯光/环境；提供 Ray/AABB、Ray/Triangle、Surface Interaction 和确定性 Median-Split BVH 构建/遍历。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
@@ -97,7 +98,7 @@ OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化
 
 ## 自动测试
 
-纯 CPU 资产导入、场景透明排序与棱镜光路测试不创建 OpenGL 上下文，可直接通过 CTest 运行：
+纯 CPU 资产导入、场景透明排序、棱镜光路与 Reference Path Tracer 几何/BVH 测试不创建 OpenGL 上下文，可直接通过 CTest 运行：
 
 ```powershell
 ctest --test-dir build-mingw --output-on-failure
@@ -245,6 +246,9 @@ src/io/AssimpImporter.*  DAE 与 glTF/GLB 模型、Skin 与 Animation 导入适�
 src/io/ObjLoader.*       OBJ 导入器：统一索引、UV、法线与 AABB
 src/optics/PrismOptics.* 无 OpenGL 依赖的三棱镜求交、双界面折射、Fresnel 与 TIR
 src/optics/PrismDemo.*   Prism 参数、四组光学 Preset、White Point 与实时求解入口
+src/pathtracer/RayGeometry.* Ray/AABB/Triangle 求交与 Surface Interaction
+src/pathtracer/Bvh.*     确定性 Median-Split BVH 构建与近节点优先遍历
+src/pathtracer/SceneSnapshot.* 共享 CPU 资产、Mesh Instance、相机与灯光的只读快照
 src/render/Camera.*      轨道相机
 src/render/DebugGrid.*   世界网格、XYZ 轴线与 Debug Line GPU 绘制
 src/render/EnvironmentMap.* HDR equirectangular 导入、Split-Sum IBL 预计算、程序化回退与天空盒
@@ -266,4 +270,5 @@ assets/models/           模型资源
 assets/icons/            SVG 源稿、PNG 预览和 Windows ICO
 tests/AssetImportTests.cpp 无 OpenGL 上下文的 CPU 导入回归测试
 tests/PrismOpticsTests.cpp 无 OpenGL 上下文的棱镜光路与数值稳定性测试
+tests/PathTracingFoundationTests.cpp SceneSnapshot、几何求交与 BVH 的 CPU 回归测试
 ```

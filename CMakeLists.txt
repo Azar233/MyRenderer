@@ -96,6 +96,19 @@ target_compile_definitions(imgui_backend PRIVATE
 )
 target_link_libraries(imgui_backend PUBLIC glfw glad_gl_core_33)
 
+add_library(MyRendererPathTracing STATIC
+    src/pathtracer/Bvh.cpp
+    src/pathtracer/RayGeometry.cpp
+    src/pathtracer/SceneSnapshot.cpp
+)
+target_include_directories(MyRendererPathTracing PUBLIC src)
+target_link_libraries(MyRendererPathTracing PUBLIC glm::glm)
+if(MSVC)
+    target_compile_options(MyRendererPathTracing PRIVATE /W4 /permissive- /utf-8)
+else()
+    target_compile_options(MyRendererPathTracing PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(MyRenderer
     src/main.cpp
     src/app/AppIcon.cpp
@@ -108,6 +121,7 @@ add_executable(MyRenderer
     src/optics/PrismOptics.cpp
     src/optics/PrismDemo.cpp
     src/optics/SpectralBeamMesh.cpp
+    src/pathtracer/SceneSnapshotCapture.cpp
     src/render/Camera.cpp
     src/render/CausticsMap.cpp
     src/render/DebugGrid.cpp
@@ -161,6 +175,7 @@ target_link_libraries(MyRenderer PRIVATE
     assimp::assimp
     tinyobjloader
     zlibstatic
+    MyRendererPathTracing
 )
 
 if(MSVC)
@@ -230,6 +245,15 @@ if(BUILD_TESTING)
         target_compile_options(MyRendererSceneGraphTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME scene-graph COMMAND MyRendererSceneGraphTests)
+
+    add_executable(MyRendererPathTracingTests tests/PathTracingFoundationTests.cpp)
+    target_link_libraries(MyRendererPathTracingTests PRIVATE MyRendererPathTracing)
+    if(MSVC)
+        target_compile_options(MyRendererPathTracingTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererPathTracingTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME path-tracing-foundation COMMAND MyRendererPathTracingTests)
 
     add_executable(MyRendererShaderHotReloadTests
         tests/ShaderHotReloadTests.cpp

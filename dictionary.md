@@ -2,7 +2,7 @@
 
 本文档记录 MyRenderer 已使用、正在实现和路线图中即将使用的图形学与工程术语。解释优先服务于理解本项目，不追求替代完整教材。
 
-最后更新：2026-08-24
+最后更新：2026-09-03
 
 ## 阅读与维护约定
 
@@ -39,7 +39,7 @@
 
 | 术语 | 通俗解释 | 在 MyRenderer 中的作用 | 状态 |
 | --- | --- | --- | --- |
-| Rasterization（光栅化） | 把三角形覆盖的区域转换成一个个待着色的像素/片元。 | OpenGL GPU 主渲染方式；项目不是 CPU 软光栅器或路径追踪器。 | 已实现 |
+| Rasterization（光栅化） | 把三角形覆盖的区域转换成一个个待着色的像素/片元。 | OpenGL GPU 实时主渲染方式；CPU Reference Path Tracer 作为独立对照路径。 | 已实现 |
 | Vertex Shader（顶点着色器） | GPU 对每个顶点执行的程序，主要完成坐标变换并输出插值数据。 | `basic.vert` 计算世界位置、法线、切线、MVP 和阴影坐标。 | 已实现 |
 | Fragment Shader（片元着色器） | GPU 对每个可见片元执行的程序，计算材质、光照和最终颜色。 | `basic.frag` 实现 Blinn-Phong/PBR、IBL、法线贴图和阴影。 | 已实现 |
 | GLSL | OpenGL 使用的 Shader 编程语言。 | `shaders/` 中的 `.vert`、`.frag` 文件使用 GLSL 330 Core。 | 已实现 |
@@ -282,6 +282,10 @@
 | Scene Graph（场景图） | 用父子层级组织场景物体；父对象移动时子对象跟随。 | 轻量 Scene/Entity/Transform 支持层级、显隐、选择、复制和共享 Mesh 实例。 | 已实现 |
 | Shader Hot Reload（着色器热重载） | 程序运行时重新编译改过的 Shader，不必重启应用。 | 候选 Program 成功后才替换；失败保留旧 Program 并显示日志。 | 已实现 |
 | Render Pass Context | 每个渲染阶段对输入、输出、Viewport、清理和图形状态的显式声明。 | RenderPassSequence 在进入 Pass 前应用 Context 与 State Cache，并输出 Debug Label。 | 已实现（轻量） |
+| Scene Snapshot（场景快照） | 把某一时刻的场景、相机、灯光和资产引用冻结成只读数据，后台渲染期间不受编辑操作影响。 | SR-P1A 从实时 Scene 导出共享 `ModelData` 与 Mesh Instance，供 CPU Reference Path Tracer 使用。 | 已实现 |
+| Ray Intersection（射线求交） | 判断一条带方向和有效距离的射线最先撞到哪个几何表面。 | SR-P1A 支持 Ray/AABB 和双面 Ray/Triangle，并输出重心坐标、UV 与法线。 | 已实现（CPU） |
+| Surface Interaction（表面交互） | 汇总一次命中的位置、距离、几何/着色法线、UV、朝向及材质身份，是后续 BSDF 计算的输入。 | 几何求交会保留 Asset/Instance/Mesh/Material/Primitive ID。 | 已实现（CPU） |
+| BVH（Bounding Volume Hierarchy） | 用层级包围盒排除大量不可能命中的三角形，减少逐三角形测试。 | SR-P1A 使用确定性的最大质心轴 Median Split，并优先遍历近节点。 | 已实现（CPU Median Split） |
 | Temporal Reprojection（时序重投影） | 根据运动向量把上一帧结果映射到当前帧。 | TAA 使用上一帧 Color/Depth ping-pong，越界或深度不兼容时拒绝历史。 | 已实现 |
 | Jitter | 每帧轻微移动投影采样位置，用多帧积累获得更密集采样。 | TAA 使用 8 样本 Halton(2,3) 序列偏移投影矩阵。 | 已实现 |
 | Frustum Culling（视锥剔除） | CPU/GPU 不提交相机视野外的物体。 | GP-P1C 从 View-Projection 提取六个平面，以世界空间包围球保守判断 2,500 个实例的可见性。 | 已实现（CPU） |

@@ -1956,17 +1956,20 @@ void Application::updateModelLoad() {
 
 void Application::finishModelLoad(const std::filesystem::path& path, ModelImportResult loaded) {
     const auto gpuUploadStartedAt = std::chrono::steady_clock::now();
-    std::vector<TextureUploadWarning> textureWarnings;
-    auto newModel = std::make_unique<GpuModel>(
-        loaded.model,
-        renderer_->textureCache(),
-        textureWarnings
-    );
-    const glm::vec3 extent = loaded.model.boundsMax - loaded.model.boundsMin;
+    const glm::vec3 modelBoundsMin = loaded.model.boundsMin;
+    const glm::vec3 modelBoundsMax = loaded.model.boundsMax;
+    const glm::vec3 extent = modelBoundsMax - modelBoundsMin;
     const float maximumExtent = std::max({extent.x, extent.y, extent.z});
     if (!std::isfinite(maximumExtent) || maximumExtent <= 1e-8f) {
         throw std::runtime_error("Model bounds are empty or degenerate");
     }
+
+    std::vector<TextureUploadWarning> textureWarnings;
+    auto newModel = std::make_unique<GpuModel>(
+        std::move(loaded.model),
+        renderer_->textureCache(),
+        textureWarnings
+    );
 
     lastCpuImportMilliseconds_ = loaded.cpuTimeMilliseconds;
     lastGpuUploadMilliseconds_ = std::chrono::duration<double, std::milli>(
@@ -2011,7 +2014,7 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
         rendererSettings_.shadowsEnabled = false;
         camera_.setOrbitPose(glm::vec3(0.0f, 0.6f, 0.0f), 0.0f, 4.0f, 3.6f, 38.0f);
     }
-    modelCenter_ = 0.5f * (loaded.model.boundsMin + loaded.model.boundsMax);
+    modelCenter_ = 0.5f * (modelBoundsMin + modelBoundsMax);
     modelNormalizationScale_ = 1.4f / maximumExtent;
     resetObjectTransform();
     const bool loadedPrismFixture = lowercase(path.filename().string()) == "prism_spectrum.gltf";

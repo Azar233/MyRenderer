@@ -637,14 +637,16 @@ SR-P0 验收：同一场景包含至少 10 个独立 Entity 与 2 个共享 Mesh
 
 先做 CPU 渐进式参考渲染器，用正确性和可测试性隔离 Vulkan/API 复杂度。它不是旧 Whitted Renderer 的简单迁回，而是与当前 glTF Metallic-Roughness、Transmission、IOR、Volume 和 HDRI 对齐的 Monte Carlo Path Tracer。
 
-- [ ] 定义只读 `SceneSnapshot`，由实时 Scene 导出实例化 Mesh、世界变换、材质、纹理、相机、灯光与环境；Rasterizer 和 Path Tracer 不各自解析资产。
-- [ ] 实现可单元测试的 Ray/AABB、Ray/Triangle、Surface Interaction、BVH Build/Traversal；先 Median Split，再用数据决定是否升级 SAH。
+- [x] 定义只读 `SceneSnapshot`，由实时 Scene 导出实例化 Mesh、世界变换、材质、纹理、相机、灯光与环境；Rasterizer 和 Path Tracer 不各自解析资产。
+- [x] 实现可单元测试的 Ray/AABB、Ray/Triangle、Surface Interaction、BVH Build/Traversal；先 Median Split，再用数据决定是否升级 SAH。
 - [ ] 实现 Progressive Accumulation、确定性随机种子、Samples Per Pixel、Max Depth、Russian Roulette 和可取消后台渲染。
 - [ ] 对齐 glTF PBR BSDF：Lambert/Disney Diffuse、GGX Specular、Metallic、Roughness、Emissive；随后加入 Dielectric Transmission、Fresnel、IOR 与 Beer-Lambert Volume。
 - [ ] 实现 Next Event Estimation 与 Multiple Importance Sampling，支持方向光、点/聚光、面光源和 HDR Environment Importance Sampling。
 - [ ] 输出线性 HDR 与 Tone-mapped PNG；保留 Albedo、Normal、Depth、Direct、Indirect、Sample Count 与 Variance 调试层。
 - [ ] 建立原创 Cornell-style 场景、`pbr_material_test.gltf` 和 Volume Glass 三组固定对照；同机位输出 Raster / Path Traced / Difference。
 - [ ] 在正确性稳定后再加线程池、BVH 构建/遍历 Profile 和 Tile 调度；不以“多线程跑起来”代替能量与采样验证。
+
+> SR-P1A 完成（2026-09-03）：新增只读 `SceneSnapshot`，从实时 Scene/Camera 捕获可见 Entity、Mesh Instance、共享 `ModelData`、材质/纹理来源、相机与灯光/环境参数。`GpuModel` 接管导入后的 CPU 资产并以 `shared_ptr<const ModelData>` 与参考路径共享，同一 Mesh 的多 Node/多 Entity 不会重复解析或复制资产。CPU 几何层新增带区间的 Ray、稳健 AABB slab test、双面 Möller–Trumbore Triangle、完整 `SurfaceInteraction`，以及确定性最大质心轴 Median-Split BVH；快照可展开带稳定 Asset/Instance/Mesh/Material ID 的世界空间三角形。新增 `path-tracing-foundation` CTest，覆盖正反面、退化面、平行光线、最近命中、有限遮挡和共享实例数据链；MSVC Release 全量构建与 5 项 CTest 通过。设计与边界见 `docs/reference-path-tracer.md`。下一批进入 SR-P1B：确定性 Camera Ray、Progressive Accumulation、可取消后台任务与最小 Diffuse/Emissive 输出。
 
 SR-P1 验收：固定随机种子可复现；增加 SPP 后误差总体下降；Diffuse、Metal、Roughness、Emissive、Glass 与 HDRI 有独立对照；报告明确采样噪声、Firefly、收敛速度、BVH 时间和当前不支持项。
 

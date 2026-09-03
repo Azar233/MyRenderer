@@ -5,6 +5,7 @@
 #include <cmath>
 #include <functional>
 #include <stdexcept>
+#include <utility>
 
 #include <glad/gl.h>
 #include <glm/common.hpp>
@@ -72,19 +73,21 @@ glm::quat sampleRotation(
 } // namespace
 
 GpuModel::GpuModel(
-    const ModelData& data,
+    ModelData data,
     TextureCache& textureCache,
     std::vector<TextureUploadWarning>& warnings
 )
-    : whiteTexture_(textureCache.whiteTexture()),
+    : sourceData_(std::make_shared<const ModelData>(std::move(data))),
+      whiteTexture_(textureCache.whiteTexture()),
       flatNormalTexture_(textureCache.flatNormalTexture()),
       linearWhiteTexture_(textureCache.linearWhiteTexture()) {
-    boundsCenter_ = 0.5f * (data.boundsMin + data.boundsMax);
-    boundsRadius_ = glm::length(0.5f * (data.boundsMax - data.boundsMin));
+    const ModelData& modelData = *sourceData_;
+    boundsCenter_ = 0.5f * (modelData.boundsMin + modelData.boundsMax);
+    boundsRadius_ = glm::length(0.5f * (modelData.boundsMax - modelData.boundsMin));
     dynamicBoundsRadius_ = boundsRadius_;
-    textures_.reserve(data.textures.size());
-    textureFallbacks_.reserve(data.textures.size());
-    for (const auto& textureData : data.textures) {
+    textures_.reserve(modelData.textures.size());
+    textureFallbacks_.reserve(modelData.textures.size());
+    for (const auto& textureData : modelData.textures) {
         TextureLoadResult loaded = textureCache.load(textureData);
         if (loaded.usedFallback) {
             ++fallbackTextureCount_;
@@ -102,8 +105,8 @@ GpuModel::GpuModel(
         textureFallbacks_.push_back(loaded.usedFallback);
     }
 
-    materials_.reserve(data.materials.size());
-    for (const auto& materialData : data.materials) {
+    materials_.reserve(modelData.materials.size());
+    for (const auto& materialData : modelData.materials) {
         GpuMaterial material;
         material.baseColorFactor = materialData.baseColorFactor;
         material.metallicFactor = std::clamp(materialData.metallicFactor, 0.0f, 1.0f);
@@ -156,10 +159,10 @@ GpuModel::GpuModel(
         materials_.push_back(std::move(material));
     }
 
-    meshes_.reserve(data.meshes.size());
-    meshSkinJoints_.reserve(data.meshes.size());
-    meshVertexTransformBaked_.reserve(data.meshes.size());
-    for (const auto& meshData : data.meshes) {
+    meshes_.reserve(modelData.meshes.size());
+    meshSkinJoints_.reserve(modelData.meshes.size());
+    meshVertexTransformBaked_.reserve(modelData.meshes.size());
+    for (const auto& meshData : modelData.meshes) {
         auto mesh = std::make_unique<Mesh>(meshData);
         submeshCount_ += mesh->submeshCount();
         vertexCount_ += mesh->vertexCount();
@@ -170,8 +173,8 @@ GpuModel::GpuModel(
         jointCount_ += meshData.skinJoints.size();
     }
 
-    skeletonNodes_ = data.skeletonNodes;
-    animations_ = data.animations;
+    skeletonNodes_ = modelData.skeletonNodes;
+    animations_ = modelData.animations;
     nodeGlobalTransforms_.resize(skeletonNodes_.size(), glm::mat4(1.0f));
     previousNodeGlobalTransforms_.resize(skeletonNodes_.size(), glm::mat4(1.0f));
     updateAnimation(false, 0U, 0.0f);
@@ -217,7 +220,7 @@ GpuModel::GpuModel(
             appendNodeCommands(child, nodeTransform);
         }
     };
-    appendNodeCommands(data.rootNode, glm::mat4(1.0f));
+    appendNodeCommands(modelData.rootNode, glm::mat4(1.0f));
     if (opaqueDrawCommands_.empty() && transparentDrawCommands_.empty()) {
         for (std::size_t meshIndex = 0; meshIndex < meshes_.size(); ++meshIndex) {
             appendMeshCommands(meshIndex, glm::mat4(1.0f));

@@ -84,5 +84,7 @@ Skinning 和 SR-P0 固定画面。Benchmark 套件保留各专项 JSON 中的硬
 - 骨骼动态 Bounds 是保守球体，不是每帧精确 Skinned AABB。
 - OpenGL 3.3 无 Compute/SSBO；GPU Driven、海洋 FFT 与体积效果需要后续 API 决策。
 
-SR-P1 将从只读 `SceneSnapshot` 开始，让 Rasterizer 与 CPU Reference Path Tracer
-复用同一实例、材质、相机和环境数据，再实现 Ray/AABB、Ray/Triangle 与 BVH。
+SR-P1A 已在此基础上加入只读 `SceneSnapshot`、Ray/AABB、Ray/Triangle、
+`SurfaceInteraction` 与 Median-Split BVH，让 Rasterizer 与 CPU Reference Path Tracer
+复用同一实例、材质、纹理、相机和灯光/环境数据。设计、测试和后续采样阶段见
+[`reference-path-tracer.md`](reference-path-tracer.md)。

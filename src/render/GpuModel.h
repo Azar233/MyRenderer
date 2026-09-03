@@ -23,7 +23,7 @@ struct TextureUploadWarning {
 class GpuModel {
 public:
     GpuModel(
-        const ModelData& data,
+        ModelData data,
         TextureCache& textureCache,
         std::vector<TextureUploadWarning>& warnings
     );
@@ -75,6 +75,7 @@ public:
     void updateAnimation(bool enabled, std::size_t clipIndex, float timeSeconds);
     void setSkinningDebugView(int view) { skinningDebugView_ = view; }
     bool hasSkinningMotion() const { return skinningMotionValid_; }
+    const std::shared_ptr<const ModelData>& sourceData() const { return sourceData_; }
 
 private:
     struct GpuMaterial {
@@ -116,6 +117,7 @@ private:
     void bindSkinning(const Shader& shader, std::size_t meshIndex) const;
     void bindNodeTransform(const Shader& shader, const DrawCommand& command) const;
 
+    std::shared_ptr<const ModelData> sourceData_;
     std::vector<std::unique_ptr<Mesh>> meshes_;
     std::vector<std::vector<SkinJointData>> meshSkinJoints_;
     std::vector<bool> meshVertexTransformBaked_;
