@@ -264,6 +264,10 @@ if(BUILD_TESTING)
     add_test(NAME prism-optics COMMAND MyRendererPrismOpticsTests)
 
     add_executable(MyRendererImageComparison tests/ImageComparison.cpp)
+    target_include_directories(MyRendererImageComparison PRIVATE
+        ${assimp_SOURCE_DIR}/contrib/zlib
+        ${assimp_BINARY_DIR}/contrib/zlib
+    )
     target_link_libraries(MyRendererImageComparison PRIVATE zlibstatic)
     if(MSVC)
         target_compile_options(MyRendererImageComparison PRIVATE /W4 /permissive- /utf-8)
