@@ -236,6 +236,12 @@ int main() {
         require(!dae.model.meshes.empty(), "DAE fixture should import a mesh");
         require(!dae.model.textures.empty(), "DAE fixture should import its external texture reference");
 
+        for (const auto& emissionResult : {obj.load(asset("emissive_test.obj")), assimp.load(asset("emissive_test.gltf"))}) {
+            const auto* emission = findMaterial(emissionResult, "EmissionTest");
+            require(emission && glm::length(emission->emissiveFactor - glm::vec3(0.75f, 0.5f, 0.25f)) < 1e-6f,
+                "linear emission factor must survive OBJ/glTF import");
+        }
+
         bool missingFileRejected = false;
         try {
             obj.load(asset("does_not_exist.obj"));

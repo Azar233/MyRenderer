@@ -34,9 +34,9 @@ void appendPositiveAxis(
     const glm::vec3& arrowDirectionB,
     const glm::vec4& color
 ) {
-    constexpr float length = 1.35f;
-    constexpr float arrowLength = 0.18f;
-    constexpr float arrowWidth = 0.09f;
+    constexpr float length = 2.25f;
+    constexpr float arrowLength = 0.30f;
+    constexpr float arrowWidth = 0.14f;
     const glm::vec3 endpoint = origin + direction * length;
     appendLine(vertices, origin, endpoint, color);
     appendLine(
@@ -71,34 +71,19 @@ DebugGrid::DebugGrid(
     const std::filesystem::path& vertexShaderPath,
     const std::filesystem::path& fragmentShaderPath
 ) : shader_(std::make_unique<Shader>(vertexShaderPath, fragmentShaderPath)) {
+    infiniteShader_ = std::make_unique<Shader>(vertexShaderPath.parent_path() / "fullscreen.vert",
+        fragmentShaderPath.parent_path() / "infinite_grid.frag");
     std::vector<DebugVertex> vertices;
-    constexpr int halfLineCount = 20;
-    constexpr float spacing = 0.25f;
     constexpr float gridY = 0.0f;
-    constexpr float extent = halfLineCount * spacing;
-    for (int line = -halfLineCount; line <= halfLineCount; ++line) {
-        if (line == 0) {
-            continue;
-        }
-        const bool major = line % 4 == 0;
-        const glm::vec4 color = major
-            ? glm::vec4(0.36f, 0.40f, 0.48f, 0.48f)
-            : glm::vec4(0.25f, 0.28f, 0.34f, 0.25f);
-        const float offset = static_cast<float>(line) * spacing;
-        appendLine(vertices, {-extent, gridY, offset}, {extent, gridY, offset}, color);
-        appendLine(vertices, {offset, gridY, -extent}, {offset, gridY, extent}, color);
-    }
-    gridVertexCount_ = vertices.size();
-
     axesFirstVertex_ = vertices.size();
-    constexpr float negativeLength = 1.35f;
+    constexpr float negativeLength = 2.25f;
     const glm::vec3 axesOrigin(0.0f, gridY, 0.0f);
-    appendLine(vertices, axesOrigin, axesOrigin + glm::vec3(-negativeLength, 0.0f, 0.0f), {0.75f, 0.16f, 0.16f, 0.42f});
-    appendLine(vertices, axesOrigin, axesOrigin + glm::vec3(0.0f, -negativeLength, 0.0f), {0.20f, 0.68f, 0.28f, 0.42f});
-    appendLine(vertices, axesOrigin, axesOrigin + glm::vec3(0.0f, 0.0f, -negativeLength), {0.20f, 0.42f, 0.95f, 0.42f});
-    appendPositiveAxis(vertices, axesOrigin, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.18f, 0.18f, 0.95f});
-    appendPositiveAxis(vertices, axesOrigin, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.22f, 0.92f, 0.35f, 0.95f});
-    appendPositiveAxis(vertices, axesOrigin, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.22f, 0.48f, 1.0f, 0.95f});
+    appendLine(vertices, axesOrigin, axesOrigin + glm::vec3(-negativeLength, 0.0f, 0.0f), {1.00f, 0.08f, 0.14f, 0.65f});
+    appendLine(vertices, axesOrigin, axesOrigin + glm::vec3(0.0f, -negativeLength, 0.0f), {0.10f, 1.00f, 0.22f, 0.65f});
+    appendLine(vertices, axesOrigin, axesOrigin + glm::vec3(0.0f, 0.0f, -negativeLength), {0.08f, 0.34f, 1.00f, 0.65f});
+    appendPositiveAxis(vertices, axesOrigin, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.00f, 0.08f, 0.14f, 1.0f});
+    appendPositiveAxis(vertices, axesOrigin, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.10f, 1.00f, 0.22f, 1.0f});
+    appendPositiveAxis(vertices, axesOrigin, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.08f, 0.34f, 1.00f, 1.0f});
     axesVertexCount_ = vertices.size() - axesFirstVertex_;
 
     glGenVertexArrays(1, &vao_);
@@ -153,16 +138,19 @@ void DebugGrid::draw(
         return;
     }
 
+    glBindVertexArray(vao_);
+    if (showGrid) {
+        infiniteShader_->use();
+        infiniteShader_->setMat4("uViewProjection", projection * view);
+        infiniteShader_->setMat4("uInverseViewProjection", glm::inverse(projection * view));
+        infiniteShader_->setVec3("uCamera", glm::vec3(glm::inverse(view)[3]));
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
     shader_->use();
     shader_->setMat4("uView", view);
     shader_->setMat4("uProjection", projection);
-    glBindVertexArray(vao_);
-    if (showGrid) {
-        glLineWidth(1.0f);
-        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(gridVertexCount_));
-    }
     if (showAxes) {
-        glLineWidth(2.5f);
+        glLineWidth(3.0f);
         glDrawArrays(
             GL_LINES,
             static_cast<GLint>(axesFirstVertex_),

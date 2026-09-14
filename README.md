@@ -28,17 +28,18 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - 显式 Render Pass Context 与 OpenGL State Cache；Shader 文件改动可热重载，编译失败时保留上一可用 Program 并在 Inspector 显示日志。
 - 相机、刚体对象与骨骼的统一 Temporal History；G-Buffer 输出动态 Motion Vector，TAA 可处理对象与蒙皮运动。
 - SR-P1A CPU Reference Path Tracer 基础：实时 Scene/Camera 可导出共享只读 `SceneSnapshot`，保留 Mesh Instance、材质/纹理来源、相机与灯光/环境；提供 Ray/AABB、Ray/Triangle、Surface Interaction 和确定性 Median-Split BVH 构建/遍历。
+- SR-P1B/C CPU Reference Path Tracer：确定性渐进累积、可取消后台任务、线性 HDR/PNG 输出，以及基于 glTF 常量因子的 Lambert + Cook-Torrance GGX Metallic-Roughness BSDF、混合重要性采样和 Russian Roulette。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
-- glTF 2.0 metallic-roughness PBR（Cook-Torrance GGX）、Radiance HDR equirectangular 环境、Diffuse Irradiance、GGX Prefiltered Specular Cubemap、BRDF LUT、Split-Sum IBL、天空盒与方向光 PCF 阴影；HDR 资产缺失时回退到程序化 Studio 环境。
+- glTF 2.0 metallic-roughness PBR（Cook-Torrance GGX）、Radiance HDR/OpenEXR equirectangular 环境、Diffuse Irradiance、GGX Prefiltered Specular Cubemap、BRDF LUT、Split-Sum IBL、天空盒与方向光 PCF 阴影；环境资产缺失时回退到程序化 Studio 环境。
 - glTF `OPAQUE` / `MASK` / `BLEND`、Alpha Cutoff、双面材质、透明子网格后向前排序，以及独立的透明深度/混合状态。
 - glTF `KHR_materials_transmission` / `KHR_materials_ior` / `KHR_materials_volume` / `KHR_materials_dispersion`：IOR 驱动的 Fresnel、Snell 折射、全反射、深度 Ray March、Thickness Texture、对象级前/后表面深度、真实出射法线、双界面折射、Beer-Lambert 体积吸收、环境回退与 13 种 Glass/Light Debug View；材质色散可被 Inspector 全局覆盖。
 - Glass-3/4 彩色光传输与作品集验收：RGBA16F 透射阴影、可控 Caustics Projector、Light-space RGB Photon Splat 焦散、两次空间滤波，以及独立 Glass / Dispersion / Caustics 开关、四组玻璃 Preset、14 场景视觉回归、逐 Pass GPU Timestamp 和带标记 Nsight Capture。
 - Prism-0～5 光谱 Demo：原创封闭三棱柱、纯黑舞台、固定正面镜头、CPU 双界面 Ray/Prism 求交，以及 380～700 nm 的 7/15/21/31 档波长采样；每个样本使用 Cauchy IOR、CIE 1931 近似线性 RGB、两界面 Fresnel 与 Beer-Lambert 能量。独立 `Spectral beam HDR` Pass 把结果生成相机朝向的柔边 Ribbon Mesh，支持连续光谱和七色美术模式，并提供固定视觉回归、性能报告和 Demo Reel。
 - 多对象 `RenderItem` 场景提交、跨对象透明 Draw List 全局排序，以及可调颜色/高度并能接收 PBR 光照与阴影的程序化地面；可开启第二模型实例验证场景级排序。
 - `Shadow map → Transmission shadow → Caustics HDR/filter → Forward Opaque 或 G-Buffer + Deferred Lighting → Forward refractive → Bloom/tone map` 多 Pass 管线；Opaque HDR Color、最终 HDR Scene Color 与可采样 Depth 相互独立，可切换 ACES Tone Mapping、曝光和 Bloom。
-- 像素风应用图标，覆盖 GLFW 标题栏、任务栏和 Windows 可执行文件资源。
+- 简约棱镜应用图标，覆盖 GLFW 标题栏、任务栏、Alt+Tab 和 Windows 可执行文件资源。
 - 顶部菜单、模型列表、Scene 面板、Inspector 面板和运行状态。
 - Windows 原生模型文件选择器、窗口拖放加载与后台 CPU 资产导入；失败导入不会替换当前场景。
 - 按文件、节点、Mesh、材质和纹理分组的结构化诊断。
@@ -75,16 +76,41 @@ cmake --build build-mingw --parallel
 ## GUI 操作
 
 - Scene 面板：查看、选择、显隐、复制/删除 Entity，调整父子关系，并切换 `assets/models` 中的 OBJ、DAE、glTF/GLB；也可使用原生文件选择器、输入路径或拖放文件。CPU 导入期间当前场景保持可用。
-- Inspector / Object：调整世界坐标 Position、旋转、缩放、材质颜色 Tint 和光照系数；Stage 区可控制真实地面、地面颜色/高度与对照实例。这里也会显示 Mesh、子网格/Draw Call、材质、纹理、回退纹理与估算显存统计。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
-- Inspector / Renderer：选择并播放 glTF Animation Clip、切换 Bind Pose、拖动动画时间、调整速度、查看 Joint Influence/Dominant Weight；同时可切换 Forward / Deferred、G-Buffer/SSAO/TAA 调试、PBR、IBL、阴影、玻璃、ACES、Bloom、Rasterization 和 1x/4x MSAA，并查看活动 Pass 与 GPU 时间。
+- Inspector / Object：以“属性名 / 控件”两列调整世界坐标 Position、旋转、缩放与 Tint；长名称会自动换行，不再被窄面板遮挡。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
+- Inspector / Renderer：参数按 Stage、Material、PBR、Lighting、Glass、Post processing、Rasterization 等抽屉收纳；单击分组标题展开或折叠。这里也可选择 glTF Animation Clip、切换 Forward / Deferred、查看 G-Buffer/SSAO/TAA 调试结果及 GPU 时间。
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
 - View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber / Crystal 四组体积玻璃参数。
 - View / `Glass caustics preset`：加载透明水晶球、白色接收地面与固定高机位，默认启用 Light-space RGB 焦散、彩色透射阴影和空间滤波；可即时切到 Projector / Decal 做美术对照。
 - View / `Local light stress preset`：加载 10×10 立方体固定舞台，并在 Renderer 面板选择 8/32/64 档 Point/Spot 灯光；切换 Forward/Deferred 可查看相同画面下的活动 Pass、Draw Call 与估算 Opaque Attachment 流量。
 - 渲染视口：鼠标右键拖动旋转相机，中键拖动平移，滚轮缩放；工具栏或 File 菜单可将当前解析后画面保存为 PNG。
+- 面板收纳：使用视口工具栏 `Panels` 或 `View > Panels` 显示/隐藏 Hierarchy、Inspector 和 Content Browser；`Reset layout` 会恢复完整默认工作区。
 - `Esc`：退出程序。
 
-ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRenderer.ini`。
+ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRenderer.editor.ini`。应用窗口最小为 1100×680，Dock 叶节点最小为 260×120；启动时会自动修复旧配置中小于该界限的异常布局。隐藏的 Smoke Test、Benchmark 与 Demo Reel 不会写入交互布局文件。
+
+### Editor UI 设计规范
+
+![MyRenderer 编辑器总览](docs/images/editor-ui-overview.png)
+
+界面采用成熟游戏引擎常见的中性黑灰工作区：背景从 `#0E0F10` 到 `#202126` 分层，边框与普通按钮保持低饱和灰色；`#4D9EFF` 只用于选中、激活和拖拽反馈。不要用大面积高饱和颜色区分普通层级，也不要为单个功能再引入一套强调色。
+
+![Renderer 抽屉与两列属性布局](docs/images/editor-ui-renderer-drawers.png)
+
+- 布局：Viewport 永远是主工作区；Hierarchy、Inspector 与 Content Browser 是可收纳辅助面板。新增默认布局时必须同时满足 1100×680 应用下限和 260×120 面板下限。
+- 属性：Inspector 参数必须放进语义清晰的折叠分组，并通过 `EditorUi::section` 创建；高频基础分组可默认展开，诊断、压力测试和高级光学分组默认折叠。
+- 控件：滑块、输入框、颜色和下拉框统一使用 `EditorUi` 属性控件，以保持左侧标签、右侧值的两列结构。不要在面板中直接依赖 ImGui 默认的“控件后置标签”布局。
+- 状态：工具栏布尔项使用紧凑状态按钮；中性灰表示关闭，蓝色表示开启。操作说明在宽视口中直接显示，空间不足时由悬停提示承接，不能挤压渲染区域。
+- 坐标轴：固定使用高亮 RGB——X `#FF1424`、Y `#1AFF38`、Z `#1456FF`。世界轴默认长度为 2.25，线宽为 3 px；方向指示器保留字母标签和深灰圆形底座，避免和场景颜色混淆。
+- 文案与可访问性：标签应完整显示或换行，禁用态仍需可读；颜色不能作为唯一状态提示。新增控件应保留键盘导航，并为中文模式补充 `EditorUi::tooltip` 说明。
+
+维护 UI 截图时可运行下面的隐藏窗口命令；它会在真实 OpenGL/ImGui 帧完成后捕获整个编辑器，而不是只保存 Viewport 纹理：
+
+```powershell
+$env:MYRENDERER_SMOKE_TEST = "1"
+$env:MYRENDERER_EDITOR_SCREENSHOT = "docs/images/editor-ui-overview.png"
+.\build-mingw\MyRenderer.exe .\assets\models\cube.obj
+Remove-Item Env:MYRENDERER_SMOKE_TEST, Env:MYRENDERER_EDITOR_SCREENSHOT
+```
 
 ## 支持范围与格式路线
 
@@ -94,7 +120,7 @@ ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRe
 
 OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化 UV 会禁用对应顶点的切线扰动并回退到几何法线。glTF PBR 使用标准 metallic-roughness 工作流，并支持 Alpha Mode、双面材质、Transmission、IOR、Volume 和 Dispersion。glTF Skin/Animation 支持最多四权重、每 Mesh 64 关节、单 Clip TRS 采样、GPU Linear Blend Skinning、上一帧骨骼 Motion Vector 与保守动态 Bounds；尚不支持动画混合、Root Motion、Morph Target 和 FBX。
 
-固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）、`glass_volume_sphere.gltf`（1,986 顶点闭合流形球体）、`prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）和 `skinning_test.gltf`（原创 3-Joint Wave 动画）。默认环境为 Poly Haven 的 2K `Delta 2` CC0 HDRI，来源和许可记录见 `assets/environments/README.md`。
+固定回归资产包括 `material_regression.obj`（基础色/法线贴图、常量材质、缺失纹理）、`degenerate_uv.obj`（退化 UV 法线贴图回退）、`textured_quad.dae`（DAE 外部纹理）、`textured_triangle.gltf`（Data URI 内嵌纹理）、`pbr_material_test.gltf`（五组金属度/粗糙度组合与打包数据纹理）、`alpha_material_test.gltf`（OPAQUE/MASK/BLEND、双面与重叠透明排序）、`glass_material_test.gltf`（闭合光滑/粗糙玻璃与几何厚度）、`volume_texture_test.gltf`（线性 G 通道 Thickness Texture 导入）、`glass_volume_sphere.gltf`（1,986 顶点闭合流形球体）、`prism_spectrum.gltf`（原创封闭三棱柱与体积玻璃）和 `skinning_test.gltf`（原创 3-Joint Wave 动画）。默认环境为 Poly Haven 的 4K `Kloofendal 48d Partly Cloudy (Pure Sky)` CC0 OpenEXR，来源和许可记录见 `assets/environments/README.md`。
 
 ## 自动测试
 
@@ -249,9 +275,10 @@ src/optics/PrismDemo.*   Prism 参数、四组光学 Preset、White Point 与实
 src/pathtracer/RayGeometry.* Ray/AABB/Triangle 求交与 Surface Interaction
 src/pathtracer/Bvh.*     确定性 Median-Split BVH 构建与近节点优先遍历
 src/pathtracer/SceneSnapshot.* 共享 CPU 资产、Mesh Instance、相机与灯光的只读快照
+src/pathtracer/PbrBsdf.* glTF Metallic-Roughness BRDF 求值、PDF 与采样
 src/render/Camera.*      轨道相机
 src/render/DebugGrid.*   世界网格、XYZ 轴线与 Debug Line GPU 绘制
-src/render/EnvironmentMap.* HDR equirectangular 导入、Split-Sum IBL 预计算、程序化回退与天空盒
+src/render/EnvironmentMap.* Radiance HDR/OpenEXR 等距柱状环境导入、Split-Sum IBL 预计算、程序化回退与天空盒
 src/render/GBuffer.*     Deferred MRT、1x/4x MSAA Resolve、Attachment 绑定与显存估算
 src/render/GpuModel.*    一个模型所拥有的 GPU Mesh 集合与统计
 src/render/Mesh.*        VAO/VBO、多档 EBO、实例矩阵 Buffer 与 Instanced Draw
@@ -272,3 +299,9 @@ tests/AssetImportTests.cpp 无 OpenGL 上下文的 CPU 导入回归测试
 tests/PrismOpticsTests.cpp 无 OpenGL 上下文的棱镜光路与数值稳定性测试
 tests/PathTracingFoundationTests.cpp SceneSnapshot、几何求交与 BVH 的 CPU 回归测试
 ```
+
+CPU Reference Path Tracer (SR-P1B/C): deterministic progressive rendering,
+glTF-factor Metallic-Roughness GGX, Russian Roulette, cancellable single-worker jobs,
+linear HDR and tone-mapped PNG.
+See [the reference path tracer guide](docs/reference-path-tracer.md) for fixed
+acceptance images, scope, tests and `path-tracing-regression` commands.

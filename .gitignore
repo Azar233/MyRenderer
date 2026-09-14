@@ -23,6 +23,8 @@
 
 # Runtime state
 /MyRenderer.ini
+/MyRenderer.editor.ini
+/MyRenderer.language
 /screenshots/
 /todolist.md
 *.log

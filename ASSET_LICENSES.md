@@ -4,7 +4,7 @@
 
 | Asset group | Provenance | License |
 | --- | --- | --- |
-| `assets/environments/delta_2_2k.hdr` | Poly Haven, “Delta 2”; see the adjacent README | CC0 1.0 |
+| `assets/environments/kloofendal_48d_partly_cloudy_puresky_4k.exr` | Poly Haven, “Kloofendal 48d Partly Cloudy (Pure Sky)”; see the adjacent README | CC0 1.0 |
 | `cube.obj`, `sphere.obj`, material/glass/prism/skinning regression fixtures and their textures | Created or procedurally generated for MyRenderer | MIT, under the project license |
 | `assets/icons/myrenderer-*` | Created for MyRenderer | MIT, under the project license |
 
@@ -26,3 +26,7 @@ but are deliberately excluded from CPack binary releases:
 No rights beyond the original owners' terms are claimed for these reference
 models. Do not include them in a commercial or redistributable build until their
 provenance is replaced with a verifiable permissive source.
+
+SR-P1B's original procedural room (`src/pathtracer/AcceptanceScene.cpp`),
+`docs/reference-images/sr-p1b-diffuse.{hdr,png}`, and `emissive_test.*` fixtures
+were created for MyRenderer and are covered by the project MIT license.

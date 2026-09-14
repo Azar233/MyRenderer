@@ -193,7 +193,7 @@
 | Exit Surface Normal（出射面法线） | 光在离开玻璃的位置所遇到表面的朝向；弯曲物体的出射法线通常不等于入口法线。 | Glass-2C 以 RGBA16F 保存对象最远表面法线，内部射线跨越 R32F 退出深度时读取并显示调试色。 | 已实现（屏幕空间） |
 | Two-interface Refraction（双界面折射） | 光进入玻璃时弯折一次，离开玻璃时根据另一侧表面方向再次弯折。 | Glass Shader 对空气→玻璃与玻璃→空气分别应用 Snell 定律，并插值退出交点以消除步进色带。 | 已实现（可切换） |
 | Object-ID-aware Depth Pairing（对象 ID 深度配对） | 用对象标识确保入口和出口来自同一个玻璃物体，避免重叠物体的深度被错误组合。 | 每个透明 `RenderItem` 在绘制前重建并立即消费自己的深度/法线缓存，R32UI ID 在 Shader 内再次校验。 | 已实现（逐对象） |
-| Split-Sum IBL | 将环境镜面光预积分成按粗糙度过滤的 Cubemap 与二维 BRDF LUT，并把漫反射单独卷积，避免每像素对 HDR 环境做大量采样。 | `EnvironmentMap` 从 Poly Haven CC0 Radiance HDRI 生成 Diffuse Irradiance、GGX Prefiltered Specular 和 RG16F BRDF LUT。 | 已实现 |
+| Split-Sum IBL | 将环境镜面光预积分成按粗糙度过滤的 Cubemap 与二维 BRDF LUT，并把漫反射单独卷积，避免每像素对 HDR 环境做大量采样。 | `EnvironmentMap` 从 Poly Haven CC0 OpenEXR HDRI 生成 Diffuse Irradiance、GGX Prefiltered Specular 和 RG16F BRDF LUT。 | 已实现 |
 | Beer-Lambert Law | 光在介质中传播越远，被吸收越多；不同颜色可以有不同吸收。 | Shader 使用 `attenuationColor^(pathLength/attenuationDistance)` 计算玻璃透射率。 | 已实现 |
 | Attenuation（衰减/吸收） | 光穿过介质后亮度和颜色逐渐减少。 | glTF 材质的 Color / Distance 决定两组测试玻璃的青色和琥珀色体积。 | 已实现 |
 | Transmittance（透射率） | 光穿过一段介质后还剩下的比例，1 表示没有损失，0 表示完全吸收。 | Glass Debug View 可直接显示 Beer-Lambert 计算出的 RGB 透射率。 | 已实现 |

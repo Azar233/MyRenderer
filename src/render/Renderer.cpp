@@ -14,6 +14,7 @@
 #include "render/Camera.h"
 #include "render/CausticsMap.h"
 #include "render/DebugGrid.h"
+#include "render/SelectionOutline.h"
 #include "render/EnvironmentMap.h"
 #include "render/GBuffer.h"
 #include "render/GpuModel.h"
@@ -72,6 +73,7 @@ Renderer::Renderer(
 ) : shader_(std::make_unique<Shader>(vertexShaderPath, fragmentShaderPath)),
     causticsMap_(std::make_unique<CausticsMap>(vertexShaderPath.parent_path())),
     debugGrid_(std::make_unique<DebugGrid>(debugVertexShaderPath, debugFragmentShaderPath)),
+    selectionOutline_(std::make_unique<SelectionOutline>(debugVertexShaderPath.parent_path())),
     environmentMap_(std::make_unique<EnvironmentMap>(
         vertexShaderPath.parent_path() / "fullscreen.vert",
         vertexShaderPath.parent_path() / "skybox.frag"
@@ -1254,6 +1256,15 @@ bool Renderer::saveScreenshot(const std::filesystem::path& path, std::string& er
     return renderTarget_->savePng(path, error);
 }
 
+bool Renderer::saveEditorScreenshot(
+    const std::filesystem::path& path,
+    int width,
+    int height,
+    std::string& error
+) const {
+    return RenderTarget::saveDefaultFramebufferPng(path, width, height, error);
+}
+
 int Renderer::activeMsaaSamples() const {
     return renderTarget_->samples();
 }
@@ -1274,6 +1285,7 @@ std::size_t Renderer::estimatedRenderMemoryBytes() const {
     return renderTarget_->estimatedBytes()
         + gBuffer_->estimatedBytes()
         + postProcessor_->estimatedBytes()
+        + selectionOutline_->estimatedBytes()
         + environmentMap_->estimatedBytes()
         + shadowMap_->estimatedBytes()
         + ssaoRenderer_->estimatedBytes()
@@ -1305,4 +1317,10 @@ std::size_t Renderer::estimatedOpaqueTrafficBytesPerFrame() const {
     }
     traffic += pixels * (gBufferBytes + opaqueHdrBytes + depthCopyBytes);
     return traffic;
+}
+
+void Renderer::drawSelectionOutline(const std::vector<RenderItem>& items, const Camera& camera,
+    std::uint64_t selected, bool cullBackFaces) {
+    selectionOutline_->draw(*renderTarget_, items, camera, selected, cullBackFaces);
+    stateCache_.invalidate();
 }

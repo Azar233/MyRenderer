@@ -28,9 +28,9 @@ public:
     ) const;
 private:
     std::unique_ptr<Shader> shader_;
+    std::unique_ptr<Shader> infiniteShader_;
     unsigned int vao_{0};
     unsigned int vbo_{0};
-    std::size_t gridVertexCount_{0};
     std::size_t axesFirstVertex_{0};
     std::size_t axesVertexCount_{0};
 };

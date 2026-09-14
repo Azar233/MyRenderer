@@ -237,6 +237,7 @@ ModelImportResult ObjLoader::load(const std::filesystem::path& path) const {
     for (const auto& sourceMaterial : materials) {
         MaterialData material;
         material.name = sourceMaterial.name.empty() ? "Material" : sourceMaterial.name;
+        material.emissiveFactor = glm::vec3(sourceMaterial.emission[0], sourceMaterial.emission[1], sourceMaterial.emission[2]);
         material.baseColorFactor = glm::vec4(
             static_cast<float>(sourceMaterial.diffuse[0]),
             static_cast<float>(sourceMaterial.diffuse[1]),

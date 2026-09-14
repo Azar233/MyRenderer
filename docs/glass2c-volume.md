@@ -38,24 +38,32 @@ radiance.
 
 ## HDRI and Split-Sum IBL
 
-`assets/environments/delta_2_2k.hdr` is the 2048x1024 Radiance RGBE version of
-Poly Haven's CC0 `Delta 2` outdoor environment by Greg Zaal. Source and license
-details are recorded in `assets/environments/README.md`. At renderer startup it
-is converted into:
+`assets/environments/kloofendal_48d_partly_cloudy_puresky_4k.exr` is Poly
+Haven's 4096x2048 OpenEXR edition of the CC0 `Kloofendal 48d Partly Cloudy
+(Pure Sky)` environment by Greg Zaal and Jarod Guest. TinyEXR decodes its
+HALF/FLOAT RGB(A) channels directly into the renderer's linear floating-point
+radiance buffer. Source and license details are recorded in
+`assets/environments/README.md`. At renderer startup it is converted into:
 
 - the radiance Cubemap used by the skybox;
 - a cosine-weighted Diffuse Irradiance Cubemap;
 - a GGX importance-sampled Prefiltered Specular Cubemap;
 - a two-channel BRDF integration LUT.
 
-The visible radiance Cubemap uses 512x512 texels per face so the 2K source
-retains useful sky and horizon detail. The more expensive GGX prefilter keeps a
+The visible radiance Cubemap uses 512x512 texels per face so the 4K source
+retains useful cloud and sun detail. The more expensive GGX prefilter keeps a
 separate 64x64 base resolution, preserving the existing startup cost while
 remaining sufficient for rough reflections.
 
+The radiance and prefiltered Cubemaps use RGB32F because this unclipped EXR's
+sun reaches roughly 75,360, above the 65,504 maximum finite value of RGB16F.
+Diffuse irradiance and the BRDF LUT remain half-float: their integrated values
+stay in range, while the full-precision maps prevent Inf/NaN black blocks during
+ACES tone mapping and preserve the solar highlight for glossy reflections.
+
 The Cook-Torrance ambient term now follows the standard split-sum form. The
-sunny park and detailed cloud field provide a natural horizon, readable skybox,
-and high-dynamic-range reflections. If the HDR file is unavailable, the same
+partly cloudy midday sky provides a neutral horizon, readable cloud field,
+and high-dynamic-range reflections. If the EXR file is unavailable, the same
 pipeline is built from a deterministic procedural Studio environment.
 
 ## Fixture, controls, and presets

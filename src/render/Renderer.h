@@ -19,6 +19,7 @@
 class Camera;
 class CausticsMap;
 class DebugGrid;
+class SelectionOutline;
 class EnvironmentMap;
 class GBuffer;
 class GpuModel;
@@ -188,8 +189,16 @@ public:
         int height
     );
 
+    void drawSelectionOutline(const std::vector<RenderItem>& items, const Camera& camera,
+        std::uint64_t selected, bool cullBackFaces);
     unsigned int colorTexture() const;
     bool saveScreenshot(const std::filesystem::path& path, std::string& error) const;
+    bool saveEditorScreenshot(
+        const std::filesystem::path& path,
+        int width,
+        int height,
+        std::string& error
+    ) const;
     int activeMsaaSamples() const;
     bool hasGpuFrameTime() const { return hasGpuFrameTime_; }
     double gpuFrameTimeMilliseconds() const { return gpuFrameTimeMilliseconds_; }
@@ -226,6 +235,7 @@ private:
     std::unique_ptr<Shader> shader_;
     std::unique_ptr<CausticsMap> causticsMap_;
     std::unique_ptr<DebugGrid> debugGrid_;
+    std::unique_ptr<SelectionOutline> selectionOutline_;
     std::unique_ptr<EnvironmentMap> environmentMap_;
     std::unique_ptr<GBuffer> gBuffer_;
     std::unique_ptr<OpticalPathDebugRenderer> opticalPathDebugRenderer_;

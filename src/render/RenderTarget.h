@@ -26,6 +26,12 @@ public:
     void bindFinal() const;
     void unbind() const;
     bool savePng(const std::filesystem::path& path, std::string& error) const;
+    static bool saveDefaultFramebufferPng(
+        const std::filesystem::path& path,
+        int width,
+        int height,
+        std::string& error
+    );
     void destroy();
 
     unsigned int colorTexture() const { return finalColorTexture_; }

@@ -52,6 +52,7 @@ enum class MaterialAlphaMode {
 struct MaterialData {
     std::string name{"Default"};
     glm::vec4 baseColorFactor{1.0f};
+    glm::vec3 emissiveFactor{0.0f}; // Linear emitted radiance for the CPU reference path.
     std::int32_t baseColorTextureIndex{-1};
     std::int32_t normalTextureIndex{-1};
     // glTF packs roughness in G and metallic in B.

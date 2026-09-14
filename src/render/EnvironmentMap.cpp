@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 #include <glad/gl.h>
@@ -10,6 +11,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <stb_image.h>
+#include <tinyexr.h>
 
 #include "render/Shader.h"
 
@@ -27,6 +29,60 @@ struct EquirectangularHdr {
             && pixels.size() == static_cast<std::size_t>(width * height * 3);
     }
 };
+
+bool loadRadianceImage(
+    const std::filesystem::path& path,
+    EquirectangularHdr& image
+) {
+    if (path.extension() == ".exr") {
+        float* rgba = nullptr;
+        const char* error = nullptr;
+        const int result = LoadEXR(
+            &rgba,
+            &image.width,
+            &image.height,
+            path.string().c_str(),
+            &error
+        );
+        if (result != TINYEXR_SUCCESS || rgba == nullptr) {
+            if (error != nullptr) FreeEXRErrorMessage(error);
+            image.width = 0;
+            image.height = 0;
+            return false;
+        }
+
+        const std::size_t pixelCount = static_cast<std::size_t>(image.width)
+            * static_cast<std::size_t>(image.height);
+        image.pixels.resize(pixelCount * 3U);
+        for (std::size_t pixel = 0; pixel < pixelCount; ++pixel) {
+            image.pixels[pixel * 3U] = rgba[pixel * 4U];
+            image.pixels[pixel * 3U + 1U] = rgba[pixel * 4U + 1U];
+            image.pixels[pixel * 3U + 2U] = rgba[pixel * 4U + 2U];
+        }
+        std::free(rgba);
+        return true;
+    }
+
+    int components = 0;
+    float* loadedPixels = stbi_loadf(
+        path.string().c_str(),
+        &image.width,
+        &image.height,
+        &components,
+        3
+    );
+    if (loadedPixels == nullptr) {
+        image.width = 0;
+        image.height = 0;
+        return false;
+    }
+    image.pixels.assign(
+        loadedPixels,
+        loadedPixels + static_cast<std::ptrdiff_t>(image.width * image.height * 3)
+    );
+    stbi_image_free(loadedPixels);
+    return true;
+}
 
 glm::vec3 faceDirection(int face, float u, float v) {
     switch (face) {
@@ -182,22 +238,10 @@ EnvironmentMap::EnvironmentMap(
     const std::filesystem::path& fragmentShaderPath
 ) : shader_(std::make_unique<Shader>(vertexShaderPath, fragmentShaderPath)) {
     EquirectangularHdr source;
-    const std::filesystem::path hdriPath = vertexShaderPath.parent_path().parent_path()
-        / "assets" / "environments" / "delta_2_2k.hdr";
-    int components = 0;
-    float* loadedPixels = stbi_loadf(
-        hdriPath.string().c_str(),
-        &source.width,
-        &source.height,
-        &components,
-        3
-    );
-    if (loadedPixels != nullptr) {
-        source.pixels.assign(
-            loadedPixels,
-            loadedPixels + static_cast<std::ptrdiff_t>(source.width * source.height * 3)
-        );
-        stbi_image_free(loadedPixels);
+    const std::filesystem::path environmentPath = vertexShaderPath.parent_path().parent_path()
+        / "assets" / "environments"
+        / "kloofendal_48d_partly_cloudy_puresky_4k.exr";
+    if (loadRadianceImage(environmentPath, source)) {
         const bool finiteRadiance = std::all_of(
             source.pixels.begin(),
             source.pixels.end(),
@@ -239,7 +283,9 @@ EnvironmentMap::EnvironmentMap(
         glTexImage2D(
             GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
             0,
-            GL_RGB16F,
+            // Unclipped HDR suns can exceed the 65,504 half-float limit.
+            // RGB32F prevents +Inf values from turning into black NaNs in ACES.
+            GL_RGB32F,
             size,
             size,
             0,
@@ -342,7 +388,7 @@ EnvironmentMap::EnvironmentMap(
             glTexImage2D(
                 GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
                 mip,
-                GL_RGB16F,
+                GL_RGB32F,
                 mipSize,
                 mipSize,
                 0,
@@ -405,15 +451,17 @@ std::size_t EnvironmentMap::estimatedBytes() const {
         return pixels;
     };
     const int radianceMaximumMipLevel = static_cast<int>(std::log2(radianceFaceSize_));
+    constexpr std::size_t rgb32fBytesPerTexel = 12U;
+    constexpr std::size_t rgb16fBytesPerTexel = 6U;
     const std::size_t radiance = cubemapTexels(
         radianceFaceSize_,
         radianceMaximumMipLevel
-    ) * 6U;
+    ) * rgb32fBytesPerTexel;
     const std::size_t prefiltered = cubemapTexels(
         prefilteredFaceSize_,
         maximumMipLevel_
-    ) * 6U;
-    const std::size_t irradiance = 16U * 16U * 6U * 6U;
+    ) * rgb32fBytesPerTexel;
+    const std::size_t irradiance = 16U * 16U * 6U * rgb16fBytesPerTexel;
     const std::size_t brdf = 64U * 64U * 4U;
     return radiance + prefiltered + irradiance + brdf;
 }

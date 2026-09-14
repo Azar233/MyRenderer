@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cfloat>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
@@ -29,6 +30,8 @@
 #include <glm/geometric.hpp>
 #include <glm/mat3x3.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
+#include "app/EditorUi.h"
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
@@ -40,6 +43,7 @@
 #include "optics/PrismDemo.h"
 #include "optics/PrismOptics.h"
 #include "render/GpuModel.h"
+#include "render/Shader.h"
 #include "render/OpenGlDebug.h"
 #include "render/Renderer.h"
 
@@ -451,6 +455,16 @@ int Application::run(const std::filesystem::path& initialModel) {
             pendingScreenshotWarmupFrames_ = std::clamp(std::atoi(value), 1, 240);
         }
     }
+    if (const char* screenshotPath = std::getenv("MYRENDERER_EDITOR_SCREENSHOT")) {
+        pendingEditorScreenshotPath_ = std::filesystem::absolute(screenshotPath).lexically_normal();
+        pendingEditorScreenshotWarmupFrames_ = 2;
+        if (const char* value = std::getenv("MYRENDERER_EDITOR_SCREENSHOT_WARMUP")) {
+            pendingEditorScreenshotWarmupFrames_ = std::clamp(std::atoi(value), 1, 240);
+        }
+        if (const char* tab = std::getenv("MYRENDERER_EDITOR_SCREENSHOT_TAB")) {
+            focusRendererTab_ = std::strcmp(tab, "renderer") == 0;
+        }
+    }
     const char* recoveryModelValue = std::getenv("MYRENDERER_RECOVERY_TEST");
     const std::filesystem::path recoveryModel = recoveryModelValue == nullptr
         ? std::filesystem::path{}
@@ -458,14 +472,17 @@ int Application::run(const std::filesystem::path& initialModel) {
     bool recoveryScheduled = recoveryModel.empty();
 
     int smokeTestFrames = std::getenv("MYRENDERER_SMOKE_TEST") == nullptr ? -1 : 5;
+    if (const char* extra = std::getenv("MYRENDERER_APPEND_TEST")) {
+        droppedModelPaths_.push_back(std::filesystem::u8path(extra));
+    }
     previousFrameTime_ = glfwGetTime();
     while (!glfwWindowShouldClose(window_)) {
         const double cpuFrameStart = glfwGetTime();
         glfwPollEvents();
-        if (droppedModelPath_.has_value() && !pendingModelImport_.has_value()) {
-            const std::filesystem::path dropped = std::move(*droppedModelPath_);
-            droppedModelPath_.reset();
-            loadModel(dropped);
+        if (!droppedModelPaths_.empty() && !pendingModelImport_.has_value()) {
+            const std::filesystem::path dropped = std::move(droppedModelPaths_.front());
+            droppedModelPaths_.pop_front();
+            loadModel(dropped, true);
         }
         updateModelLoad();
         if (!recoveryScheduled && model_ != nullptr && !pendingModelImport_.has_value()) {
@@ -510,15 +527,22 @@ int Application::run(const std::filesystem::path& initialModel) {
         ImGui::NewFrame();
 
         drawMainMenu();
-        ImGui::DockSpaceOverViewport();
-        drawScenePanel();
-        drawInspectorPanel();
+        drawEditorLayout();
+        if (hierarchyPanelOpen_) drawScenePanel();
+        if (assetsPanelOpen_) drawAssetsPanel();
         drawViewportPanel();
+        if (inspectorPanelOpen_) drawInspectorPanel();
         drawAboutPopup();
         if (showImGuiDemo_) {
             ImGui::ShowDemoWindow(&showImGuiDemo_);
         }
 
+        for (auto it = importedModels_.begin(); it != importedModels_.end();) {
+            const GpuModel* asset = it->get();
+            const bool used = std::any_of(scene_.entities().begin(), scene_.entities().end(),
+                [asset](const SceneEntity& entity) { return entity.model == asset; });
+            if (!used) it = importedModels_.erase(it); else ++it;
+        }
         ImGui::Render();
         int framebufferWidth = 0;
         int framebufferHeight = 0;
@@ -531,6 +555,25 @@ int Application::run(const std::filesystem::path& initialModel) {
         glClearColor(0.035f, 0.04f, 0.055f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        if (!pendingEditorScreenshotPath_.empty() && !pendingModelImport_.has_value()
+            && !scene_.entities().empty() && pendingEditorScreenshotWarmupFrames_ > 0) {
+            --pendingEditorScreenshotWarmupFrames_;
+        } else if (!pendingEditorScreenshotPath_.empty() && !pendingModelImport_.has_value()
+            && !scene_.entities().empty()) {
+            std::string screenshotError;
+            if (renderer_->saveEditorScreenshot(
+                    pendingEditorScreenshotPath_,
+                    framebufferWidth,
+                    framebufferHeight,
+                    screenshotError
+                )) {
+                std::cout << "Saved editor screenshot: "
+                          << pendingEditorScreenshotPath_.string() << '\n';
+            } else {
+                std::cerr << "Editor screenshot failed: " << screenshotError << '\n';
+            }
+            pendingEditorScreenshotPath_.clear();
+        }
         glfwSwapBuffers(window_);
         const double measuredCpuTime = (glfwGetTime() - cpuFrameStart) * 1000.0;
         cpuFrameTimeMilliseconds_ = cpuFrameTimeMilliseconds_ > 0.0
@@ -573,18 +616,30 @@ int Application::run(const std::filesystem::path& initialModel) {
                 glfwSetWindowShouldClose(window_, GLFW_TRUE);
             }
         }
-        if (smokeTestFrames > 0 && !pendingModelImport_.has_value() && --smokeTestFrames == 0) {
+        if (smokeTestFrames > 0 && !pendingModelImport_.has_value() && droppedModelPaths_.empty() && --smokeTestFrames == 0) {
             glfwSetWindowShouldClose(window_, GLFW_TRUE);
         }
     }
 
     const bool recoveryPassed = recoveryModel.empty()
         || (recoveryScheduled && lastLoadFailed_ && model_ != nullptr);
+    bool appendPassed = true;
+    if (std::getenv("MYRENDERER_APPEND_TEST") && !lastLoadFailed_) {
+        const SceneEntity* primary = scene_.find(primaryEntity_);
+        const SceneEntity* added = scene_.find(selectedSceneEntity_);
+        appendPassed = primary && added && primary->id != added->id
+            && primary->model != added->model && importedModels_.size() == 1;
+        const auto items = scene_.buildRenderItems();
+        appendPassed = appendPassed && items.size() >= 2;
+        std::cout << "Append scene validation: " << (appendPassed ? "PASS" : "FAIL") << '\n';
+    }
+    const bool interactionsPassed = !std::getenv("MYRENDERER_EDITOR_INTERACTION_TEST") || editorInteractionRegression();
     shutdown();
-    return recoveryPassed ? 0 : 2;
+    return recoveryPassed && appendPassed && interactionsPassed ? 0 : 2;
 }
 
 void Application::initializeWindow() {
+    initializeMyRendererApplicationIdentity();
     glfwSetErrorCallback([](int code, const char* description) {
         std::cerr << "GLFW error " << code << ": " << description << '\n';
     });
@@ -619,7 +674,8 @@ void Application::initializeWindow() {
             application->queueDroppedFiles(count, paths);
         }
     });
-    glfwSetWindowSizeLimits(window_, 960, 600, GLFW_DONT_CARE, GLFW_DONT_CARE);
+    // Keep enough room for two usable side panels and a complete viewport toolbar.
+    glfwSetWindowSizeLimits(window_, 1100, 680, GLFW_DONT_CARE, GLFW_DONT_CARE);
     glfwMakeContextCurrent(window_);
     glfwSwapInterval(vsync_ ? 1 : 0);
 
@@ -645,26 +701,75 @@ void Application::initializeGui() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.IniFilename = "MyRenderer.ini";
+    const bool automatedRun = std::getenv("MYRENDERER_SMOKE_TEST") != nullptr
+        || benchmarkMode_ || prismReelMode_;
+    // Hidden regression/benchmark windows must not overwrite the interactive layout.
+    io.IniFilename = automatedRun ? nullptr : "MyRenderer.editor.ini";
 
+    EditorUi::initialize(io);
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 5.0f;
-    style.FrameRounding = 4.0f;
-    style.GrabRounding = 4.0f;
-    style.TabRounding = 4.0f;
+    style.WindowRounding = 0.0f;
+    style.ChildRounding = 0.0f;
+    style.PopupRounding = 2.0f;
+    style.FrameRounding = 2.0f;
+    style.GrabRounding = 2.0f;
+    style.TabRounding = 2.0f;
+    style.ScrollbarRounding = 2.0f;
     style.WindowBorderSize = 1.0f;
-    style.FramePadding = ImVec2(8.0f, 5.0f);
-    style.ItemSpacing = ImVec2(8.0f, 7.0f);
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.075f, 0.085f, 0.11f, 1.0f);
-    style.Colors[ImGuiCol_TitleBg] = ImVec4(0.055f, 0.065f, 0.09f, 1.0f);
-    style.Colors[ImGuiCol_TitleBgActive] = ImVec4(0.10f, 0.12f, 0.17f, 1.0f);
-    style.Colors[ImGuiCol_Header] = ImVec4(0.17f, 0.23f, 0.36f, 1.0f);
-    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.23f, 0.32f, 0.50f, 1.0f);
-    style.Colors[ImGuiCol_Button] = ImVec4(0.16f, 0.22f, 0.35f, 1.0f);
-    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.24f, 0.34f, 0.54f, 1.0f);
-    style.Colors[ImGuiCol_CheckMark] = ImVec4(0.42f, 0.67f, 1.0f, 1.0f);
-    style.Colors[ImGuiCol_SliderGrab] = ImVec4(0.42f, 0.67f, 1.0f, 1.0f);
+    style.ChildBorderSize = 1.0f;
+    style.PopupBorderSize = 1.0f;
+    style.FrameBorderSize = 1.0f;
+    style.TabBorderSize = 0.0f;
+    style.WindowPadding = ImVec2(8.0f, 8.0f);
+    style.FramePadding = ImVec2(7.0f, 4.0f);
+    style.ItemSpacing = ImVec2(8.0f, 6.0f);
+    style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
+    style.CellPadding = ImVec2(6.0f, 4.0f);
+    style.IndentSpacing = 16.0f;
+    style.ScrollbarSize = 13.0f;
+    style.GrabMinSize = 8.0f;
+    style.WindowMinSize = EditorUi::minimumDockedPanelSize;
+
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_Text] = ImVec4(0.86f, 0.87f, 0.89f, 1.0f);
+    colors[ImGuiCol_TextDisabled] = ImVec4(0.48f, 0.50f, 0.54f, 1.0f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.075f, 0.078f, 0.086f, 1.0f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.068f, 0.071f, 0.078f, 1.0f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.09f, 0.094f, 0.102f, 0.98f);
+    colors[ImGuiCol_Border] = ImVec4(0.23f, 0.24f, 0.27f, 1.0f);
+    colors[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.125f, 0.138f, 1.0f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.17f, 0.18f, 0.20f, 1.0f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.20f, 0.21f, 0.23f, 1.0f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.055f, 0.057f, 0.063f, 1.0f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.09f, 0.094f, 0.103f, 1.0f);
+    colors[ImGuiCol_MenuBarBg] = ImVec4(0.085f, 0.088f, 0.096f, 1.0f);
+    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.055f, 0.057f, 0.063f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.25f, 0.26f, 0.29f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.34f, 0.35f, 0.38f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.42f, 0.44f, 0.48f, 1.0f);
+    colors[ImGuiCol_CheckMark] = ImVec4(0.30f, 0.62f, 1.0f, 1.0f);
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.35f, 0.63f, 0.96f, 1.0f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.48f, 0.73f, 1.0f, 1.0f);
+    colors[ImGuiCol_Button] = ImVec4(0.14f, 0.145f, 0.16f, 1.0f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.21f, 0.23f, 1.0f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.11f, 0.115f, 0.128f, 1.0f);
+    colors[ImGuiCol_Header] = ImVec4(0.14f, 0.145f, 0.16f, 1.0f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.20f, 0.21f, 0.23f, 1.0f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.16f, 0.34f, 0.58f, 1.0f);
+    colors[ImGuiCol_Separator] = ImVec4(0.23f, 0.24f, 0.27f, 1.0f);
+    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.36f, 0.59f, 0.88f, 1.0f);
+    colors[ImGuiCol_SeparatorActive] = ImVec4(0.30f, 0.62f, 1.0f, 1.0f);
+    colors[ImGuiCol_ResizeGrip] = ImVec4(0.30f, 0.62f, 1.0f, 0.18f);
+    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.30f, 0.62f, 1.0f, 0.55f);
+    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.30f, 0.62f, 1.0f, 0.85f);
+    colors[ImGuiCol_Tab] = ImVec4(0.09f, 0.094f, 0.103f, 1.0f);
+    colors[ImGuiCol_TabHovered] = ImVec4(0.18f, 0.28f, 0.41f, 1.0f);
+    colors[ImGuiCol_TabSelected] = ImVec4(0.14f, 0.24f, 0.36f, 1.0f);
+    colors[ImGuiCol_TabSelectedOverline] = ImVec4(0.30f, 0.62f, 1.0f, 1.0f);
+    colors[ImGuiCol_DockingPreview] = ImVec4(0.30f, 0.62f, 1.0f, 0.65f);
+    colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.055f, 0.057f, 0.063f, 1.0f);
 
     if (!ImGui_ImplGlfw_InitForOpenGL(window_, true)) {
         throw std::runtime_error("Failed to initialize the ImGui GLFW backend");
@@ -717,6 +822,9 @@ void Application::shutdown() {
 
     if (window_ != nullptr) {
         glfwMakeContextCurrent(window_);
+        scene_.clear();
+        importedModels_.clear();
+        pickingShader_.reset();
         model_.reset();
         groundModel_.reset();
         glassBackdropModel_.reset();
@@ -739,43 +847,46 @@ void Application::drawMainMenu() {
     if (!ImGui::BeginMainMenuBar()) {
         return;
     }
-    if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("Open model...", "Ctrl+O", false, !pendingModelImport_.has_value())) {
+    if (!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newEmptyScene();
+    if (ImGui::BeginMenu(EditorUi::label("File"))) {
+        if (ImGui::MenuItem(EditorUi::label("New empty scene"), "Ctrl+N")) newEmptyScene();
+        ImGui::Separator();
+        if (ImGui::MenuItem(EditorUi::label("Open model..."), nullptr, false, !pendingModelImport_.has_value())) {
             std::string dialogError;
             const auto selected = openModelFileDialog(dialogError);
             if (selected.has_value()) {
-                loadModel(*selected);
+                loadModel(*selected, true);
             } else if (!dialogError.empty()) {
                 statusMessage_ = "Open failed: " + dialogError;
             }
         }
-        if (ImGui::BeginMenu("Open bundled model")) {
+        if (ImGui::BeginMenu(EditorUi::label("Open bundled model"))) {
             for (const auto& path : availableModels_) {
                 if (ImGui::MenuItem(path.filename().string().c_str())) {
-                    loadModel(path);
+                    loadModel(path, true);
                 }
             }
             ImGui::EndMenu();
         }
         if (ImGui::MenuItem(
-            "Reload current",
-            "Ctrl+R",
+            "Reset scene to current model",
+            nullptr,
             false,
             !currentModelPath_.empty() && !pendingModelImport_.has_value()
         )) {
             loadModel(currentModelPath_);
         }
-        if (ImGui::MenuItem("Save viewport PNG", nullptr, false, model_ != nullptr)) {
+        if (ImGui::MenuItem(EditorUi::label("Save viewport PNG"), nullptr, false, !scene_.entities().empty())) {
             pendingScreenshotPath_ = nextScreenshotPath();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Exit", "Esc")) {
+        if (ImGui::MenuItem(EditorUi::label("Exit"), "Esc")) {
             glfwSetWindowShouldClose(window_, GLFW_TRUE);
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("View")) {
-        if (ImGui::MenuItem("Reset camera", "F")) {
+    if (ImGui::BeginMenu(EditorUi::label("View"))) {
+        if (ImGui::MenuItem(EditorUi::label("Reset camera"), "F")) {
             camera_.reset();
         }
         if (ImGui::MenuItem("Prism spectrum preset")) {
@@ -795,24 +906,37 @@ void Application::drawMainMenu() {
         if (ImGui::MenuItem("Instance / culling / LOD stress preset")) {
             activateInstanceStressPreset(true);
         }
-        ImGui::MenuItem("Wireframe", nullptr, &rendererSettings_.wireframe);
-        ImGui::MenuItem("Back-face culling", nullptr, &rendererSettings_.cullBackFaces);
+        ImGui::MenuItem(EditorUi::label("Wireframe"), nullptr, &rendererSettings_.wireframe);
+        ImGui::MenuItem(EditorUi::label("Back-face culling"), nullptr, &rendererSettings_.cullBackFaces);
         ImGui::Separator();
-        ImGui::MenuItem("Ground grid", nullptr, &rendererSettings_.showGrid);
-        ImGui::MenuItem("Ground plane", nullptr, &showGroundPlane_);
-        ImGui::MenuItem("Comparison object", nullptr, &showComparisonObject_);
-        ImGui::MenuItem("XYZ axes", nullptr, &rendererSettings_.showAxes);
-        ImGui::MenuItem("Auto rotate", nullptr, &autoRotate_);
+        ImGui::MenuItem(EditorUi::label("Ground grid"), nullptr, &rendererSettings_.showGrid);
+        ImGui::MenuItem(EditorUi::label("Ground plane"), nullptr, &showGroundPlane_);
+        ImGui::MenuItem(EditorUi::label("Comparison object"), nullptr, &showComparisonObject_);
+        ImGui::MenuItem(EditorUi::label("XYZ axes"), nullptr, &rendererSettings_.showAxes);
+        ImGui::MenuItem(EditorUi::label("Auto rotate"), nullptr, &autoRotate_);
+        ImGui::Separator();
+        if (ImGui::BeginMenu(EditorUi::label("Panels"))) {
+            ImGui::MenuItem(EditorUi::label("Hierarchy###Hierarchy"), nullptr, &hierarchyPanelOpen_);
+            ImGui::MenuItem(EditorUi::label("Inspector###Inspector"), nullptr, &inspectorPanelOpen_);
+            ImGui::MenuItem(EditorUi::label("Content Browser###Assets"), nullptr, &assetsPanelOpen_);
+            ImGui::EndMenu();
+        }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Help")) {
+    if (ImGui::BeginMenu(EditorUi::label("Help"))) {
         ImGui::MenuItem("Dear ImGui demo", nullptr, &showImGuiDemo_);
-        if (ImGui::MenuItem("About MyRenderer")) {
+        if (ImGui::MenuItem(EditorUi::label("About MyRenderer"))) {
             showAbout_ = true;
         }
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("Language / 语言")) {
+        if (ImGui::MenuItem("English", nullptr, !EditorUi::chinese)) EditorUi::setLanguage(false);
+        if (ImGui::MenuItem("简体中文", nullptr, EditorUi::chinese, EditorUi::chineseFontAvailable)) EditorUi::setLanguage(true);
+        ImGui::EndMenu();
+    }
+    if (ImGui::MenuItem(EditorUi::label(EditorUi::label("Reset layout")))) resetEditorLayout_ = true;
     const std::string fps = std::to_string(static_cast<int>(ImGui::GetIO().Framerate)) + " FPS";
     ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowWidth() - ImGui::CalcTextSize(fps.c_str()).x - 16.0f));
     ImGui::TextDisabled("%s", fps.c_str());
@@ -821,104 +945,92 @@ void Application::drawMainMenu() {
 
 
 void Application::drawInspectorPanel() {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float menuHeight = ImGui::GetFrameHeight();
-    const ImVec2 contentPosition(viewport->Pos.x, viewport->Pos.y + menuHeight);
-    const ImVec2 contentSize(viewport->Size.x, viewport->Size.y - menuHeight);
-    ImGui::SetNextWindowPos(
-        ImVec2(contentPosition.x + contentSize.x - 335.0f, contentPosition.y),
-        ImGuiCond_Once
+    ImGui::SetNextWindowSizeConstraints(
+        EditorUi::minimumDockedPanelSize,
+        ImVec2(FLT_MAX, FLT_MAX)
     );
-    ImGui::SetNextWindowSize(ImVec2(335.0f, contentSize.y), ImGuiCond_Once);
-    if (!ImGui::Begin("Inspector")) {
+    if (!ImGui::Begin(EditorUi::label("Inspector###Inspector"))) {
         ImGui::End();
         return;
     }
 
     if (ImGui::BeginTabBar("InspectorTabs")) {
-        if (ImGui::BeginTabItem("Object")) {
-            ImGui::SeparatorText("Transform");
+        const bool showObject = focusObjectTab_;
+        focusObjectTab_ = false;
+        if (ImGui::BeginTabItem(EditorUi::label("Object"), nullptr, showObject ? ImGuiTabItemFlags_SetSelected : 0)) {
             SceneEntity* selectedEntity = scene_.find(selectedSceneEntity_);
-            const bool customEntity = selectedEntity != nullptr
-                && selectedSceneEntity_ != primaryEntity_
-                && selectedSceneEntity_ != comparisonEntity_
-                && selectedSceneEntity_ != backdropEntity_
-                && selectedSceneEntity_ != groundEntity_;
-            if (customEntity) {
-                ImGui::TextDisabled("%s (#%llu)", selectedEntity->name.c_str(),
-                    static_cast<unsigned long long>(selectedEntity->id));
-                ImGui::DragFloat3("Position", &selectedEntity->transform.translation.x, 0.01f, 0.0f, 0.0f, "%.2f");
-                ImGui::DragFloat3("Rotation", &selectedEntity->transform.rotationDegrees.x, 0.25f, -360.0f, 360.0f, "%.1f deg");
-                ImGui::DragFloat3("Scale", &selectedEntity->transform.scale.x, 0.01f, 0.05f, 8.0f, "%.2f");
-                ImGui::ColorEdit3("Entity tint", &selectedEntity->tint.x);
-                if (ImGui::Button("Reset transform", ImVec2(-1.0f, 0.0f))) {
-                    const glm::mat4 assetTransform = selectedEntity->transform.assetTransform;
-                    selectedEntity->transform = SceneTransform{};
-                    selectedEntity->transform.assetTransform = assetTransform;
-                    selectedEntity->motionHistoryValid = false;
-                }
-            } else {
-                ImGui::DragFloat3("Position", &modelPosition_.x, 0.01f, 0.0f, 0.0f, "%.2f");
-                ImGui::DragFloat3("Rotation", &modelRotationDegrees_.x, 0.25f, -360.0f, 360.0f, "%.1f deg");
-                ImGui::SliderFloat("Scale", &modelScale_, 0.1f, 4.0f, "%.2f");
-                ImGui::Checkbox("Auto rotate", &autoRotate_);
-                if (ImGui::Button("Reset transform", ImVec2(-1.0f, 0.0f))) {
-                    resetObjectTransform();
-                    camera_.reset(modelPosition_);
+            if (EditorUi::section("Transform", true)) {
+                if (!selectedEntity) {
+                    ImGui::TextWrapped("%s", EditorUi::chinese ? "左键点击场景中的模型或在层级中选择对象。" : "Left-click a model in the viewport or select an object in the hierarchy.");
+                } else {
+                    ImGui::TextUnformatted(selectedEntity->name.c_str());
+                    bool edited = EditorUi::DragFloat3(EditorUi::label("Position"), &selectedEntity->transform.translation.x, 0.01f);
+                    edited |= EditorUi::DragFloat3(EditorUi::label("Rotation"), &selectedEntity->transform.rotationDegrees.x, 0.25f);
+                    edited |= EditorUi::DragFloat3(EditorUi::label("Scale"), &selectedEntity->transform.scale.x, 0.01f, 0.01f, 100.0f);
+                    edited |= EditorUi::ColorEdit3(EditorUi::label("Entity tint"), &selectedEntity->tint.x);
+                    if (ImGui::Button(EditorUi::label("Reset transform"), ImVec2(-1.0f, 0.0f))) {
+                        const auto asset = selectedEntity->transform.assetTransform;
+                        selectedEntity->transform = SceneTransform{};
+                        selectedEntity->transform.assetTransform = asset;
+                        edited = true;
+                    }
+                    if (edited) {
+                        editedEntities_.insert(selectedEntity->id);
+                        selectedEntity->motionHistoryValid = false;
+                    }
                 }
             }
-
-            ImGui::SeparatorText("Stage");
-            ImGui::Checkbox("Ground receiver", &showGroundPlane_);
-            ImGui::ColorEdit3("Ground color", &groundColor_.x);
-            ImGui::DragFloat("Ground offset", &groundOffset_, 0.01f, -3.0f, 0.0f, "%.2f");
-            ImGui::Checkbox("Comparison object", &showComparisonObject_);
-
-            ImGui::SeparatorText("Material");
-            ImGui::ColorEdit3("Base color tint", &rendererSettings_.baseColor.x);
-            ImGui::SliderFloat("Ambient", &rendererSettings_.ambientStrength, 0.0f, 1.0f);
-            ImGui::SliderFloat("Diffuse", &rendererSettings_.diffuseStrength, 0.0f, 2.0f);
-            ImGui::SliderFloat("Specular", &rendererSettings_.specularStrength, 0.0f, 2.0f);
-            ImGui::SliderFloat("Shininess", &rendererSettings_.shininess, 1.0f, 256.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
-
-            ImGui::SeparatorText("Asset statistics");
-            if (model_) {
-                ImGui::Text("Meshes: %zu", loadedMeshCount_);
-                ImGui::Text("Submeshes / draw calls: %zu", loadedSubmeshCount_);
-                ImGui::Text("Transparent submeshes: %zu", loadedTransparentSubmeshCount_);
-                ImGui::Text("Materials: %zu", loadedMaterialCount_);
-                ImGui::Text("Textures: %zu", loadedTextureCount_);
-                ImGui::Text("Decoded textures: %zu", loadedDecodedTextureCount_);
-                ImGui::Text("Fallback textures: %zu", loadedFallbackTextureCount_);
-                ImGui::Text(
-                    "Estimated texture memory: %.2f MiB",
-                    static_cast<double>(loadedTextureMemoryBytes_) / (1024.0 * 1024.0)
-                );
-            } else {
-                ImGui::TextDisabled("No model loaded");
+            if (selectedEntity && EditorUi::section("Asset statistics")) {
+                const GpuModel* asset = selectedEntity->model;
+                if (asset) {
+                    ImGui::Text("Meshes: %zu | Triangles: %zu", asset->meshCount(), asset->triangleCount());
+                    ImGui::Text("Materials: %zu | Textures: %zu", asset->materialCount(), asset->textureCount());
+                }
+                if (ImGui::Button(EditorUi::label("Delete"), ImVec2(-1.0f, 0.0f))) deleteSelectedEntity();
             }
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Renderer")) {
-            ImGui::SeparatorText("Shader development");
-            ImGui::Checkbox("Shader hot reload", &rendererSettings_.shaderHotReloadEnabled);
-            if (renderer_ != nullptr) {
-                if (renderer_->shaderReloadFailed()) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.36f, 0.30f, 1.0f));
-                    ImGui::TextWrapped("%s", renderer_->shaderReloadStatus().c_str());
-                    ImGui::PopStyleColor();
-                } else {
-                    ImGui::TextDisabled("%s", renderer_->shaderReloadStatus().c_str());
+        const bool showRenderer = focusRendererTab_;
+        focusRendererTab_ = false;
+        if (ImGui::BeginTabItem(
+                EditorUi::label("Renderer"),
+                nullptr,
+                showRenderer ? ImGuiTabItemFlags_SetSelected : 0
+            )) {
+            if (EditorUi::section("Stage", true)) {
+                EditorUi::Checkbox(EditorUi::label("Ground receiver"), &showGroundPlane_);
+                EditorUi::ColorEdit3(EditorUi::label("Ground color"), &groundColor_.x);
+                EditorUi::DragFloat(EditorUi::label("Ground offset"), &groundOffset_, 0.01f, -3.0f, 0.0f, "%.2f");
+                EditorUi::Checkbox(EditorUi::label("Comparison object"), &showComparisonObject_);
+            }
+
+            if (EditorUi::section("Material", true)) {
+                EditorUi::ColorEdit3(EditorUi::label("Base color tint"), &rendererSettings_.baseColor.x);
+                EditorUi::SliderFloat("Ambient", &rendererSettings_.ambientStrength, 0.0f, 1.0f);
+                EditorUi::SliderFloat("Diffuse", &rendererSettings_.diffuseStrength, 0.0f, 2.0f);
+                EditorUi::SliderFloat("Specular", &rendererSettings_.specularStrength, 0.0f, 2.0f);
+                EditorUi::SliderFloat("Shininess", &rendererSettings_.shininess, 1.0f, 256.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+            }
+
+            if (EditorUi::section("Shader development")) {
+                EditorUi::Checkbox(EditorUi::label("Shader hot reload"), &rendererSettings_.shaderHotReloadEnabled);
+                if (renderer_ != nullptr) {
+                    if (renderer_->shaderReloadFailed()) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.36f, 0.30f, 1.0f));
+                        ImGui::TextWrapped("%s", renderer_->shaderReloadStatus().c_str());
+                        ImGui::PopStyleColor();
+                    } else {
+                        ImGui::TextDisabled("%s", renderer_->shaderReloadStatus().c_str());
+                    }
                 }
             }
-            ImGui::SeparatorText("GPU skinning & animation");
-            const bool hasSkinning = model_ != nullptr && model_->hasSkinning();
-            ImGui::BeginDisabled(!hasSkinning);
-            ImGui::Checkbox("Enable animation", &animationEnabled_);
-            ImGui::SameLine();
-            ImGui::Checkbox("Play", &animationPlaying_);
-            if (hasSkinning && model_->animationCount() > 0U) {
+            if (EditorUi::section("GPU skinning & animation")) {
+                const bool hasSkinning = model_ != nullptr && model_->hasSkinning();
+                ImGui::BeginDisabled(!hasSkinning);
+                EditorUi::Checkbox(EditorUi::label("Enable animation"), &animationEnabled_);
+                EditorUi::Checkbox(EditorUi::label("Play"), &animationPlaying_);
+                if (hasSkinning && model_->animationCount() > 0U) {
                 animationClipIndex_ = std::min(
                     animationClipIndex_,
                     model_->animationCount() - 1U
@@ -938,55 +1050,57 @@ void Application::drawInspectorPanel() {
                     ImGui::EndCombo();
                 }
                 const float duration = model_->animationDuration(animationClipIndex_);
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Animation time",
                     &animationTimeSeconds_,
                     0.0f,
                     std::max(duration, 0.01f),
                     "%.3f s"
                 );
-                ImGui::SliderFloat("Playback speed", &animationSpeed_, 0.0f, 3.0f, "%.2fx");
-            }
-            const char* skinDebugViews[] = {"Final", "Joint influence", "Dominant weight"};
-            ImGui::Combo(
+                EditorUi::SliderFloat("Playback speed", &animationSpeed_, 0.0f, 3.0f, "%.2fx");
+                }
+                const char* skinDebugViews[] = {"Final", "Joint influence", "Dominant weight"};
+                EditorUi::Combo(
                 "Skinning debug",
                 &rendererSettings_.skinningDebugView,
                 skinDebugViews,
                 3
-            );
-            if (hasSkinning) {
-                ImGui::TextDisabled(
+                );
+                if (hasSkinning) {
+                    ImGui::TextDisabled(
                     "%zu palette joints | %zu animation clip(s)",
                     model_->jointCount(),
                     model_->animationCount()
-                );
-            } else {
-                ImGui::TextDisabled("Current asset has no skin palette");
+                    );
+                } else {
+                    ImGui::TextDisabled("Current asset has no skin palette");
+                }
+                ImGui::EndDisabled();
             }
-            ImGui::EndDisabled();
-            ImGui::SeparatorText("PBR & environment");
-            int renderPath = static_cast<int>(rendererSettings_.renderPath);
-            const char* renderPaths[] = {"Forward", "Deferred (hybrid)"};
-            if (ImGui::Combo("Opaque render path", &renderPath, renderPaths, 2)) {
-                rendererSettings_.renderPath = static_cast<RenderPath>(renderPath);
-            }
-            ImGui::BeginDisabled(rendererSettings_.renderPath != RenderPath::Deferred);
-            int gBufferDebug = static_cast<int>(rendererSettings_.gBufferDebugView);
-            const char* gBufferDebugViews[] = {
+            if (EditorUi::section("PBR & environment", true)) {
+                int renderPath = static_cast<int>(rendererSettings_.renderPath);
+                const char* renderPaths[] = {"Forward", "Deferred (hybrid)"};
+                if (EditorUi::Combo("Opaque render path", &renderPath, renderPaths, 2)) {
+                    rendererSettings_.renderPath = static_cast<RenderPath>(renderPath);
+                }
+                ImGui::BeginDisabled(rendererSettings_.renderPath != RenderPath::Deferred);
+                int gBufferDebug = static_cast<int>(rendererSettings_.gBufferDebugView);
+                const char* gBufferDebugViews[] = {
                 "Final lighting",
                 "Albedo",
                 "Encoded normal",
                 "Metallic / Roughness",
                 "Depth",
                 "SSAO"
-            };
-            if (ImGui::Combo("G-buffer debug", &gBufferDebug, gBufferDebugViews, 6)) {
-                rendererSettings_.gBufferDebugView = static_cast<GBufferDebugView>(gBufferDebug);
+                };
+                if (EditorUi::Combo("G-buffer debug", &gBufferDebug, gBufferDebugViews, 6)) {
+                    rendererSettings_.gBufferDebugView = static_cast<GBufferDebugView>(gBufferDebug);
+                }
+                ImGui::EndDisabled();
             }
-            ImGui::EndDisabled();
-            ImGui::SeparatorText("Local light stress");
-            bool stressEnabled = lightStressDemoEnabled_;
-            if (ImGui::Checkbox("Enable stress scene", &stressEnabled)) {
+            if (EditorUi::section("Local light stress")) {
+                bool stressEnabled = lightStressDemoEnabled_;
+                if (EditorUi::Checkbox("Enable stress scene", &stressEnabled)) {
                 lightStressDemoEnabled_ = stressEnabled;
                 if (lightStressDemoEnabled_) {
                     activateLightStressPreset(false);
@@ -994,26 +1108,27 @@ void Application::drawInspectorPanel() {
                     rendererSettings_.localLights.clear();
                     statusMessage_ = "Local light stress scene disabled";
                 }
-            }
-            ImGui::BeginDisabled(!lightStressDemoEnabled_);
-            const char* lightTiers[] = {"Low (8)", "Medium (32)", "High (64)"};
-            if (ImGui::Combo("Local light tier", &localLightTierIndex_, lightTiers, 3)) {
-                rebuildLocalLights();
-            }
-            const std::size_t spotCount = std::count_if(
+                }
+                ImGui::BeginDisabled(!lightStressDemoEnabled_);
+                const char* lightTiers[] = {"Low (8)", "Medium (32)", "High (64)"};
+                if (EditorUi::Combo("Local light tier", &localLightTierIndex_, lightTiers, 3)) {
+                    rebuildLocalLights();
+                }
+                const std::size_t spotCount = std::count_if(
                 rendererSettings_.localLights.begin(),
                 rendererSettings_.localLights.end(),
                 [](const LocalLight& light) { return light.type == LocalLightType::Spot; }
-            );
-            ImGui::TextDisabled(
+                );
+                ImGui::TextDisabled(
                 "%zu point + %zu spot | 100 objects",
                 rendererSettings_.localLights.size() - spotCount,
                 spotCount
-            );
-            ImGui::EndDisabled();
-            ImGui::SeparatorText("Instance submission stress");
-            bool instanceStressEnabled = instanceStressDemoEnabled_;
-            if (ImGui::Checkbox("Enable 2,500-instance scene", &instanceStressEnabled)) {
+                );
+                ImGui::EndDisabled();
+            }
+            if (EditorUi::section("Instance submission stress")) {
+                bool instanceStressEnabled = instanceStressDemoEnabled_;
+                if (EditorUi::Checkbox("Enable 2,500-instance scene", &instanceStressEnabled)) {
                 instanceStressDemoEnabled_ = instanceStressEnabled;
                 if (instanceStressDemoEnabled_) {
                     activateInstanceStressPreset(true);
@@ -1021,70 +1136,72 @@ void Application::drawInspectorPanel() {
                     rendererSettings_.instanceOptimizationEnabled = false;
                     statusMessage_ = "Instance stress scene disabled";
                 }
-            }
-            ImGui::BeginDisabled(!instanceStressDemoEnabled_);
-            ImGui::Checkbox(
+                }
+                ImGui::BeginDisabled(!instanceStressDemoEnabled_);
+                EditorUi::Checkbox(
                 "GPU instancing / batching",
                 &rendererSettings_.instanceOptimizationEnabled
-            );
-            ImGui::BeginDisabled(!rendererSettings_.instanceOptimizationEnabled);
-            ImGui::Checkbox("CPU frustum culling", &rendererSettings_.frustumCullingEnabled);
-            ImGui::Checkbox("Projected-size LOD", &rendererSettings_.lodSelectionEnabled);
-            ImGui::EndDisabled();
-            const auto& lodCounts = renderer_->lodInstanceCounts();
-            ImGui::TextDisabled(
+                );
+                ImGui::BeginDisabled(!rendererSettings_.instanceOptimizationEnabled);
+                EditorUi::Checkbox("CPU frustum culling", &rendererSettings_.frustumCullingEnabled);
+                EditorUi::Checkbox("Projected-size LOD", &rendererSettings_.lodSelectionEnabled);
+                ImGui::EndDisabled();
+                const auto& lodCounts = renderer_->lodInstanceCounts();
+                ImGui::TextDisabled(
                 "Submitted %zu | visible %zu | culled %zu",
                 renderer_->submittedInstanceCount(),
                 renderer_->visibleInstanceCount(),
                 renderer_->culledInstanceCount()
-            );
-            ImGui::TextDisabled(
+                );
+                ImGui::TextDisabled(
                 "LOD0 / 1 / 2: %zu / %zu / %zu | prep %.3f ms",
                 lodCounts[0], lodCounts[1], lodCounts[2],
                 renderer_->instancePreparationMilliseconds()
-            );
-            ImGui::TextDisabled(
+                );
+                ImGui::TextDisabled(
                 "Submitted triangles: %zu",
                 renderer_->renderedInstanceTriangleCount()
-            );
-            ImGui::EndDisabled();
-            ImGui::Checkbox("Metallic-roughness PBR", &rendererSettings_.pbrEnabled);
-            ImGui::Checkbox("Image-based lighting", &rendererSettings_.iblEnabled);
-            ImGui::Checkbox("Skybox", &rendererSettings_.skyboxEnabled);
-            ImGui::Checkbox("Shadow mapping", &rendererSettings_.shadowsEnabled);
-            ImGui::Checkbox(
+                );
+                ImGui::EndDisabled();
+            }
+            if (EditorUi::section("Lighting & environment", true)) {
+            EditorUi::Checkbox("Metallic-roughness PBR", &rendererSettings_.pbrEnabled);
+            EditorUi::Checkbox("Image-based lighting", &rendererSettings_.iblEnabled);
+            EditorUi::Checkbox(EditorUi::label("Skybox"), &rendererSettings_.skyboxEnabled);
+            EditorUi::Checkbox(EditorUi::label("Shadow mapping"), &rendererSettings_.shadowsEnabled);
+            EditorUi::Checkbox(
                 "Colored transmission shadows",
                 &rendererSettings_.coloredTransmissionShadowsEnabled
             );
-            ImGui::Checkbox("HDR caustics", &rendererSettings_.causticsEnabled);
+            EditorUi::Checkbox("HDR caustics", &rendererSettings_.causticsEnabled);
             if (rendererSettings_.causticsEnabled) {
                 int causticsMode = static_cast<int>(rendererSettings_.causticsMode);
                 const char* causticsModes[] = {"Projector / decal", "Light-space RGB"};
-                if (ImGui::Combo("Caustics mode", &causticsMode, causticsModes, 2)) {
+                if (EditorUi::Combo("Caustics mode", &causticsMode, causticsModes, 2)) {
                     rendererSettings_.causticsMode = static_cast<CausticsMode>(causticsMode);
                 }
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Caustics strength",
                     &rendererSettings_.causticsStrength,
                     0.0f,
                     8.0f,
                     "%.2f"
                 );
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Caustics scale",
                     &rendererSettings_.causticsScale,
                     0.1f,
                     3.0f,
                     "%.2f"
                 );
-                ImGui::SliderFloat3(
+                EditorUi::SliderFloat3(
                     "Caustics direction",
                     &rendererSettings_.causticsDirection.x,
                     -1.5f,
                     1.5f,
                     "%.2f"
                 );
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Caustics sharpness",
                     &rendererSettings_.causticsSharpness,
                     0.0f,
@@ -1094,7 +1211,7 @@ void Application::drawInspectorPanel() {
                 ImGui::BeginDisabled(
                     rendererSettings_.causticsMode != CausticsMode::Projector
                 );
-                ImGui::Checkbox("Animate caustics", &rendererSettings_.causticsAnimated);
+                EditorUi::Checkbox("Animate caustics", &rendererSettings_.causticsAnimated);
                 ImGui::EndDisabled();
                 ImGui::TextDisabled(
                     "Caustics map: 1024 x 1024 | GPU %.3f ms",
@@ -1103,17 +1220,18 @@ void Application::drawInspectorPanel() {
                         : 0.0
                 );
             }
-            ImGui::SeparatorText("Glass feature toggles");
-            ImGui::Checkbox("Glass transmission", &rendererSettings_.transmissionEnabled);
-            ImGui::Checkbox("Dispersion", &rendererSettings_.dispersionEnabled);
-            ImGui::Checkbox("Geometric glass thickness", &rendererSettings_.geometricThicknessEnabled);
+            }
+            if (EditorUi::section("Glass feature toggles")) {
+            EditorUi::Checkbox("Glass transmission", &rendererSettings_.transmissionEnabled);
+            EditorUi::Checkbox("Dispersion", &rendererSettings_.dispersionEnabled);
+            EditorUi::Checkbox("Geometric glass thickness", &rendererSettings_.geometricThicknessEnabled);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(
                     "Uses a back-face depth pass for closed glass meshes; "
                     "falls back to the material thickness/texture when no exit surface is found."
                 );
             }
-            ImGui::Checkbox(
+            EditorUi::Checkbox(
                 "Two-interface refraction",
                 &rendererSettings_.twoInterfaceRefractionEnabled
             );
@@ -1123,50 +1241,50 @@ void Application::drawInspectorPanel() {
                     "when light leaves the glass."
                 );
             }
-            ImGui::SliderFloat(
+            EditorUi::SliderFloat(
                 "Refraction scale",
                 &rendererSettings_.refractionScale,
                 0.0f,
                 0.8f,
                 "%.3f"
             );
-            ImGui::SliderInt("Refraction steps", &rendererSettings_.refractionSteps, 4, 32);
-            ImGui::SliderFloat(
+            EditorUi::SliderInt("Refraction steps", &rendererSettings_.refractionSteps, 4, 32);
+            EditorUi::SliderFloat(
                 "Volume thickness scale",
                 &rendererSettings_.volumeThicknessScale,
                 0.0f,
                 4.0f,
                 "%.2f"
             );
-            ImGui::Checkbox(
+            EditorUi::Checkbox(
                 "Volume glass material override",
                 &rendererSettings_.volumeGlassOverrideEnabled
             );
             if (rendererSettings_.volumeGlassOverrideEnabled) {
                 int presetIndex = static_cast<int>(volumeGlassPreset_);
                 const char* presetNames[] = {"Clear", "Olive", "Amber", "Crystal"};
-                if (ImGui::Combo("Glass preset", &presetIndex, presetNames, 4)) {
+                if (EditorUi::Combo("Glass preset", &presetIndex, presetNames, 4)) {
                     applyVolumeGlassPreset(static_cast<VolumeGlassPreset>(presetIndex));
                 }
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Glass transmission",
                     &rendererSettings_.volumeGlassTransmission,
                     0.0f,
                     1.0f,
                     "%.2f"
                 );
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Glass roughness",
                     &rendererSettings_.volumeGlassRoughness,
                     0.04f,
                     1.0f,
                     "%.2f"
                 );
-                ImGui::ColorEdit3(
+                EditorUi::ColorEdit3(
                     "Attenuation color",
                     &rendererSettings_.volumeGlassAttenuationColor.x
                 );
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Attenuation distance",
                     &rendererSettings_.volumeGlassAttenuationDistance,
                     0.05f,
@@ -1188,7 +1306,7 @@ void Application::drawInspectorPanel() {
             }
             if (!prismDemoEnabled_) {
                 ImGui::BeginDisabled(!rendererSettings_.dispersionEnabled);
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Dispersion override",
                     &rendererSettings_.dispersionStrength,
                     0.0f,
@@ -1205,8 +1323,8 @@ void Application::drawInspectorPanel() {
                 }
                 ImGui::EndDisabled();
             }
-            if (prismDemoEnabled_) {
-                ImGui::SeparatorText("Prism spectrum");
+            }
+            if (prismDemoEnabled_ && EditorUi::section("Prism spectrum")) {
                 int presetIndex = static_cast<int>(prismOpticalPreset_);
                 const char* presetNames[] = {
                     prismOpticalPresetName(PrismOpticalPreset::CrownGlass),
@@ -1214,26 +1332,26 @@ void Application::drawInspectorPanel() {
                     prismOpticalPresetName(PrismOpticalPreset::DiamondLike),
                     prismOpticalPresetName(PrismOpticalPreset::ExaggeratedCover)
                 };
-                if (ImGui::Combo("Optical preset", &presetIndex, presetNames, 4)) {
+                if (EditorUi::Combo("Optical preset", &presetIndex, presetNames, 4)) {
                     applyPrismOpticalPreset(static_cast<PrismOpticalPreset>(presetIndex));
                 }
 
                 bool opticsChanged = false;
-                opticsChanged |= ImGui::SliderFloat(
+                opticsChanged |= EditorUi::SliderFloat(
                     "Beam direction",
                     &prismParameters_.beamAngleDegrees,
                     -20.0f,
                     20.0f,
                     "%.2f deg"
                 );
-                opticsChanged |= ImGui::SliderFloat(
+                opticsChanged |= EditorUi::SliderFloat(
                     "Central IOR",
                     &prismParameters_.centralIndexOfRefraction,
                     1.0f,
                     2.6f,
                     "%.3f"
                 );
-                opticsChanged |= ImGui::SliderFloat(
+                opticsChanged |= EditorUi::SliderFloat(
                     "Dispersion",
                     &prismParameters_.dispersion,
                     0.0f,
@@ -1256,17 +1374,17 @@ void Application::drawInspectorPanel() {
                     }
                 }
                 const char* sampleLabels[] = {"7", "15", "21", "31"};
-                if (ImGui::Combo("Spectral samples", &sampleTierIndex, sampleLabels, 4)) {
+                if (EditorUi::Combo("Spectral samples", &sampleTierIndex, sampleLabels, 4)) {
                     prismParameters_.spectralSampleCount = sampleTiers[static_cast<std::size_t>(sampleTierIndex)];
                     opticsChanged = true;
                 }
                 int spectrumMode = static_cast<int>(prismParameters_.spectrumMode);
                 const char* spectrumModes[] = {"Continuous", "Seven-band"};
-                if (ImGui::Combo("Spectrum mode", &spectrumMode, spectrumModes, 2)) {
+                if (EditorUi::Combo("Spectrum mode", &spectrumMode, spectrumModes, 2)) {
                     prismParameters_.spectrumMode = static_cast<PrismSpectrumMode>(spectrumMode);
                     opticsChanged = true;
                 }
-                opticsChanged |= ImGui::SliderFloat(
+                opticsChanged |= EditorUi::SliderFloat(
                     "White point",
                     &prismParameters_.whitePointKelvin,
                     2000.0f,
@@ -1277,39 +1395,39 @@ void Application::drawInspectorPanel() {
                     updatePrismDemoOptics();
                 }
 
-                ImGui::Checkbox(
+                EditorUi::Checkbox(
                     "Spectral beam ribbons",
                     &rendererSettings_.showPrismIncidentBeam
                 );
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Beam width",
                     &rendererSettings_.prismBeamWidth,
                     0.005f,
                     0.16f,
                     "%.3f"
                 );
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Beam intensity",
                     &rendererSettings_.prismBeamIntensity,
                     0.0f,
                     16.0f,
                     "%.2f"
                 );
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Edge softness",
                     &rendererSettings_.prismBeamEdgeSoftness,
                     0.01f,
                     1.0f,
                     "%.2f"
                 );
-                ImGui::SliderFloat(
+                EditorUi::SliderFloat(
                     "Bloom contribution",
                     &rendererSettings_.prismBeamBloomContribution,
                     0.0f,
                     2.0f,
                     "%.2f"
                 );
-                ImGui::Checkbox(
+                EditorUi::Checkbox(
                     "Optical path debug",
                     &rendererSettings_.showPrismOpticalPathDebug
                 );
@@ -1334,7 +1452,7 @@ void Application::drawInspectorPanel() {
                     validPathCount > 0 ? minimumEnergy : 0.0f,
                     maximumEnergy
                 );
-                if (ImGui::TreeNode("Optical path details")) {
+                if (ImGui::TreeNode(EditorUi::label("Optical path details"))) {
                     if (ImGui::BeginTable(
                             "PrismOpticalPathTable",
                             5,
@@ -1368,14 +1486,15 @@ void Application::drawInspectorPanel() {
                     }
                     ImGui::TreePop();
                 }
-                ImGui::Checkbox("Lock hero camera", &prismCameraLocked_);
-                ImGui::Checkbox("Auto rotate prism", &autoRotate_);
+                EditorUi::Checkbox("Lock hero camera", &prismCameraLocked_);
+                EditorUi::Checkbox("Auto rotate prism", &autoRotate_);
                 if (ImGui::Button("Restore prism hero shot", ImVec2(-1.0f, 0.0f))) {
                     restorePrismHeroShot();
                 }
             }
-            int glassDebugView = static_cast<int>(rendererSettings_.glassDebugView);
-            const char* glassDebugViews[] = {
+            if (EditorUi::section("Render diagnostics")) {
+                int glassDebugView = static_cast<int>(rendererSettings_.glassDebugView);
+                const char* glassDebugViews[] = {
                 "Final",
                 "Reflection",
                 "Refraction",
@@ -1389,75 +1508,80 @@ void Application::drawInspectorPanel() {
                 "Object ID",
                 "Caustics map",
                 "Transmission shadow"
-            };
-            if (ImGui::Combo("Glass debug view", &glassDebugView, glassDebugViews, 13)) {
-                rendererSettings_.glassDebugView = static_cast<GlassDebugView>(glassDebugView);
+                };
+                if (EditorUi::Combo("Glass debug view", &glassDebugView, glassDebugViews, 13)) {
+                    rendererSettings_.glassDebugView = static_cast<GlassDebugView>(glassDebugView);
+                }
+                EditorUi::SliderFloat("Environment", &rendererSettings_.environmentIntensity, 0.0f, 2.0f, "%.2f");
+                ImGui::TextDisabled("Shadow map: %d x %d", renderer_->shadowResolution(), renderer_->shadowResolution());
             }
-            ImGui::SliderFloat("Environment", &rendererSettings_.environmentIntensity, 0.0f, 2.0f, "%.2f");
-            ImGui::TextDisabled("Shadow map: %d x %d", renderer_->shadowResolution(), renderer_->shadowResolution());
 
-            ImGui::SeparatorText("Post processing");
-            ImGui::BeginDisabled(rendererSettings_.renderPath != RenderPath::Deferred);
-            ImGui::Checkbox("SSAO", &rendererSettings_.ssaoEnabled);
-            ImGui::BeginDisabled(!rendererSettings_.ssaoEnabled);
-            ImGui::SliderFloat("SSAO radius", &rendererSettings_.ssaoRadius, 0.05f, 2.0f, "%.2f");
-            ImGui::SliderFloat("SSAO bias", &rendererSettings_.ssaoBias, 0.0f, 0.15f, "%.3f");
-            ImGui::SliderFloat("SSAO strength", &rendererSettings_.ssaoStrength, 0.1f, 3.0f, "%.2f");
-            ImGui::EndDisabled();
-            ImGui::EndDisabled();
-            ImGui::Checkbox("Temporal AA", &rendererSettings_.temporalAaEnabled);
-            ImGui::BeginDisabled(!rendererSettings_.temporalAaEnabled);
-            ImGui::SliderFloat(
+            if (EditorUi::section("Post processing", true)) {
+                ImGui::BeginDisabled(rendererSettings_.renderPath != RenderPath::Deferred);
+                EditorUi::Checkbox("SSAO", &rendererSettings_.ssaoEnabled);
+                ImGui::BeginDisabled(!rendererSettings_.ssaoEnabled);
+                EditorUi::SliderFloat("SSAO radius", &rendererSettings_.ssaoRadius, 0.05f, 2.0f, "%.2f");
+                EditorUi::SliderFloat("SSAO bias", &rendererSettings_.ssaoBias, 0.0f, 0.15f, "%.3f");
+                EditorUi::SliderFloat("SSAO strength", &rendererSettings_.ssaoStrength, 0.1f, 3.0f, "%.2f");
+                ImGui::EndDisabled();
+                ImGui::EndDisabled();
+                EditorUi::Checkbox("Temporal AA", &rendererSettings_.temporalAaEnabled);
+                ImGui::BeginDisabled(!rendererSettings_.temporalAaEnabled);
+                EditorUi::SliderFloat(
                 "TAA history weight",
                 &rendererSettings_.temporalHistoryWeight,
                 0.0f,
                 0.98f,
                 "%.2f"
-            );
-            const char* temporalDebugViews[] = {"Final", "Motion vectors", "History weight"};
-            ImGui::Combo(
+                );
+                const char* temporalDebugViews[] = {"Final", "Motion vectors", "History weight"};
+                EditorUi::Combo(
                 "TAA debug",
                 &rendererSettings_.temporalDebugView,
                 temporalDebugViews,
                 3
-            );
-            ImGui::EndDisabled();
-            ImGui::Checkbox("ACES tone mapping", &rendererSettings_.toneMapping);
-            ImGui::Checkbox("Bloom", &rendererSettings_.bloom);
-            ImGui::SliderFloat("Exposure", &rendererSettings_.exposure, 0.1f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
-            ImGui::BeginDisabled(!rendererSettings_.bloom);
-            ImGui::SliderFloat("Bloom threshold", &rendererSettings_.bloomThreshold, 0.1f, 4.0f, "%.2f");
-            ImGui::SliderFloat("Bloom intensity", &rendererSettings_.bloomIntensity, 0.0f, 1.0f, "%.2f");
-            ImGui::EndDisabled();
+                );
+                ImGui::EndDisabled();
+                EditorUi::Checkbox("ACES tone mapping", &rendererSettings_.toneMapping);
+                EditorUi::Checkbox("Bloom", &rendererSettings_.bloom);
+                EditorUi::SliderFloat("Exposure", &rendererSettings_.exposure, 0.1f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+                ImGui::BeginDisabled(!rendererSettings_.bloom);
+                EditorUi::SliderFloat("Bloom threshold", &rendererSettings_.bloomThreshold, 0.1f, 4.0f, "%.2f");
+                EditorUi::SliderFloat("Bloom intensity", &rendererSettings_.bloomIntensity, 0.0f, 1.0f, "%.2f");
+                ImGui::EndDisabled();
+            }
 
-            ImGui::SeparatorText("Rasterization");
-            ImGui::Checkbox("Wireframe", &rendererSettings_.wireframe);
-            ImGui::Checkbox("Back-face culling", &rendererSettings_.cullBackFaces);
-            ImGui::Checkbox("Normal mapping", &rendererSettings_.normalMapping);
-            ImGui::Checkbox("Ground grid", &rendererSettings_.showGrid);
-            ImGui::Checkbox("XYZ axes + gizmo", &rendererSettings_.showAxes);
-            ImGui::ColorEdit3("Background", &rendererSettings_.backgroundColor.x);
+            if (EditorUi::section("Rasterization", true)) {
+            EditorUi::Checkbox(EditorUi::label("Wireframe"), &rendererSettings_.wireframe);
+            EditorUi::Checkbox(EditorUi::label("Back-face culling"), &rendererSettings_.cullBackFaces);
+            EditorUi::Checkbox(EditorUi::label("Normal mapping"), &rendererSettings_.normalMapping);
+            EditorUi::Checkbox(EditorUi::label("Ground grid"), &rendererSettings_.showGrid);
+            EditorUi::Checkbox("XYZ axes + gizmo", &rendererSettings_.showAxes);
+            EditorUi::ColorEdit3(EditorUi::label("Background"), &rendererSettings_.backgroundColor.x);
             const char* msaaOptions[] = {"1x", "4x"};
             int msaaSelection = rendererSettings_.msaaSamples > 1 ? 1 : 0;
-            if (ImGui::Combo("MSAA", &msaaSelection, msaaOptions, 2)) {
+            if (EditorUi::Combo("MSAA", &msaaSelection, msaaOptions, 2)) {
                 rendererSettings_.msaaSamples = msaaSelection == 0 ? 1 : 4;
             }
             ImGui::TextDisabled("Active samples: %dx", renderer_->activeMsaaSamples());
-
-            ImGui::SeparatorText("Directional light");
-            ImGui::DragFloat3("Direction", &rendererSettings_.lightDirection.x, 0.01f, -1.0f, 1.0f, "%.2f");
-
-            ImGui::SeparatorText("Camera");
-            float fieldOfView = camera_.fieldOfView();
-            if (ImGui::SliderFloat("Field of view", &fieldOfView, 15.0f, 90.0f, "%.0f deg")) {
-                camera_.setFieldOfView(fieldOfView);
-            }
-            if (ImGui::Button("Frame model", ImVec2(-1.0f, 0.0f))) {
-                camera_.reset(modelPosition_);
             }
 
-            ImGui::SeparatorText("Runtime");
-            if (ImGui::Checkbox("VSync", &vsync_)) {
+            if (EditorUi::section("Directional light")) {
+                EditorUi::DragFloat3(EditorUi::label("Direction"), &rendererSettings_.lightDirection.x, 0.01f, -1.0f, 1.0f, "%.2f");
+            }
+
+            if (EditorUi::section("Camera")) {
+                float fieldOfView = camera_.fieldOfView();
+                if (EditorUi::SliderFloat(EditorUi::label("Field of view"), &fieldOfView, 15.0f, 90.0f, "%.0f deg")) {
+                    camera_.setFieldOfView(fieldOfView);
+                }
+                if (ImGui::Button(EditorUi::label("Frame model"), ImVec2(-1.0f, 0.0f))) {
+                    camera_.reset(modelPosition_);
+                }
+            }
+
+            if (EditorUi::section("Runtime")) {
+            if (EditorUi::Checkbox("VSync", &vsync_)) {
                 glfwSwapInterval(vsync_ ? 1 : 0);
             }
             ImGui::Text("CPU frame: %.2f ms", cpuFrameTimeMilliseconds_);
@@ -1519,6 +1643,7 @@ void Application::drawInspectorPanel() {
                 );
             }
             ImGui::TextWrapped("%s", gpuDescription_.c_str());
+            }
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -1527,37 +1652,47 @@ void Application::drawInspectorPanel() {
 }
 
 void Application::drawViewportPanel() {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float menuHeight = ImGui::GetFrameHeight();
-    const ImVec2 contentPosition(viewport->Pos.x, viewport->Pos.y + menuHeight);
-    const ImVec2 contentSize(viewport->Size.x, viewport->Size.y - menuHeight);
-    ImGui::SetNextWindowPos(ImVec2(contentPosition.x + 285.0f, contentPosition.y), ImGuiCond_Once);
-    ImGui::SetNextWindowSize(ImVec2(std::max(contentSize.x - 620.0f, 320.0f), contentSize.y), ImGuiCond_Once);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    const bool visible = ImGui::Begin("Viewport");
+    const bool visible = ImGui::Begin(EditorUi::label("Viewport###Viewport"));
     ImGui::PopStyleVar();
     if (!visible) {
         ImGui::End();
         return;
     }
 
-    ImGui::SetCursorPos(ImVec2(10.0f, 30.0f));
-    if (ImGui::SmallButton("Frame")) {
-        camera_.reset(modelPosition_);
+    ImGui::SetCursorPos(ImVec2(8.0f, 30.0f));
+    if (ImGui::SmallButton(EditorUi::label("Frame"))) {
+        const SceneEntity* selected = scene_.find(selectedSceneEntity_);
+        camera_.reset(selected ? glm::vec3(selected->worldTransform[3]) : modelPosition_);
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Save PNG")) {
+    if (ImGui::SmallButton(EditorUi::label("Save PNG"))) {
         pendingScreenshotPath_ = nextScreenshotPath();
     }
     ImGui::SameLine();
-    ImGui::Checkbox("Grid", &rendererSettings_.showGrid);
+    if (ImGui::SmallButton(EditorUi::label("Panels"))) ImGui::OpenPopup("ViewportPanels");
+    if (ImGui::BeginPopup("ViewportPanels")) {
+        ImGui::MenuItem(EditorUi::label("Hierarchy###Hierarchy"), nullptr, &hierarchyPanelOpen_);
+        ImGui::MenuItem(EditorUi::label("Inspector###Inspector"), nullptr, &inspectorPanelOpen_);
+        ImGui::MenuItem(EditorUi::label("Content Browser###Assets"), nullptr, &assetsPanelOpen_);
+        ImGui::EndPopup();
+    }
     ImGui::SameLine();
-    ImGui::Checkbox("Ground", &showGroundPlane_);
+    EditorUi::toolbarToggle("Grid", &rendererSettings_.showGrid);
     ImGui::SameLine();
-    ImGui::Checkbox("Axes", &rendererSettings_.showAxes);
+    EditorUi::toolbarToggle("Ground", &showGroundPlane_);
     ImGui::SameLine();
-    ImGui::TextDisabled("RMB orbit | MMB pan | Wheel zoom");
-    ImGui::SetCursorPosY(55.0f);
+    EditorUi::toolbarToggle("Axes", &rendererSettings_.showAxes);
+    const char* viewportHelp = EditorUi::chinese
+        ? "左键选择 | Delete 删除 | 右键旋转 | 中键平移"
+        : "LMB select | Delete remove | RMB orbit | MMB pan";
+    if (ImGui::GetContentRegionAvail().x > ImGui::CalcTextSize(viewportHelp).x + 16.0f) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", viewportHelp);
+    } else if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+        ImGui::SetTooltip("%s", viewportHelp);
+    }
+    ImGui::SetCursorPosY(58.0f);
 
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const int width = renderWidthOverride_ > 0
@@ -1652,6 +1787,7 @@ void Application::drawViewportPanel() {
             }
         }
     }
+    if (!benchmarkMode_ && (lightStressDemoEnabled_ || instanceStressDemoEnabled_)) materializeStressEntities(renderItems);
     if (!lightStressDemoEnabled_ && !instanceStressDemoEnabled_) {
         renderItems = scene_.buildRenderItems();
     }
@@ -1660,7 +1796,17 @@ void Application::drawViewportPanel() {
     rendererSettings_.causticsAnimationPhase = rendererSettings_.causticsAnimated
         ? static_cast<float>(std::fmod(glfwGetTime() * 0.16, 1.0))
         : 0.0f;
+    if (lightStressDemoEnabled_ || instanceStressDemoEnabled_) {
+        for (const RenderItem& item : scene_.buildRenderItems()) {
+            if (std::find(stressEntities_.begin(), stressEntities_.end(), item.entityId) == stressEntities_.end()
+                && item.entityId != primaryEntity_ && item.entityId != comparisonEntity_ && item.model != groundModel_.get()
+                && item.model != glassBackdropModel_.get()) renderItems.push_back(item);
+        }
+    }
     renderer_->render(renderItems, camera_, rendererSettings_, width, height);
+    if (!benchmarkMode_ && !prismReelMode_) {
+        renderer_->drawSelectionOutline(renderItems, camera_, selectedSceneEntity_, rendererSettings_.cullBackFaces);
+    }
 
     if (prismReelMode_ && model_ != nullptr && !pendingModelImport_.has_value()) {
         if (prismReelWarmupFrames_ > 0) {
@@ -1680,10 +1826,10 @@ void Application::drawViewportPanel() {
         }
     }
 
-    if (!pendingScreenshotPath_.empty() && model_ != nullptr && !pendingModelImport_.has_value()
+    if (!pendingScreenshotPath_.empty() && !scene_.entities().empty() && !pendingModelImport_.has_value()
         && pendingScreenshotWarmupFrames_ > 0) {
         --pendingScreenshotWarmupFrames_;
-    } else if (!pendingScreenshotPath_.empty() && model_ != nullptr
+    } else if (!pendingScreenshotPath_.empty() && !scene_.entities().empty()
         && !pendingModelImport_.has_value()) {
         std::string screenshotError;
         if (renderer_->saveScreenshot(pendingScreenshotPath_, screenshotError)) {
@@ -1705,6 +1851,15 @@ void Application::drawViewportPanel() {
         ImVec2(1.0f, 0.0f)
     );
 
+    if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        selectEntity(pickEntity(renderItems, width, height,
+            static_cast<int>(mouse.x - min.x), height - 1 - static_cast<int>(mouse.y - min.y)));
+        ImGui::SetWindowFocus();
+    }
+    if (ImGui::IsWindowFocused() && !ImGui::GetIO().WantTextInput
+        && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) deleteSelectedEntity();
     if (ImGui::IsItemHovered() && !(prismDemoEnabled_ && prismCameraLocked_)) {
         ImGuiIO& io = ImGui::GetIO();
         if (io.MouseWheel != 0.0f) {
@@ -1737,9 +1892,9 @@ void Application::drawOrientationGizmo() {
         glm::vec3 cameraDirection{0.0f};
     };
     std::array<AxisGuide, 3> axes{
-        AxisGuide{{1.0f, 0.0f, 0.0f}, "X", IM_COL32(255, 70, 70, 255)},
-        AxisGuide{{0.0f, 1.0f, 0.0f}, "Y", IM_COL32(70, 235, 95, 255)},
-        AxisGuide{{0.0f, 0.0f, 1.0f}, "Z", IM_COL32(70, 125, 255, 255)}
+        AxisGuide{{1.0f, 0.0f, 0.0f}, "X", IM_COL32(255, 20, 36, 255)},
+        AxisGuide{{0.0f, 1.0f, 0.0f}, "Y", IM_COL32(26, 255, 56, 255)},
+        AxisGuide{{0.0f, 0.0f, 1.0f}, "Z", IM_COL32(20, 86, 255, 255)}
     };
     const glm::mat3 viewRotation(camera_.viewMatrix());
     for (AxisGuide& axis : axes) {
@@ -1751,16 +1906,16 @@ void Application::drawOrientationGizmo() {
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 center(imageMin.x + 58.0f, imageMax.y - 58.0f);
-    constexpr float radius = 34.0f;
-    drawList->AddCircleFilled(center, 47.0f, IM_COL32(10, 13, 20, 185), 32);
-    drawList->AddCircle(center, 47.0f, IM_COL32(115, 125, 150, 145), 32, 1.0f);
+    constexpr float radius = 38.0f;
+    drawList->AddCircleFilled(center, 49.0f, IM_COL32(15, 16, 18, 205), 32);
+    drawList->AddCircle(center, 49.0f, IM_COL32(92, 96, 104, 190), 32, 1.0f);
     for (const AxisGuide& axis : axes) {
         const ImVec2 endpoint(
             center.x + axis.cameraDirection.x * radius,
             center.y - axis.cameraDirection.y * radius
         );
-        drawList->AddLine(center, endpoint, axis.color, 3.0f);
-        drawList->AddCircleFilled(endpoint, 4.5f, axis.color, 12);
+        drawList->AddLine(center, endpoint, axis.color, 3.5f);
+        drawList->AddCircleFilled(endpoint, 5.0f, axis.color, 12);
         const ImVec2 textSize = ImGui::CalcTextSize(axis.label);
         const float offsetX = endpoint.x >= center.x ? 7.0f : -textSize.x - 7.0f;
         const float offsetY = endpoint.y >= center.y ? 4.0f : -textSize.y - 4.0f;
@@ -1775,7 +1930,7 @@ void Application::drawDiagnostics() {
         return;
     }
 
-    if (!ImGui::TreeNodeEx("Import diagnostics", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (!ImGui::TreeNodeEx(EditorUi::label("Import diagnostics"), ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
     static constexpr std::array<ModelDiagnosticScope, 5> scopes{
@@ -1828,17 +1983,17 @@ void Application::drawDiagnostics() {
 
 void Application::drawAboutPopup() {
     if (showAbout_) {
-        ImGui::OpenPopup("About MyRenderer");
+        ImGui::OpenPopup(EditorUi::label("About MyRenderer"));
         showAbout_ = false;
     }
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("About MyRenderer", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::BeginPopupModal(EditorUi::label("About MyRenderer"), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("MyRenderer 0.1.0");
         ImGui::Separator();
         ImGui::Text("C++17 / OpenGL 3.3 / GPU rasterization");
         ImGui::TextWrapped("A compact GPU renderer with a format-independent model pipeline.");
-        if (ImGui::Button("Close", ImVec2(120.0f, 0.0f))) {
+        if (ImGui::Button(EditorUi::label("Close"), ImVec2(120.0f, 0.0f))) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1868,7 +2023,7 @@ void Application::discoverModels() {
     std::sort(availableModels_.begin(), availableModels_.end());
 }
 
-bool Application::loadModel(const std::filesystem::path& path) {
+bool Application::loadModel(const std::filesystem::path& path, bool append) {
     if (pendingModelImport_.has_value()) {
         statusMessage_ = "A model is already loading; wait for it to finish before starting another import.";
         return false;
@@ -1908,7 +2063,9 @@ bool Application::loadModel(const std::filesystem::path& path) {
             resolved,
             std::move(future),
             std::chrono::steady_clock::now(),
-            fileSizeError ? 0U : fileSize
+            fileSizeError ? 0U : fileSize,
+            append,
+            sceneGeneration_
         });
         return true;
     } catch (const std::exception& error) {
@@ -1936,8 +2093,10 @@ void Application::updateModelLoad() {
     pendingModelImport_.reset();
     try {
         ModelImportResult loaded = pending.future.get();
-        finishModelLoad(pending.path, std::move(loaded));
+        if (pending.generation != sceneGeneration_) return;
+        finishModelLoad(pending.path, std::move(loaded), pending.append);
     } catch (const std::exception& error) {
+        if (pending.generation != sceneGeneration_) return;
         lastLoadFailed_ = true;
         lastLoadTotalMilliseconds_ = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - pending.startedAt
@@ -1954,7 +2113,7 @@ void Application::updateModelLoad() {
     }
 }
 
-void Application::finishModelLoad(const std::filesystem::path& path, ModelImportResult loaded) {
+void Application::finishModelLoad(const std::filesystem::path& path, ModelImportResult loaded, bool append) {
     const auto gpuUploadStartedAt = std::chrono::steady_clock::now();
     const glm::vec3 modelBoundsMin = loaded.model.boundsMin;
     const glm::vec3 modelBoundsMax = loaded.model.boundsMax;
@@ -1987,6 +2146,23 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
         });
     }
 
+    if (append && (model_ || emptySceneSession_)) {
+        // GPU resources are owned by the scene session, including shared duplicates.
+        const auto* gpu = newModel.get();
+        importedModels_.push_back(std::move(newModel));
+        selectEntity(scene_.createEntity(path.filename().u8string(), gpu));
+        SceneEntity* entity = scene_.find(selectedSceneEntity_);
+        entity->transform.assetTransform =
+            glm::scale(glm::mat4(1.0f), glm::vec3(1.4f / maximumExtent))
+            * glm::translate(glm::mat4(1.0f), -0.5f * (modelBoundsMin + modelBoundsMax));
+        entity->transform.translation.x = 1.7f * static_cast<float>(importedModels_.size() - (emptySceneSession_ ? 1 : 0));
+        statusMessage_ = "Added " + path.filename().u8string() + " to scene";
+        std::cout << statusMessage_ << " (entities: " << scene_.size() << ")\n";
+        return;
+    }
+    emptySceneSession_ = false;
+    scene_.clear();
+    importedModels_.clear();
     model_ = std::move(newModel);
     currentModelPath_ = path;
     loadedMeshCount_ = model_->meshCount();
@@ -2157,14 +2333,10 @@ void Application::queueDroppedFiles(int count, const char** paths) {
     for (int index = 0; index < count; ++index) {
         const std::filesystem::path candidate = std::filesystem::u8path(paths[index]);
         if (findImporter(candidate) != nullptr) {
-            droppedModelPath_ = candidate;
-            statusMessage_ = "Dropped " + candidate.filename().string() + "; queued for loading.";
-            return;
+            droppedModelPaths_.push_back(candidate);
         }
     }
-    const std::filesystem::path candidate = std::filesystem::u8path(paths[0]);
-    droppedModelPath_ = candidate;
-    statusMessage_ = "Dropped file is not a supported model: " + candidate.filename().string();
+    statusMessage_ = "Queued " + std::to_string(droppedModelPaths_.size()) + " model(s) for import.";
 }
 
 const ModelImporter* Application::findImporter(const std::filesystem::path& path) const {

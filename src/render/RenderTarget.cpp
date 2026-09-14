@@ -442,6 +442,35 @@ bool RenderTarget::savePng(const std::filesystem::path& path, std::string& error
     return writePng(path, width_, height_, pixels, error);
 }
 
+bool RenderTarget::saveDefaultFramebufferPng(
+    const std::filesystem::path& path,
+    int width,
+    int height,
+    std::string& error
+) {
+    if (width <= 0 || height <= 0) {
+        error = "Editor framebuffer has no drawable area";
+        return false;
+    }
+    std::vector<std::uint8_t> pixels(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4U
+    );
+    GLint previousReadFramebuffer = 0;
+    GLint previousReadBuffer = 0;
+    GLint previousPackAlignment = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_READ_BUFFER, &previousReadBuffer);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glReadBuffer(GL_BACK);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
+    glReadBuffer(static_cast<GLenum>(previousReadBuffer));
+    glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+    return writePng(path, width, height, pixels, error);
+}
+
 void RenderTarget::destroy() {
     if (refractiveDepthStencil_ != 0U) glDeleteRenderbuffers(1, &refractiveDepthStencil_);
     if (multisampleDepthStencil_ != 0U) glDeleteRenderbuffers(1, &multisampleDepthStencil_);

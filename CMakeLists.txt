@@ -49,6 +49,15 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
+set(TINYEXR_BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
+set(TINYEXR_USE_MINIZ ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    tinyexr
+    GIT_REPOSITORY https://github.com/syoyo/tinyexr.git
+    GIT_TAG v1.0.13
+    GIT_SHALLOW TRUE
+)
+
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -71,7 +80,7 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
-FetchContent_MakeAvailable(glfw glm glad tinyobjloader imgui assimp)
+FetchContent_MakeAvailable(glfw glm glad tinyobjloader tinyexr imgui assimp)
 FetchContent_GetProperties(glad SOURCE_DIR MYRENDERER_GLAD_FETCH_SOURCE_DIR)
 
 add_subdirectory(${glad_SOURCE_DIR}/cmake ${glad_BINARY_DIR}/cmake)
@@ -100,9 +109,21 @@ add_library(MyRendererPathTracing STATIC
     src/pathtracer/Bvh.cpp
     src/pathtracer/RayGeometry.cpp
     src/pathtracer/SceneSnapshot.cpp
+    src/pathtracer/PbrBsdf.cpp
+    src/pathtracer/ProgressiveRenderer.cpp
+    src/pathtracer/AcceptanceScene.cpp
+    src/pathtracer/ImageOutput.cpp
 )
 target_include_directories(MyRendererPathTracing PUBLIC src)
-target_link_libraries(MyRendererPathTracing PUBLIC glm::glm)
+find_package(Threads REQUIRED)
+target_link_libraries(MyRendererPathTracing PUBLIC glm::glm Threads::Threads PRIVATE zlibstatic)
+target_include_directories(MyRendererPathTracing PRIVATE ${assimp_SOURCE_DIR}/contrib/zlib ${assimp_BINARY_DIR}/contrib/zlib)
+add_executable(MyRendererReferenceRender tools/ReferenceRender.cpp)
+target_link_libraries(MyRendererReferenceRender PRIVATE MyRendererPathTracing)
+add_custom_target(path-tracing-acceptance
+    COMMAND MyRendererReferenceRender ${CMAKE_CURRENT_BINARY_DIR}/path-tracing-acceptance/pbr
+    DEPENDS MyRendererReferenceRender
+)
 if(MSVC)
     target_compile_options(MyRendererPathTracing PRIVATE /W4 /permissive- /utf-8)
 else()
@@ -162,6 +183,7 @@ target_include_directories(MyRenderer PRIVATE
     ${assimp_SOURCE_DIR}/contrib/rapidjson/include
     ${assimp_SOURCE_DIR}/contrib/zlib
     ${assimp_BINARY_DIR}/contrib/zlib
+    ${tinyexr_SOURCE_DIR}
 )
 target_compile_definitions(MyRenderer PRIVATE
     GLFW_INCLUDE_NONE
@@ -174,6 +196,7 @@ target_link_libraries(MyRenderer PRIVATE
     imgui_backend
     assimp::assimp
     tinyobjloader
+    tinyexr
     zlibstatic
     MyRendererPathTracing
 )
@@ -254,6 +277,18 @@ if(BUILD_TESTING)
         target_compile_options(MyRendererPathTracingTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME path-tracing-foundation COMMAND MyRendererPathTracingTests)
+    add_executable(MyRendererProgressiveTests tests/ProgressiveRenderingTests.cpp)
+    target_link_libraries(MyRendererProgressiveTests PRIVATE MyRendererPathTracing)
+    target_include_directories(MyRendererProgressiveTests PRIVATE ${assimp_SOURCE_DIR}/contrib/stb)
+    add_test(NAME path-tracing-progressive COMMAND MyRendererProgressiveTests)
+    set_tests_properties(path-tracing-progressive PROPERTIES TIMEOUT 30)
+    add_custom_target(path-tracing-regression
+        COMMAND MyRendererProgressiveTests
+            ${CMAKE_CURRENT_SOURCE_DIR}/docs/reference-images/sr-p1c-pbr
+            ${CMAKE_CURRENT_BINARY_DIR}/path-tracing-acceptance/pbr
+        DEPENDS path-tracing-acceptance MyRendererProgressiveTests
+        COMMENT "Comparing decoded linear HDR and PNG against the SR-P1C PBR baseline"
+    )
 
     add_executable(MyRendererShaderHotReloadTests
         tests/ShaderHotReloadTests.cpp
@@ -683,6 +718,7 @@ install(FILES ${glfw_SOURCE_DIR}/LICENSE.md DESTINATION licenses RENAME GLFW-LIC
 install(FILES ${glm_SOURCE_DIR}/copying.txt DESTINATION licenses RENAME GLM-LICENSE.txt COMPONENT Runtime)
 install(FILES ${MYRENDERER_GLAD_FETCH_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME GLAD-LICENSE.txt COMPONENT Runtime)
 install(FILES ${tinyobjloader_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME TINYOBJLOADER-LICENSE.txt COMPONENT Runtime)
+install(FILES ${tinyexr_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME TINYEXR-LICENSE.txt COMPONENT Runtime)
 install(FILES ${imgui_SOURCE_DIR}/LICENSE.txt DESTINATION licenses RENAME IMGUI-LICENSE.txt COMPONENT Runtime)
 install(FILES ${assimp_SOURCE_DIR}/LICENSE DESTINATION licenses RENAME ASSIMP-LICENSE.txt COMPONENT Runtime)
 

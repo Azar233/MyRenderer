@@ -554,6 +554,10 @@ ModelImportResult AssimpImporter::load(const std::filesystem::path& path) const 
             material.name = name.C_Str();
         }
         aiColor4D baseColor;
+        aiColor3D emission(0.0f, 0.0f, 0.0f);
+        if (source.Get(AI_MATKEY_COLOR_EMISSIVE, emission) == AI_SUCCESS) {
+            material.emissiveFactor = {emission.r, emission.g, emission.b};
+        }
         if (aiGetMaterialColor(&source, AI_MATKEY_BASE_COLOR, &baseColor) == AI_SUCCESS
             || aiGetMaterialColor(&source, AI_MATKEY_COLOR_DIFFUSE, &baseColor) == AI_SUCCESS) {
             material.baseColorFactor = {baseColor.r, baseColor.g, baseColor.b, baseColor.a};

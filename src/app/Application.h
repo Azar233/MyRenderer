@@ -4,11 +4,13 @@
 #include <chrono>
 #include <filesystem>
 #include <future>
+#include <deque>
 #include <memory>
 #include <map>
 #include <optional>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -23,6 +25,7 @@ struct GLFWwindow;
 class GpuModel;
 class ModelImporter;
 class Renderer;
+class Shader;
 
 enum class VolumeGlassPreset {
     Clear = 0,
@@ -50,6 +53,14 @@ private:
 
     void drawMainMenu();
     void drawScenePanel();
+    void drawAssetsPanel();
+    void drawEditorLayout();
+    void newEmptyScene();
+    void deleteSelectedEntity();
+    void selectEntity(SceneEntityId id);
+    SceneEntityId pickEntity(const std::vector<RenderItem>& items, int width, int height, int x, int y);
+    void materializeStressEntities(std::vector<RenderItem>& items);
+    bool editorInteractionRegression();
     void drawInspectorPanel();
     void drawViewportPanel();
     void drawOrientationGizmo();
@@ -57,9 +68,9 @@ private:
     void drawDiagnostics();
 
     void discoverModels();
-    bool loadModel(const std::filesystem::path& path);
+    bool loadModel(const std::filesystem::path& path, bool append = false);
     void updateModelLoad();
-    void finishModelLoad(const std::filesystem::path& path, ModelImportResult loaded);
+    void finishModelLoad(const std::filesystem::path& path, ModelImportResult loaded, bool append);
     void queueDroppedFiles(int count, const char** paths);
     const ModelImporter* findImporter(const std::filesystem::path& path) const;
     std::filesystem::path resolvePath(const std::filesystem::path& path) const;
@@ -86,6 +97,15 @@ private:
 
     std::unique_ptr<Renderer> renderer_;
     std::unique_ptr<GpuModel> model_;
+    std::vector<std::unique_ptr<GpuModel>> importedModels_;
+    bool resetEditorLayout_{false};
+    bool emptySceneSession_{false};
+    bool focusObjectTab_{false};
+    bool focusRendererTab_{false};
+    std::uint64_t sceneGeneration_{0};
+    std::unique_ptr<Shader> pickingShader_;
+    std::vector<SceneEntityId> stressEntities_;
+    std::unordered_set<SceneEntityId> editedEntities_;
     std::unique_ptr<GpuModel> groundModel_;
     std::unique_ptr<GpuModel> glassBackdropModel_;
     std::vector<std::unique_ptr<ModelImporter>> importers_;
@@ -102,7 +122,9 @@ private:
     std::filesystem::path sourceRoot_;
     std::filesystem::path currentModelPath_;
     std::filesystem::path pendingScreenshotPath_;
+    std::filesystem::path pendingEditorScreenshotPath_;
     int pendingScreenshotWarmupFrames_{0};
+    int pendingEditorScreenshotWarmupFrames_{3};
     std::filesystem::path benchmarkOutputPath_;
     std::filesystem::path prismReelFramesDirectory_;
     std::vector<std::filesystem::path> availableModels_;
@@ -116,9 +138,11 @@ private:
         std::future<ModelImportResult> future;
         std::chrono::steady_clock::time_point startedAt;
         std::uintmax_t fileSize{0};
+        bool append{false};
+        std::uint64_t generation{0};
     };
     std::optional<PendingModelImport> pendingModelImport_;
-    std::optional<std::filesystem::path> droppedModelPath_;
+    std::deque<std::filesystem::path> droppedModelPaths_;
 
     struct PrismDemoPreviousState {
         RendererSettings rendererSettings;
@@ -170,6 +194,9 @@ private:
 
     bool showAbout_{false};
     bool showImGuiDemo_{false};
+    bool hierarchyPanelOpen_{true};
+    bool inspectorPanelOpen_{true};
+    bool assetsPanelOpen_{true};
     bool autoRotate_{false};
     bool showGroundPlane_{true};
     bool showComparisonObject_{false};

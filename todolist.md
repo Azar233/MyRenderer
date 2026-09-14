@@ -639,8 +639,11 @@ SR-P0 验收：同一场景包含至少 10 个独立 Entity 与 2 个共享 Mesh
 
 - [x] 定义只读 `SceneSnapshot`，由实时 Scene 导出实例化 Mesh、世界变换、材质、纹理、相机、灯光与环境；Rasterizer 和 Path Tracer 不各自解析资产。
 - [x] 实现可单元测试的 Ray/AABB、Ray/Triangle、Surface Interaction、BVH Build/Traversal；先 Median Split，再用数据决定是否升级 SAH。
-- [ ] 实现 Progressive Accumulation、确定性随机种子、Samples Per Pixel、Max Depth、Russian Roulette 和可取消后台渲染。
-- [ ] 对齐 glTF PBR BSDF：Lambert/Disney Diffuse、GGX Specular、Metallic、Roughness、Emissive；随后加入 Dielectric Transmission、Fresnel、IOR 与 Beer-Lambert Volume。
+- [x] SR-P1B：实现 Progressive Accumulation、确定性 Camera Ray/随机种子、Samples Per Pixel、Max Depth 和可取消单工作线程后台渲染。
+- [x] SR-P1C：补充默认第三次反弹后启用、可关闭的 Russian Roulette；Max Depth 保留为硬上限。
+- [x] SR-P1B：最小常量 Diffuse/Emissive、线性 HDR 与 Tone-mapped PNG、原创固定图与 CPU 回归。
+- [x] SR-P1C：对齐常量 glTF PBR 因子：Fresnel 能量分配的 Lambert、GGX Specular、Metallic、Roughness 与 Emissive，并提供 mixture sampling/PDF 单测和 PBR 固定图。
+- [ ] 接入 baseColor / metallic-roughness / normal 纹理采样；随后加入 Dielectric Transmission、IOR 与 Beer-Lambert Volume。
 - [ ] 实现 Next Event Estimation 与 Multiple Importance Sampling，支持方向光、点/聚光、面光源和 HDR Environment Importance Sampling。
 - [ ] 输出线性 HDR 与 Tone-mapped PNG；保留 Albedo、Normal、Depth、Direct、Indirect、Sample Count 与 Variance 调试层。
 - [ ] 建立原创 Cornell-style 场景、`pbr_material_test.gltf` 和 Volume Glass 三组固定对照；同机位输出 Raster / Path Traced / Difference。
@@ -648,6 +651,9 @@ SR-P0 验收：同一场景包含至少 10 个独立 Entity 与 2 个共享 Mesh
 
 > SR-P1A 完成（2026-09-03）：新增只读 `SceneSnapshot`，从实时 Scene/Camera 捕获可见 Entity、Mesh Instance、共享 `ModelData`、材质/纹理来源、相机与灯光/环境参数。`GpuModel` 接管导入后的 CPU 资产并以 `shared_ptr<const ModelData>` 与参考路径共享，同一 Mesh 的多 Node/多 Entity 不会重复解析或复制资产。CPU 几何层新增带区间的 Ray、稳健 AABB slab test、双面 Möller–Trumbore Triangle、完整 `SurfaceInteraction`，以及确定性最大质心轴 Median-Split BVH；快照可展开带稳定 Asset/Instance/Mesh/Material ID 的世界空间三角形。新增 `path-tracing-foundation` CTest，覆盖正反面、退化面、平行光线、最近命中、有限遮挡和共享实例数据链；MSVC Release 全量构建与 5 项 CTest 通过。设计与边界见 `docs/reference-path-tracer.md`。下一批进入 SR-P1B：确定性 Camera Ray、Progressive Accumulation、可取消后台任务与最小 Diffuse/Emissive 输出。
 
+> SR-P1B 完成（2026-09-05）：在共享 Snapshot/BVH 上新增按 Seed/Pixel/Sample 定位的采样流、透视 Camera Ray、完整 SPP 事务式累积、Max Depth 与单工作线程 RenderTask；取消保留完整采样前缀，重启清空，异常可读取，析构 join。共享材质增加 OBJ/glTF Emissive 因子，最小 Lambert 余弦采样与发光面命中输出到线性 RGBE HDR 和 Reinhard+sRGB PNG。原创 256×256 / 256 SPP / Depth 6 / Seed 20260905 固定图在 `docs/reference-images/sr-p1b-diffuse.{hdr,png}`。新增 CPU 测试验证相机、解析能量、确定性、取消/重启、导出解码和收敛趋势；完整构建/测试与固定图复现命令见 `docs/reference-path-tracer.md`。验证：`cmake --build build-ci-msvc --config Release --parallel 6`；`ctest --test-dir build-ci-msvc -C Release --output-on-failure`；`cmake --build build-ci-msvc --config Release --target path-tracing-regression`。PBR、NEE/MIS、RR、AOV 和多线程优化保持待做；构建 BVH 期间取消需等待构建结束。
+
+> SR-P1C 完成（2026-09-14）：新增独立 `PbrBsdf`，以 glTF 常量 Base Color / Metallic / Perceptual Roughness 构造 Lambert + Cook-Torrance GGX，按 F0 亮度混合 cosine diffuse 与 GGX half-vector sampling，并统一使用 mixture PDF 更新 throughput。积分器改用 shading normal 求值、geometric normal 偏移，默认第三次反射后执行 `[0.05,0.95]` 生存率 RR，设 0 可关闭。原创验收房间加入 Metallic 1 / Roughness 0.32 的橙铜箱体与冷色常量环境，固定 256×256 / 256 SPP / Depth 6 / Seed 20260914 图为 `docs/reference-images/sr-p1c-pbr.{hdr,png}`。CPU 测试覆盖粗糙度峰值、金属 F0、mixture sample/PDF、半球反射率、RR 执行和确定性；下一批进入 emissive triangle / 显式灯光 NEE + MIS。纹理、Transmission/IOR/Volume、HDRI importance sampling、AOV、VNDF 与多线程仍待做。
 SR-P1 验收：固定随机种子可复现；增加 SPP 后误差总体下降；Diffuse、Metal、Roughness、Emissive、Glass 与 HDRI 有独立对照；报告明确采样噪声、Firefly、收敛速度、BVH 时间和当前不支持项。
 
 ### 9.5 SR-P2：Stylized / NPR 渲染模式（预计 2～3 周）

@@ -11,6 +11,7 @@ this summary.
 | GLM | 1.0.3 | MIT or Happy Bunny (Modified MIT) | <https://github.com/g-truc/glm> |
 | glad | 2.0.8 | Apache-2.0 / CC0 (component-dependent) | <https://github.com/Dav1dde/glad> |
 | tinyobjloader | 1.0.6 | MIT | <https://github.com/tinyobjloader/tinyobjloader> |
+| TinyEXR | 1.0.13 | BSD-3-Clause | <https://github.com/syoyo/tinyexr> |
 | Dear ImGui | 1.92.7-docking | MIT | <https://github.com/ocornut/imgui> |
 | Assimp | 6.0.5 | BSD-3-Clause; bundled components retain their own notices | <https://github.com/assimp/assimp> |
 
