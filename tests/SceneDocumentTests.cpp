@@ -1,0 +1,183 @@
+#include <cmath>
+#include <filesystem>
+#include <iostream>
+#include <stdexcept>
+
+#include "scene/SceneDocument.h"
+
+namespace {
+
+void require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(message);
+}
+
+bool close(float left, float right) {
+    return std::abs(left - right) < 1.0e-5f;
+}
+
+} // namespace
+
+int main() {
+    try {
+        const std::filesystem::path acceptanceRoot =
+            std::filesystem::temp_directory_path() / "MyRendererSceneDocumentAcceptance";
+        const std::filesystem::path directory = acceptanceRoot / "scenes";
+        std::filesystem::create_directories(directory);
+        const std::filesystem::path scenePath = directory / "repeatable.myscene";
+        const std::filesystem::path modelPath =
+            acceptanceRoot / "assets" / "models" / "cube.obj";
+
+        SceneDocument source;
+        source.camera.target = glm::vec3(1.0f, 2.0f, -3.0f);
+        source.camera.yawDegrees = -27.0f;
+        source.camera.pitchDegrees = 18.0f;
+        source.camera.distance = 7.5f;
+        source.camera.fieldOfViewDegrees = 39.0f;
+        source.renderer.renderPath = RenderPath::Deferred;
+        source.renderer.backgroundColor = glm::vec3(0.01f, 0.02f, 0.03f);
+        source.renderer.ssaoEnabled = true;
+        source.renderer.bloomIntensity = 0.37f;
+        source.renderer.shadingMode = ShadingMode::Stylized;
+        source.renderer.stylizedBandCount = 4;
+        source.renderer.stylizedBandSoftness = 0.07f;
+        source.renderer.stylizedSpecularSize = 0.24f;
+        source.renderer.stylizedSpecularSoftness = 0.06f;
+        source.renderer.stylizedRimWidth = 0.41f;
+        source.renderer.stylizedRimSoftness = 0.11f;
+        source.renderer.stylizedRimIntensity = 1.2f;
+        source.renderer.stylizedShadowTint = glm::vec3(0.12f, 0.18f, 0.33f);
+        source.renderer.stylizedRimColor = glm::vec3(0.2f, 0.7f, 1.0f);
+        source.renderer.stylizedOutlineEnabled = false;
+        source.renderer.stylizedOutlineWidth = 2.5f;
+        source.renderer.stylizedOutlineDepthThreshold = 0.04f;
+        source.renderer.stylizedOutlineNormalThreshold = 0.31f;
+        source.renderer.stylizedOutlineColor = glm::vec3(0.05f, 0.08f, 0.12f);
+        source.renderer.localLights.push_back(LocalLight{
+            glm::vec3(2.0f, 3.0f, 4.0f),
+            6.0f,
+            glm::vec3(0.8f, 0.4f, 0.2f),
+            12.0f,
+            glm::vec3(0.0f, -1.0f, 0.0f),
+            0.76f,
+            LocalLightType::Spot
+        });
+        source.playback.animationEnabled = true;
+        source.playback.animationTimeSeconds = 1.25f;
+        source.playback.prismParameters.spectralSampleCount = 31;
+
+        SceneDocumentEntity root;
+        root.id = 7U;
+        root.name = "Root model";
+        root.modelResource = modelPath.generic_u8string();
+        root.transform.translation = glm::vec3(2.0f, -1.0f, 0.5f);
+        root.transform.rotationDegrees = glm::vec3(10.0f, 20.0f, 30.0f);
+        root.transform.scale = glm::vec3(1.5f, 0.8f, 2.0f);
+        root.transform.assetTransform[3][0] = -0.25f;
+        root.tint = glm::vec3(0.2f, 0.7f, 0.9f);
+        root.visible = false;
+        root.castsShadow = false;
+        source.entities.push_back(root);
+
+        SceneDocumentEntity child;
+        child.id = 11U;
+        child.name = "Child instance";
+        child.parent = root.id;
+        child.modelResource = modelPath.generic_u8string();
+        child.transform.translation = glm::vec3(0.0f, 3.0f, 0.0f);
+        child.instanceCandidate = true;
+        source.entities.push_back(child);
+
+        std::string error;
+        require(saveSceneDocument(scenePath, source, error), error.c_str());
+        SceneDocument firstLoad;
+        require(loadSceneDocument(scenePath, firstLoad, error), error.c_str());
+        require(firstLoad.entities.size() == 2U, "first load entity count");
+        require(firstLoad.entities[1].parent == 7U, "hierarchy survives first load");
+        if (firstLoad.entities[0].modelResource != "../assets/models/cube.obj") {
+            throw std::runtime_error(
+                "model path is scene-relative (got '" + firstLoad.entities[0].modelResource + "')"
+            );
+        }
+        require(!firstLoad.entities[0].visible && !firstLoad.entities[0].castsShadow, "visibility and shadow state survive");
+        require(close(firstLoad.entities[0].transform.rotationDegrees.y, 20.0f), "transform survives first load");
+        require(close(firstLoad.entities[0].tint.z, 0.9f), "tint survives first load");
+        require(firstLoad.renderer.renderPath == RenderPath::Deferred && firstLoad.renderer.ssaoEnabled,
+            "renderer mode survives first load");
+        require(firstLoad.renderer.shadingMode == ShadingMode::Stylized
+                && firstLoad.renderer.stylizedBandCount == 4
+                && close(firstLoad.renderer.stylizedBandSoftness, 0.07f)
+                && close(firstLoad.renderer.stylizedSpecularSize, 0.24f)
+                && close(firstLoad.renderer.stylizedSpecularSoftness, 0.06f)
+                && close(firstLoad.renderer.stylizedRimWidth, 0.41f)
+                && close(firstLoad.renderer.stylizedRimSoftness, 0.11f)
+                && close(firstLoad.renderer.stylizedRimIntensity, 1.2f)
+                && close(firstLoad.renderer.stylizedShadowTint.z, 0.33f)
+                && close(firstLoad.renderer.stylizedRimColor.y, 0.7f)
+                && !firstLoad.renderer.stylizedOutlineEnabled
+                && close(firstLoad.renderer.stylizedOutlineWidth, 2.5f)
+                && close(firstLoad.renderer.stylizedOutlineDepthThreshold, 0.04f)
+                && close(firstLoad.renderer.stylizedOutlineNormalThreshold, 0.31f)
+                && close(firstLoad.renderer.stylizedOutlineColor.z, 0.12f),
+            "stylized renderer settings survive first load");
+        require(firstLoad.renderer.localLights.size() == 1U
+            && firstLoad.renderer.localLights.front().type == LocalLightType::Spot,
+            "local environment light survives first load");
+        require(close(firstLoad.camera.distance, 7.5f), "camera survives first load");
+
+        require(saveSceneDocument(scenePath, firstLoad, error), error.c_str());
+        SceneDocument secondLoad;
+        require(loadSceneDocument(scenePath, secondLoad, error), error.c_str());
+        require(secondLoad.entities.size() == firstLoad.entities.size(), "second load entity count is stable");
+        require(secondLoad.entities[1].parent == firstLoad.entities[1].parent, "hierarchy is repeatable");
+        require(secondLoad.entities[0].modelResource == firstLoad.entities[0].modelResource,
+            "relative model path is repeatable");
+        require(close(secondLoad.renderer.bloomIntensity, 0.37f), "renderer settings survive repeated load");
+        require(secondLoad.renderer.shadingMode == ShadingMode::Stylized
+                && secondLoad.renderer.stylizedBandCount == 4
+                && close(secondLoad.renderer.stylizedSpecularSize, 0.24f)
+                && close(secondLoad.renderer.stylizedRimIntensity, 1.2f)
+                && close(secondLoad.renderer.stylizedShadowTint.z, 0.33f)
+                && !secondLoad.renderer.stylizedOutlineEnabled
+                && close(secondLoad.renderer.stylizedOutlineWidth, 2.5f),
+            "stylized renderer settings survive repeated load");
+        require(close(secondLoad.playback.animationTimeSeconds, 1.25f), "playback state survives repeated load");
+        require(resolveSceneResource(secondLoad.entities[0].modelResource, scenePath)
+                == modelPath.lexically_normal(),
+            "relative model path resolves against the scene file");
+
+        const std::filesystem::path examples =
+            std::filesystem::path(MYRENDERER_SOURCE_DIR) / "assets" / "scenes";
+        std::size_t exampleCount = 0U;
+        bool foundPathTracingPbr = false;
+        bool foundPathTracingLights = false;
+        bool foundPathTracingVolume = false;
+        for (const auto& entry : std::filesystem::directory_iterator(examples)) {
+            if (!entry.is_regular_file() || entry.path().extension() != myRendererSceneExtension) continue;
+            SceneDocument example;
+            require(loadSceneDocument(entry.path(), example, error), error.c_str());
+            require(!example.entities.empty(), "bundled scene must contain entities");
+            for (const SceneDocumentEntity& entity : example.entities) {
+                if (entity.modelResource.empty() || entity.modelResource.rfind("builtin:", 0U) == 0U) continue;
+                require(std::filesystem::is_regular_file(
+                    resolveSceneResource(entity.modelResource, entry.path())
+                ), "bundled scene model resource must resolve");
+            }
+            foundPathTracingPbr = foundPathTracingPbr
+                || entry.path().filename() == "10_reference_pathtracer_pbr_hdri.myscene";
+            foundPathTracingLights = foundPathTracingLights
+                || entry.path().filename() == "11_reference_pathtracer_lights.myscene";
+            foundPathTracingVolume = foundPathTracingVolume
+                || entry.path().filename() == "12_reference_pathtracer_volume.myscene";
+            ++exampleCount;
+        }
+        require(exampleCount >= 12U, "all major feature scenes should be bundled");
+        require(foundPathTracingPbr && foundPathTracingLights && foundPathTracingVolume,
+            "dedicated path-tracing scenes should be bundled");
+
+        std::cout << "Scene document repeat-load acceptance test passed\n";
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Scene document acceptance test failed: " << exception.what() << '\n';
+        return 1;
+    }
+}

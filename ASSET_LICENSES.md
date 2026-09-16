@@ -7,6 +7,7 @@
 | `assets/environments/kloofendal_48d_partly_cloudy_puresky_4k.exr` | Poly Haven, “Kloofendal 48d Partly Cloudy (Pure Sky)”; see the adjacent README | CC0 1.0 |
 | `cube.obj`, `sphere.obj`, material/glass/prism/skinning regression fixtures and their textures | Created or procedurally generated for MyRenderer | MIT, under the project license |
 | `assets/icons/myrenderer-*` | Created for MyRenderer | MIT, under the project license |
+| `assets/models/polyhaven/*` | Five 1K glTF showcase models from Poly Haven; authors and source URLs are recorded in the adjacent README | CC0 1.0 |
 
 ## Source-tree-only reference models
 

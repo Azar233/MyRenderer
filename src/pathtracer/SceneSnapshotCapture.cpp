@@ -50,9 +50,17 @@ SceneSnapshotLighting captureSceneLighting(const RendererSettings& settings) {
     lighting.directional.radiance = glm::vec3(std::max(settings.diffuseStrength, 0.0f));
     lighting.environment.backgroundColor = settings.backgroundColor;
     lighting.environment.intensity = std::max(settings.environmentIntensity, 0.0f);
+    lighting.environment.visibleToCamera = settings.skyboxEnabled;
     lighting.environment.sourceName = settings.iblEnabled
         ? "Active renderer environment"
         : "Background color";
+#ifdef MYRENDERER_SOURCE_DIR
+    if (settings.iblEnabled) {
+        lighting.environment.sourcePath = std::filesystem::path(MYRENDERER_SOURCE_DIR)
+            / "assets" / "environments"
+            / "kloofendal_48d_partly_cloudy_puresky_4k.exr";
+    }
+#endif
     lighting.localLights.reserve(settings.localLights.size());
     for (const LocalLight& source : settings.localLights) {
         SnapshotLocalLight light;

@@ -15,6 +15,8 @@ namespace {
 
 using pathtracer::Bounds3;
 using pathtracer::Bvh;
+using pathtracer::BvhSplitStrategy;
+using pathtracer::BvhTraversalStats;
 using pathtracer::Ray;
 using pathtracer::SceneSnapshotBuilder;
 using pathtracer::SnapshotCamera;
@@ -151,6 +153,52 @@ void testMedianBvh() {
     );
 }
 
+void testBinnedSah() {
+    std::vector<Triangle> triangles;
+    for (std::uint32_t index = 0U; index < 15U; ++index) {
+        Triangle triangle = makeTriangle(1.0f, index);
+        for (glm::vec3& position : triangle.positions)
+            position += glm::vec3(static_cast<float>(index) * 0.25f, 0.0f, 0.0f);
+        triangles.push_back(triangle);
+    }
+    Triangle outlier = makeTriangle(1.0f, 100U);
+    for (glm::vec3& position : outlier.positions)
+        position += glm::vec3(100.0f, 0.0f, 0.0f);
+    triangles.push_back(outlier);
+
+    Bvh median(triangles, 4U, BvhSplitStrategy::Median);
+    Bvh sah(triangles, 4U, BvhSplitStrategy::BinnedSah);
+    require(sah.stats().sahSplitCount > 0U, "Binned SAH did not create any SAH split");
+    require(sah.stats().primitiveCount == median.stats().primitiveCount,
+            "SAH build lost input primitives");
+    const Ray outlierRay{glm::vec3(100.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+    SurfaceInteraction medianHit;
+    SurfaceInteraction sahHit;
+    BvhTraversalStats medianTraversal;
+    BvhTraversalStats sahTraversal;
+    require(median.intersect(outlierRay, medianHit, &medianTraversal)
+                && sah.intersect(outlierRay, sahHit, &sahTraversal),
+            "Median/SAH failed to intersect the outlier primitive");
+    require(medianHit.primitiveIndex == 100U && sahHit.primitiveIndex == 100U,
+            "SAH changed nearest primitive identity");
+    requireNear(sahHit.t, medianHit.t, "SAH changed nearest hit distance");
+    require(sahTraversal.triangleTests < medianTraversal.triangleTests,
+            "Binned SAH did not reduce outlier triangle tests");
+
+    Triangle later = makeTriangle(2.0f, 90U);
+    Triangle stableWinner = makeTriangle(2.0f, 10U);
+    Bvh overlapMedian({later, stableWinner}, 4U, BvhSplitStrategy::Median);
+    Bvh overlapSah({stableWinner, later}, 4U, BvhSplitStrategy::BinnedSah);
+    SurfaceInteraction overlapMedianHit;
+    SurfaceInteraction overlapSahHit;
+    const Ray overlapRay{glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f)};
+    require(overlapMedian.intersect(overlapRay, overlapMedianHit)
+                && overlapSah.intersect(overlapRay, overlapSahHit)
+                && overlapMedianHit.primitiveIndex == 10U
+                && overlapSahHit.primitiveIndex == 10U,
+            "Equal-distance BVH hits must resolve to the stable primitive ID");
+}
+
 std::shared_ptr<const ModelData> makeInstancedModel() {
     auto model = std::make_shared<ModelData>();
     model->name = "Snapshot fixture";
@@ -225,6 +273,32 @@ void testSceneSnapshotInstancing() {
     require(hit.instanceIndex == 0U, "surface interaction should identify the scene instance");
 }
 
+void testSnapshotTangentTransform() {
+    auto model = std::make_shared<ModelData>();
+    model->materials.push_back(MaterialData{});
+    MeshData mesh;
+    mesh.vertices.resize(3U);
+    mesh.vertices[0].position = {-1, -1, 0};
+    mesh.vertices[1].position = {1, -1, 0};
+    mesh.vertices[2].position = {0, 1, 0};
+    for (Vertex& vertex : mesh.vertices) {
+        vertex.normal = {0, 0, 1};
+        vertex.tangent = {1, 0, 0, 1};
+    }
+    mesh.indices = {0, 1, 2};
+    mesh.submeshes.push_back({"Mirrored", 0, 3, 0});
+    model->meshes.push_back(mesh);
+    model->rootNode.meshIndices = {0};
+
+    SnapshotCamera camera;
+    SceneSnapshotBuilder builder(camera);
+    builder.addModel(model, 1, "Mirrored tangent", glm::scale(glm::mat4(1), glm::vec3(-2, 3, 1)));
+    const auto triangles = pathtracer::buildWorldTriangles(builder.finish());
+    require(triangles.size() == 1, "mirrored tangent fixture should produce one triangle");
+    requireNear(triangles[0].tangents[0].x, -1.0f, "tangent should follow object transform");
+    requireNear(triangles[0].tangents[0].w, -1.0f, "mirrored transform should flip handedness");
+}
+
 } // namespace
 
 int main() {
@@ -232,7 +306,9 @@ int main() {
         testBoundsIntersection();
         testTriangleIntersection();
         testMedianBvh();
+        testBinnedSah();
         testSceneSnapshotInstancing();
+        testSnapshotTangentTransform();
         std::cout << "Path-tracing foundation tests passed\n";
         return 0;
     } catch (const std::exception& error) {

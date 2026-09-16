@@ -4,6 +4,8 @@
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
+#include <glm/common.hpp>
+#include <glm/vector_relational.hpp>
 #include <zlib.h>
 namespace pathtracer {
 namespace {
@@ -74,35 +76,15 @@ bool writePng(const std::filesystem::path &path, int width, int height,
     return true;
 }
 
-} // namespace
-void writeReferenceImage(const RenderImage &image, const std::filesystem::path &stem) {
-    if (!image.width || !image.height || !image.completedSamples ||
-        image.sum.size() != static_cast<std::size_t>(image.width) * image.height)
-        throw std::invalid_argument("Cannot export empty/inconsistent accumulation");
-    auto pixels = image.linearPixels();
-    std::vector<std::uint8_t> rgba(pixels.size() * 4);
-    for (std::size_t i = 0; i < pixels.size(); ++i) {
-        for (int c = 0; c < 3; ++c) {
-            const float linear = pixels[i][c];
-            if (!std::isfinite(linear) || linear < 0)
-                throw std::invalid_argument("Invalid linear radiance");
-            const float mapped = linear / (1 + linear); // Reinhard, exposure 1
-            const float srgb =
-                mapped <= 0.0031308f ? 12.92f * mapped : 1.055f * std::pow(mapped, 1.0f / 2.4f) - 0.055f;
-            const auto flipped = (image.height - 1 - i / image.width) * image.width + i % image.width;
-            rgba[flipped * 4 + c] =
-                static_cast<std::uint8_t>(std::lround(std::clamp(srgb, 0.0f, 1.0f) * 255));
-            rgba[flipped * 4 + 3] = 255;
-        }
-    }
-    std::string error;
-    if (!writePng(stem.string() + ".png", static_cast<int>(image.width), static_cast<int>(image.height), rgba,
-                  error))
-        throw std::runtime_error(error);
-    // Radiance RGBE, linear RGB. Legacy flat scanlines are valid for every width.
-    std::ofstream hdr(stem.string() + ".hdr", std::ios::binary);
-    hdr << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " << image.height << " +X " << image.width << "\n";
+void writeHdr(const std::filesystem::path &path, std::uint32_t width, std::uint32_t height,
+              const std::vector<glm::vec3> &pixels) {
+    std::ofstream hdr(path, std::ios::binary);
+    hdr << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y " << height << " +X " << width << "\n";
     for (const auto &p : pixels) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)
+            || glm::any(glm::lessThan(p, glm::vec3(0.0f)))) {
+            throw std::invalid_argument("Invalid linear AOV value");
+        }
         std::array<unsigned char, 4> rgbe{};
         const float peak = std::max({p.x, p.y, p.z});
         if (peak > 1e-32f) {
@@ -117,6 +99,113 @@ void writeReferenceImage(const RenderImage &image, const std::filesystem::path &
         hdr.write(reinterpret_cast<const char *>(rgbe.data()), 4);
     }
     if (!hdr)
-        throw std::runtime_error("Cannot write HDR output");
+        throw std::runtime_error("Cannot write HDR output: " + path.string());
+}
+
+void writeImagePair(const std::filesystem::path &stem, std::uint32_t width, std::uint32_t height,
+                    const std::vector<glm::vec3> &hdrPixels,
+                    const std::vector<glm::vec3> &displayLinearPixels) {
+    const std::size_t pixelCount = static_cast<std::size_t>(width) * height;
+    if (!width || !height || hdrPixels.size() != pixelCount || displayLinearPixels.size() != pixelCount)
+        throw std::invalid_argument("Cannot export inconsistent image");
+    std::vector<std::uint8_t> rgba(pixelCount * 4U);
+    for (std::size_t index = 0; index < pixelCount; ++index) {
+        for (int channel = 0; channel < 3; ++channel) {
+            const float linear = displayLinearPixels[index][channel];
+            if (!std::isfinite(linear) || linear < 0.0f)
+                throw std::invalid_argument("Invalid display AOV value");
+            const float clamped = std::clamp(linear, 0.0f, 1.0f);
+            const float srgb = clamped <= 0.0031308f
+                ? 12.92f * clamped
+                : 1.055f * std::pow(clamped, 1.0f / 2.4f) - 0.055f;
+            const auto flipped = (height - 1U - index / width) * width + index % width;
+            rgba[flipped * 4U + static_cast<std::size_t>(channel)] =
+                static_cast<std::uint8_t>(std::lround(srgb * 255.0f));
+            rgba[flipped * 4U + 3U] = 255U;
+        }
+    }
+    std::string error;
+    if (!writePng(stem.string() + ".png", static_cast<int>(width), static_cast<int>(height), rgba, error))
+        throw std::runtime_error(error);
+    writeHdr(stem.string() + ".hdr", width, height, hdrPixels);
+}
+
+std::vector<glm::vec3> scalarRgb(const std::vector<float> &values) {
+    std::vector<glm::vec3> pixels;
+    pixels.reserve(values.size());
+    for (const float value : values)
+        pixels.emplace_back(value);
+    return pixels;
+}
+
+} // namespace
+void writeReferenceImage(const RenderImage &image, const std::filesystem::path &stem) {
+    if (!image.width || !image.height || !image.completedSamples ||
+        image.sum.size() != static_cast<std::size_t>(image.width) * image.height)
+        throw std::invalid_argument("Cannot export empty/inconsistent accumulation");
+    const auto pixels = image.linearPixels();
+    auto display = pixels;
+    for (auto &pixel : display)
+        pixel = pixel / (glm::vec3(1.0f) + pixel); // Reinhard, exposure 1.
+    writeImagePair(stem, image.width, image.height, pixels, display);
+}
+
+void writeReferenceAovs(const RenderImage &image, const std::filesystem::path &stem) {
+    const std::size_t pixelCount = static_cast<std::size_t>(image.width) * image.height;
+    if (!image.width || !image.height || !image.completedSamples || image.sum.size() != pixelCount
+        || image.albedoSum.size() != pixelCount || image.normalSum.size() != pixelCount
+        || image.depthSum.size() != pixelCount || image.primaryHitCount.size() != pixelCount
+        || image.directSum.size() != pixelCount || image.indirectSum.size() != pixelCount
+        || image.luminanceSum.size() != pixelCount || image.luminanceSquaredSum.size() != pixelCount) {
+        throw std::invalid_argument("Cannot export empty/inconsistent AOV accumulation");
+    }
+
+    const auto albedo = image.albedoPixels();
+    writeImagePair(stem.string() + "-albedo", image.width, image.height, albedo, albedo);
+
+    auto normal = image.normalPixels();
+    for (std::size_t index = 0; index < normal.size(); ++index) {
+        normal[index] = image.primaryHitCount[index]
+            ? glm::clamp(normal[index] * 0.5f + 0.5f, glm::vec3(0.0f), glm::vec3(1.0f))
+            : glm::vec3(0.0f);
+    }
+    writeImagePair(stem.string() + "-normal", image.width, image.height, normal, normal);
+
+    const auto depthValues = image.depthPixels();
+    const auto depth = scalarRgb(depthValues);
+    auto displayDepth = depth;
+    for (auto &pixel : displayDepth)
+        pixel = pixel / (glm::vec3(1.0f) + pixel);
+    writeImagePair(stem.string() + "-depth", image.width, image.height, depth, displayDepth);
+
+    const auto direct = image.directPixels();
+    auto displayDirect = direct;
+    for (auto &pixel : displayDirect)
+        pixel = pixel / (glm::vec3(1.0f) + pixel);
+    writeImagePair(stem.string() + "-direct", image.width, image.height, direct, displayDirect);
+
+    const auto indirect = image.indirectPixels();
+    auto displayIndirect = indirect;
+    for (auto &pixel : displayIndirect)
+        pixel = pixel / (glm::vec3(1.0f) + pixel);
+    writeImagePair(stem.string() + "-indirect", image.width, image.height, indirect, displayIndirect);
+
+    const auto sampleValues = image.sampleCountPixels();
+    const auto sampleCount = scalarRgb(sampleValues);
+    auto displaySampleCount = sampleCount;
+    for (auto &pixel : displaySampleCount)
+        pixel = pixel / (glm::vec3(1.0f) + pixel);
+    writeImagePair(stem.string() + "-sample-count", image.width, image.height,
+                   sampleCount, displaySampleCount);
+
+    const auto varianceValues = image.variancePixels();
+    const auto variance = scalarRgb(varianceValues);
+    auto displayVariance = variance;
+    for (auto &pixel : displayVariance) {
+        pixel = glm::sqrt(pixel);
+        pixel = pixel / (glm::vec3(1.0f) + pixel);
+    }
+    writeImagePair(stem.string() + "-variance", image.width, image.height,
+                   variance, displayVariance);
 }
 } // namespace pathtracer

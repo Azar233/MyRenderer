@@ -58,6 +58,11 @@ enum class RenderPath {
     Deferred = 1
 };
 
+enum class ShadingMode {
+    PhysicallyBased = 0,
+    Stylized = 1
+};
+
 enum class GBufferDebugView {
     Final = 0,
     Albedo = 1,
@@ -99,6 +104,7 @@ struct RendererSettings {
     float shininess{48.0f};
     int msaaSamples{4};
     RenderPath renderPath{RenderPath::Forward};
+    ShadingMode shadingMode{ShadingMode::PhysicallyBased};
     GBufferDebugView gBufferDebugView{GBufferDebugView::Final};
     std::vector<LocalLight> localLights;
     bool wireframe{false};
@@ -107,6 +113,20 @@ struct RendererSettings {
     bool showGrid{true};
     bool showAxes{true};
     bool pbrEnabled{true};
+    int stylizedBandCount{3};
+    float stylizedBandSoftness{0.04f};
+    float stylizedSpecularSize{0.18f};
+    float stylizedSpecularSoftness{0.03f};
+    float stylizedRimWidth{0.32f};
+    float stylizedRimSoftness{0.08f};
+    float stylizedRimIntensity{0.65f};
+    glm::vec3 stylizedShadowTint{0.16f, 0.22f, 0.38f};
+    glm::vec3 stylizedRimColor{0.62f, 0.82f, 1.0f};
+    bool stylizedOutlineEnabled{true};
+    float stylizedOutlineWidth{1.5f};
+    float stylizedOutlineDepthThreshold{0.025f};
+    float stylizedOutlineNormalThreshold{0.25f};
+    glm::vec3 stylizedOutlineColor{0.025f, 0.035f, 0.055f};
     bool iblEnabled{true};
     bool shadowsEnabled{true};
     bool coloredTransmissionShadowsEnabled{true};

@@ -54,6 +54,10 @@ int main() {
         require(scene.destroyEntity(root), "entity deletion should succeed");
         require(scene.find(child)->parent == invalidSceneEntityId, "children should be reparented to root");
 
+        scene.clear();
+        require(scene.createEntityWithId(42U, "Restored") == 42U, "saved entity ID should be restorable");
+        require(scene.createEntity("After restore") == 43U, "new IDs should continue after restored IDs");
+
         std::cout << "Scene tests passed\n";
         return 0;
     } catch (const std::exception& error) {

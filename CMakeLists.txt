@@ -107,21 +107,47 @@ target_link_libraries(imgui_backend PUBLIC glfw glad_gl_core_33)
 
 add_library(MyRendererPathTracing STATIC
     src/pathtracer/Bvh.cpp
+    src/pathtracer/InstancedBvh.cpp
     src/pathtracer/RayGeometry.cpp
     src/pathtracer/SceneSnapshot.cpp
     src/pathtracer/PbrBsdf.cpp
+    src/pathtracer/MaterialBsdf.cpp
+    src/pathtracer/TileScheduler.cpp
+    src/pathtracer/TextureSampling.cpp
+    src/pathtracer/EnvironmentSampling.cpp
+    src/pathtracer/LightSampling.cpp
     src/pathtracer/ProgressiveRenderer.cpp
     src/pathtracer/AcceptanceScene.cpp
     src/pathtracer/ImageOutput.cpp
+    src/pathtracer/ReferenceComparison.cpp
 )
 target_include_directories(MyRendererPathTracing PUBLIC src)
 find_package(Threads REQUIRED)
-target_link_libraries(MyRendererPathTracing PUBLIC glm::glm Threads::Threads PRIVATE zlibstatic)
-target_include_directories(MyRendererPathTracing PRIVATE ${assimp_SOURCE_DIR}/contrib/zlib ${assimp_BINARY_DIR}/contrib/zlib)
+target_link_libraries(MyRendererPathTracing PUBLIC glm::glm Threads::Threads PRIVATE tinyexr zlibstatic)
+target_include_directories(MyRendererPathTracing PRIVATE
+    ${assimp_SOURCE_DIR}/contrib/stb
+    ${assimp_SOURCE_DIR}/contrib/zlib
+    ${assimp_BINARY_DIR}/contrib/zlib
+    ${tinyexr_SOURCE_DIR}
+)
 add_executable(MyRendererReferenceRender tools/ReferenceRender.cpp)
 target_link_libraries(MyRendererReferenceRender PRIVATE MyRendererPathTracing)
+add_executable(MyRendererInstancingBenchmark tools/InstancingBenchmark.cpp)
+target_link_libraries(MyRendererInstancingBenchmark PRIVATE MyRendererPathTracing)
+add_executable(MyRendererAdaptiveSamplingBenchmark tools/AdaptiveSamplingBenchmark.cpp)
+target_link_libraries(MyRendererAdaptiveSamplingBenchmark PRIVATE MyRendererPathTracing)
+add_custom_target(path-tracing-instancing-benchmark
+    COMMAND MyRendererInstancingBenchmark
+    DEPENDS MyRendererInstancingBenchmark
+    COMMENT "Comparing world-space BVH with shared-geometry BLAS/TLAS"
+)
+add_custom_target(path-tracing-adaptive-benchmark
+    COMMAND MyRendererAdaptiveSamplingBenchmark
+    DEPENDS MyRendererAdaptiveSamplingBenchmark
+    COMMENT "Measuring variance-guided adaptive sampling against uniform SPP"
+)
 add_custom_target(path-tracing-acceptance
-    COMMAND MyRendererReferenceRender ${CMAKE_CURRENT_BINARY_DIR}/path-tracing-acceptance/pbr
+    COMMAND MyRendererReferenceRender ${CMAKE_CURRENT_BINARY_DIR}/path-tracing-acceptance/volume-glass
     DEPENDS MyRendererReferenceRender
 )
 if(MSVC)
@@ -163,6 +189,7 @@ add_executable(MyRenderer
     src/render/SpectralBeamRenderer.cpp
     src/render/Texture2D.cpp
     src/scene/Scene.cpp
+    src/scene/SceneDocument.cpp
 )
 
 if(WIN32)
@@ -199,6 +226,17 @@ target_link_libraries(MyRenderer PRIVATE
     tinyexr
     zlibstatic
     MyRendererPathTracing
+)
+
+add_custom_target(path-tracing-raster-comparison
+    COMMAND ${CMAKE_COMMAND}
+            -DRENDERER=$<TARGET_FILE:MyRenderer>
+            -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/ReferenceComparisonAcceptance.cmake
+    DEPENDS MyRenderer
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Capturing the three fixed-camera raster/path-traced/difference acceptance suites"
 )
 
 if(MSVC)
@@ -269,6 +307,25 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME scene-graph COMMAND MyRendererSceneGraphTests)
 
+    add_executable(MyRendererSceneDocumentTests
+        tests/SceneDocumentTests.cpp
+        src/scene/SceneDocument.cpp
+    )
+    target_include_directories(MyRendererSceneDocumentTests PRIVATE
+        src
+        ${assimp_SOURCE_DIR}/contrib/rapidjson/include
+    )
+    target_compile_definitions(MyRendererSceneDocumentTests PRIVATE
+        MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    target_link_libraries(MyRendererSceneDocumentTests PRIVATE glm::glm glad_gl_core_33)
+    if(MSVC)
+        target_compile_options(MyRendererSceneDocumentTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererSceneDocumentTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME scene-document-repeat-load COMMAND MyRendererSceneDocumentTests)
+
     add_executable(MyRendererPathTracingTests tests/PathTracingFoundationTests.cpp)
     target_link_libraries(MyRendererPathTracingTests PRIVATE MyRendererPathTracing)
     if(MSVC)
@@ -284,10 +341,10 @@ if(BUILD_TESTING)
     set_tests_properties(path-tracing-progressive PROPERTIES TIMEOUT 30)
     add_custom_target(path-tracing-regression
         COMMAND MyRendererProgressiveTests
-            ${CMAKE_CURRENT_SOURCE_DIR}/docs/reference-images/sr-p1c-pbr
-            ${CMAKE_CURRENT_BINARY_DIR}/path-tracing-acceptance/pbr
+            ${CMAKE_CURRENT_SOURCE_DIR}/docs/reference-images/sr-p1g-volume-glass
+            ${CMAKE_CURRENT_BINARY_DIR}/path-tracing-acceptance/volume-glass
         DEPENDS path-tracing-acceptance MyRendererProgressiveTests
-        COMMENT "Comparing decoded linear HDR and PNG against the SR-P1C PBR baseline"
+        COMMENT "Comparing Beauty and seven AOV HDR/PNG outputs against the fixed SAH volume-glass baseline"
     )
 
     add_executable(MyRendererShaderHotReloadTests
@@ -333,6 +390,18 @@ if(BUILD_TESTING)
     else()
         target_compile_options(MyRendererImageComparison PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+
+    add_custom_target(stylized-acceptance
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/stylized-acceptance
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/StylizedAcceptance.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Capturing SR-P2A/B PBR/Toon, outline, resolution, and transmission-boundary comparisons"
+    )
 
     add_custom_target(prism5-visual-regression
         COMMAND ${CMAKE_COMMAND}

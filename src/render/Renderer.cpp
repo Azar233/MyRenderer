@@ -451,6 +451,24 @@ void Renderer::render(
             localLightCount
         );
     };
+    const auto bindStylizedSettings = [&](Shader& targetShader) {
+        targetShader.setBool(
+            "uStylizedEnabled", settings.shadingMode == ShadingMode::Stylized
+        );
+        targetShader.setInt(
+            "uStylizedBandCount", std::clamp(settings.stylizedBandCount, 2, 8)
+        );
+        targetShader.setFloat("uStylizedBandSoftness", settings.stylizedBandSoftness);
+        targetShader.setFloat("uStylizedSpecularSize", settings.stylizedSpecularSize);
+        targetShader.setFloat(
+            "uStylizedSpecularSoftness", settings.stylizedSpecularSoftness
+        );
+        targetShader.setFloat("uStylizedRimWidth", settings.stylizedRimWidth);
+        targetShader.setFloat("uStylizedRimSoftness", settings.stylizedRimSoftness);
+        targetShader.setFloat("uStylizedRimIntensity", settings.stylizedRimIntensity);
+        targetShader.setVec3("uStylizedShadowTint", settings.stylizedShadowTint);
+        targetShader.setVec3("uStylizedRimColor", settings.stylizedRimColor);
+    };
 
     const auto bindSceneShader = [&] {
         shader_->use();
@@ -466,6 +484,7 @@ void Renderer::render(
         shader_->setFloat("uShininess", settings.shininess);
         shader_->setBool("uNormalMappingEnabled", settings.normalMapping);
         shader_->setBool("uPbrEnabled", settings.pbrEnabled);
+        bindStylizedSettings(*shader_);
         shader_->setBool("uIblEnabled", settings.iblEnabled);
         shader_->setBool("uShadowsEnabled", settings.shadowsEnabled);
         shader_->setBool(
@@ -893,6 +912,7 @@ void Renderer::render(
                 static_cast<float>(environmentMap_->maximumMipLevel())
             );
             deferredLightingShader_->setBool("uPbrEnabled", settings.pbrEnabled);
+            bindStylizedSettings(*deferredLightingShader_);
             deferredLightingShader_->setBool("uIblEnabled", settings.iblEnabled);
             deferredLightingShader_->setBool("uShadowsEnabled", settings.shadowsEnabled);
             deferredLightingShader_->setBool(
@@ -1173,6 +1193,16 @@ void Renderer::render(
         postSettings.temporalHistoryWeight = settings.temporalHistoryWeight;
         postSettings.depthTexture = renderTarget_->sceneDepthTexture();
         postSettings.objectMotionTexture = deferredActive ? gBuffer_->motionTexture() : 0U;
+        postSettings.outline = settings.shadingMode == ShadingMode::Stylized
+            && settings.stylizedOutlineEnabled
+            && !gBufferDebugActive;
+        postSettings.outlineNormalAvailable = deferredActive;
+        postSettings.outlineWidth = settings.stylizedOutlineWidth;
+        postSettings.outlineDepthThreshold = settings.stylizedOutlineDepthThreshold;
+        postSettings.outlineNormalThreshold = settings.stylizedOutlineNormalThreshold;
+        postSettings.outlineColor = settings.stylizedOutlineColor;
+        postSettings.outlineNormalTexture = deferredActive ? gBuffer_->normalTexture() : 0U;
+        postSettings.inverseProjection = glm::inverse(projection);
         postSettings.inverseCurrentViewProjection = glm::inverse(currentViewProjection);
         postSettings.previousViewProjection = previousViewProjectionValid_
             ? previousViewProjection_

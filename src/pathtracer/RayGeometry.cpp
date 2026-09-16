@@ -84,6 +84,16 @@ Bounds3 Triangle::bounds() const {
     result.expand(positions[0]);
     result.expand(positions[1]);
     result.expand(positions[2]);
+    if (result.valid()) {
+        const float scale = std::max({
+            1.0f,
+            std::abs(result.minimum.x), std::abs(result.minimum.y), std::abs(result.minimum.z),
+            std::abs(result.maximum.x), std::abs(result.maximum.y), std::abs(result.maximum.z)
+        });
+        const glm::vec3 padding(1.0e-5f * scale);
+        result.minimum -= padding;
+        result.maximum += padding;
+    }
     return result;
 }
 
@@ -145,6 +155,9 @@ bool intersectTriangle(
     interaction.texCoord = barycentricX * triangle.texCoords[0]
         + barycentricY * triangle.texCoords[1]
         + barycentricZ * triangle.texCoords[2];
+    interaction.tangent = barycentricX * triangle.tangents[0]
+        + barycentricY * triangle.tangents[1]
+        + barycentricZ * triangle.tangents[2];
     interaction.tint = triangle.tint;
     interaction.primitiveIndex = triangle.primitiveIndex;
     interaction.instanceIndex = triangle.instanceIndex;

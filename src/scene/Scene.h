@@ -28,6 +28,7 @@ struct SceneEntity {
     std::string name{"Entity"};
     SceneEntityId parent{invalidSceneEntityId};
     const GpuModel* model{nullptr};
+    std::string modelResource;
     SceneTransform transform;
     glm::mat4 worldTransform{1.0f};
     glm::mat4 previousWorldTransform{1.0f};
@@ -42,7 +43,17 @@ struct SceneEntity {
 
 class Scene {
 public:
-    SceneEntityId createEntity(std::string name, const GpuModel* model = nullptr);
+    SceneEntityId createEntity(
+        std::string name,
+        const GpuModel* model = nullptr,
+        std::string modelResource = {}
+    );
+    SceneEntityId createEntityWithId(
+        SceneEntityId id,
+        std::string name,
+        const GpuModel* model = nullptr,
+        std::string modelResource = {}
+    );
     SceneEntityId duplicateEntity(SceneEntityId source);
     bool destroyEntity(SceneEntityId id);
     bool setParent(SceneEntityId child, SceneEntityId parent);

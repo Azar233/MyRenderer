@@ -66,6 +66,26 @@ void Camera::setOrbitPose(
     setFieldOfView(fieldOfViewDegrees);
 }
 
+CameraOrbitState Camera::orbitState() const {
+    return CameraOrbitState{
+        target_,
+        glm::degrees(yawRadians_),
+        glm::degrees(pitchRadians_),
+        distance_,
+        fieldOfViewDegrees_
+    };
+}
+
+void Camera::setOrbitState(const CameraOrbitState& state) {
+    setOrbitPose(
+        state.target,
+        state.yawDegrees,
+        state.pitchDegrees,
+        state.distance,
+        state.fieldOfViewDegrees
+    );
+}
+
 void Camera::setFieldOfView(float degrees) {
     fieldOfViewDegrees_ = std::clamp(degrees, 15.0f, 90.0f);
 }

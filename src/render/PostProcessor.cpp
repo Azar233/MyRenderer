@@ -196,18 +196,47 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
     compositeShader_->setInt("uScene", 0);
     compositeShader_->setInt("uBloom", 1);
     compositeShader_->setInt("uMotion", 2);
+    compositeShader_->setInt("uDepth", 3);
+    compositeShader_->setInt("uEncodedNormal", 4);
     compositeShader_->setInt("uTemporalDebugView", settings.temporalDebugView);
     compositeShader_->setBool("uToneMapping", settings.toneMapping);
     compositeShader_->setBool("uBloomEnabled", settings.bloom);
     compositeShader_->setBool("uEncodeSrgb", settings.encodeSrgb);
     compositeShader_->setFloat("uExposure", settings.exposure);
     compositeShader_->setFloat("uBloomIntensity", settings.bloomIntensity);
+    compositeShader_->setBool("uOutlineEnabled", settings.outline);
+    compositeShader_->setBool(
+        "uOutlineNormalAvailable", settings.outlineNormalAvailable
+    );
+    compositeShader_->setFloat(
+        "uOutlineWidth", std::clamp(settings.outlineWidth, 0.5f, 6.0f)
+    );
+    compositeShader_->setFloat(
+        "uOutlineDepthThreshold",
+        std::clamp(settings.outlineDepthThreshold, 0.001f, 0.25f)
+    );
+    compositeShader_->setFloat(
+        "uOutlineNormalThreshold",
+        std::clamp(settings.outlineNormalThreshold, 0.01f, 1.0f)
+    );
+    compositeShader_->setVec3("uOutlineColor", settings.outlineColor);
+    compositeShader_->setFloat(
+        "uInverseWidth", 1.0f / static_cast<float>(target.width())
+    );
+    compositeShader_->setFloat(
+        "uInverseHeight", 1.0f / static_cast<float>(target.height())
+    );
+    compositeShader_->setMat4("uInverseProjection", settings.inverseProjection);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, sceneTexture);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, textures_[bloomTextureIndex]);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, motionTexture);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, settings.depthTexture);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, settings.outlineNormalTexture);
     drawFullscreen();
     target.unbind();
 }

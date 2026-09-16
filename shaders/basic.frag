@@ -36,6 +36,16 @@ uniform bool uTwoInterfaceRefractionEnabled;
 uniform bool uVolumeGlassOverrideEnabled;
 uniform bool uNormalMappingEnabled;
 uniform bool uPbrEnabled;
+uniform bool uStylizedEnabled;
+uniform int uStylizedBandCount;
+uniform float uStylizedBandSoftness;
+uniform float uStylizedSpecularSize;
+uniform float uStylizedSpecularSoftness;
+uniform float uStylizedRimWidth;
+uniform float uStylizedRimSoftness;
+uniform float uStylizedRimIntensity;
+uniform vec3 uStylizedShadowTint;
+uniform vec3 uStylizedRimColor;
 uniform bool uIblEnabled;
 uniform bool uShadowsEnabled;
 uniform bool uColoredTransmissionShadowsEnabled;
@@ -100,6 +110,35 @@ float geometrySchlickGGX(float nDotV, float roughness) {
 
 vec3 fresnelSchlick(float cosine, vec3 f0) {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
+}
+
+float stylizedBand(float value) {
+    float levels = float(max(uStylizedBandCount - 1, 1));
+    float scaled = clamp(value, 0.0, 1.0) * levels;
+    if (uStylizedBandSoftness <= 0.0001) {
+        return floor(scaled + 0.5) / levels;
+    }
+    float lower = floor(scaled);
+    float blend = smoothstep(
+        0.5 - clamp(uStylizedBandSoftness, 0.0, 0.49),
+        0.5 + clamp(uStylizedBandSoftness, 0.0, 0.49),
+        fract(scaled)
+    );
+    return mix(lower, min(lower + 1.0, levels), blend) / levels;
+}
+
+float stylizedHighlight(float nDotH, float nDotL) {
+    float threshold = 1.0 - clamp(uStylizedSpecularSize, 0.0, 0.98);
+    float softness = max(uStylizedSpecularSoftness, 0.0001);
+    return smoothstep(threshold - softness, threshold + softness, nDotH)
+        * step(0.0001, nDotL);
+}
+
+float stylizedRim(float nDotV) {
+    float width = clamp(uStylizedRimWidth, 0.0, 0.98);
+    float softness = max(uStylizedRimSoftness, 0.0001);
+    float rim = 1.0 - clamp(nDotV, 0.0, 1.0);
+    return smoothstep(1.0 - width - softness, 1.0 - width + softness, rim);
 }
 
 vec3 localLightRadiance(int index, vec3 worldPosition, out vec3 lightDirection) {
@@ -445,6 +484,45 @@ void main() {
     }
     if (uGlassDebugView == 12) {
         fragmentColor = vec4(visibility, 1.0);
+        return;
+    }
+
+    if (uStylizedEnabled && uTransmissionFactor <= 0.0001) {
+        float diffuseBand = stylizedBand(nDotL);
+        vec3 shadowColor = mix(
+            max(uStylizedShadowTint, vec3(0.0)),
+            vec3(1.0),
+            clamp(visibility, vec3(0.0), vec3(1.0))
+        );
+        vec3 ambient = albedo * uAmbientStrength;
+        if (uIblEnabled) {
+            ambient += texture(uIrradianceMap, normal).rgb * albedo
+                * uEnvironmentIntensity * 0.18;
+        }
+        vec3 specularColor = mix(vec3(1.0), albedo, metallic);
+        vec3 color = ambient
+            + albedo * uDiffuseStrength * diffuseBand * shadowColor
+            + specularColor * uSpecularStrength
+                * stylizedHighlight(max(dot(normal, halfDirection), 0.0), nDotL)
+                * shadowColor;
+        for (int index = 0; index < uLocalLightCount; ++index) {
+            vec3 localDirection;
+            vec3 radiance = localLightRadiance(index, vWorldPosition, localDirection);
+            float localNDotL = max(dot(normal, localDirection), 0.0);
+            vec3 localHalf = normalize(localDirection + viewDirection);
+            color += radiance * (
+                albedo * uDiffuseStrength * stylizedBand(localNDotL)
+                + specularColor * uSpecularStrength * stylizedHighlight(
+                    max(dot(normal, localHalf), 0.0), localNDotL
+                )
+            );
+        }
+        float rim = stylizedRim(nDotV)
+            * mix(0.35, 1.0, 1.0 - nDotL)
+            * max(uStylizedRimIntensity, 0.0);
+        color += max(uStylizedRimColor, vec3(0.0)) * rim;
+        color += caustics * albedo;
+        fragmentColor = vec4(color, outputAlpha);
         return;
     }
 

@@ -42,10 +42,14 @@
 #include "io/ObjLoader.h"
 #include "optics/PrismDemo.h"
 #include "optics/PrismOptics.h"
+#include "pathtracer/ProgressiveRenderer.h"
+#include "pathtracer/ReferenceComparison.h"
+#include "pathtracer/SceneSnapshotCapture.h"
 #include "render/GpuModel.h"
 #include "render/Shader.h"
 #include "render/OpenGlDebug.h"
 #include "render/Renderer.h"
+#include "scene/SceneDocument.h"
 
 namespace {
 
@@ -425,8 +429,14 @@ int Application::run(const std::filesystem::path& initialModel) {
         activateLightStressPreset(false);
     }
 
-    std::filesystem::path modelToLoad = initialModel;
-    if (modelToLoad.empty()) {
+    const bool initialSceneRequested = !initialModel.empty()
+        && lowercase(initialModel.extension().string()) == myRendererSceneExtension;
+    bool initialSceneLoaded = false;
+    if (initialSceneRequested) {
+        initialSceneLoaded = openScene(initialModel);
+    }
+    std::filesystem::path modelToLoad = initialSceneRequested ? std::filesystem::path{} : initialModel;
+    if (modelToLoad.empty() && !initialSceneRequested) {
         const auto defaultModel = animationDemoEnabled_
             ? sourceRoot_ / "assets" / "models" / "skinning_test.gltf"
             : (prismDemoEnabled_
@@ -440,10 +450,72 @@ int Application::run(const std::filesystem::path& initialModel) {
             ? defaultModel
             : (availableModels_.empty() ? std::filesystem::path{} : availableModels_.front());
     }
-    if (!modelToLoad.empty()) {
+    if (initialSceneLoaded) {
+        // openScene already populated the status and the complete scene session.
+    } else if (!modelToLoad.empty()) {
         loadModel(modelToLoad);
-    } else {
+    } else if (!initialSceneRequested) {
         statusMessage_ = "No supported model was found in assets/models";
+    }
+
+    // Apply automation overrides after scene loading so a fixed .myscene can
+    // be captured in both PBR and Stylized modes without duplicating assets or
+    // camera data.
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED")) {
+        rendererSettings_.shadingMode = std::atoi(value) == 0
+            ? ShadingMode::PhysicallyBased
+            : ShadingMode::Stylized;
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_BANDS")) {
+        rendererSettings_.stylizedBandCount = std::clamp(std::atoi(value), 2, 8);
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_OUTLINE")) {
+        rendererSettings_.stylizedOutlineEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_OUTLINE_WIDTH")) {
+        rendererSettings_.stylizedOutlineWidth = std::clamp(
+            std::strtof(value, nullptr), 0.5f, 6.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_RENDER_PATH")) {
+        rendererSettings_.renderPath = std::atoi(value) == 0
+            ? RenderPath::Forward
+            : RenderPath::Deferred;
+    }
+    if (const char* value = std::getenv("MYRENDERER_HIDE_SELECTION_OUTLINE")) {
+        if (std::atoi(value) != 0) selectedSceneEntity_ = invalidSceneEntityId;
+    }
+
+    if (const char* value = std::getenv("MYRENDERER_REFERENCE_COMPARE_DIR")) {
+        referenceComparisonMode_ = true;
+        vsync_ = false;
+        referenceComparisonDirectory_ = std::filesystem::absolute(value).lexically_normal();
+        if (const char* samples = std::getenv("MYRENDERER_REFERENCE_SPP")) {
+            referenceComparisonSamples_ = static_cast<std::uint32_t>(
+                std::clamp(std::atoi(samples), 1, 4096)
+            );
+        }
+        if (const char* depth = std::getenv("MYRENDERER_REFERENCE_MAX_DEPTH")) {
+            referenceComparisonMaxDepth_ = static_cast<std::uint32_t>(
+                std::clamp(std::atoi(depth), 1, 64)
+            );
+        }
+        if (const char* seed = std::getenv("MYRENDERER_REFERENCE_SEED")) {
+            referenceComparisonSeed_ = static_cast<std::uint32_t>(std::strtoul(seed, nullptr, 10));
+        }
+        if (const char* warmup = std::getenv("MYRENDERER_REFERENCE_WARMUP")) {
+            referenceComparisonWarmupFrames_ = std::clamp(std::atoi(warmup), 1, 240);
+        }
+        // Keep display transforms shared but remove raster-only temporal and
+        // screen-space decoration from the algorithm comparison.
+        rendererSettings_.bloom = false;
+        rendererSettings_.temporalAaEnabled = false;
+        rendererSettings_.ssaoEnabled = false;
+        rendererSettings_.showGrid = false;
+        rendererSettings_.showAxes = false;
+        rendererSettings_.gBufferDebugView = GBufferDebugView::Final;
+        rendererSettings_.temporalDebugView = 0;
+        selectedSceneEntity_ = invalidSceneEntityId;
     }
 
     if (const char* screenshotPath = std::getenv("MYRENDERER_SCREENSHOT")) {
@@ -634,8 +706,10 @@ int Application::run(const std::filesystem::path& initialModel) {
         std::cout << "Append scene validation: " << (appendPassed ? "PASS" : "FAIL") << '\n';
     }
     const bool interactionsPassed = !std::getenv("MYRENDERER_EDITOR_INTERACTION_TEST") || editorInteractionRegression();
+    const bool referenceComparisonPassed = !referenceComparisonMode_
+        || (referenceComparisonComplete_ && !referenceComparisonFailed_);
     shutdown();
-    return recoveryPassed && appendPassed && interactionsPassed ? 0 : 2;
+    return recoveryPassed && appendPassed && interactionsPassed && referenceComparisonPassed ? 0 : 2;
 }
 
 void Application::initializeWindow() {
@@ -847,9 +921,40 @@ void Application::drawMainMenu() {
     if (!ImGui::BeginMainMenuBar()) {
         return;
     }
-    if (!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N, false)) newEmptyScene();
+    if (!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl) {
+        if (ImGui::IsKeyPressed(ImGuiKey_N, false)) newEmptyScene();
+        if (ImGui::IsKeyPressed(ImGuiKey_O, false)) openSceneFromDialog();
+        if (ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+            if (ImGui::GetIO().KeyShift) saveSceneAs(); else saveCurrentScene();
+        }
+    }
     if (ImGui::BeginMenu(EditorUi::label("File"))) {
         if (ImGui::MenuItem(EditorUi::label("New empty scene"), "Ctrl+N")) newEmptyScene();
+        ImGui::Separator();
+        if (ImGui::MenuItem(EditorUi::label("Open scene..."), "Ctrl+O", false, !pendingModelImport_.has_value())) {
+            openSceneFromDialog();
+        }
+        const std::filesystem::path recent = recentScenePath();
+        if (ImGui::MenuItem(
+                EditorUi::label("Reopen last scene"),
+                nullptr,
+                false,
+                !recent.empty() && std::filesystem::exists(recent) && !pendingModelImport_.has_value()
+            )) {
+            openScene(recent);
+        }
+        if (ImGui::BeginMenu(EditorUi::label("Open bundled scene"), !availableScenes_.empty())) {
+            for (const auto& path : availableScenes_) {
+                if (ImGui::MenuItem(path.stem().string().c_str())) openScene(path);
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem(EditorUi::label("Save scene"), "Ctrl+S", false, !pendingModelImport_.has_value())) {
+            saveCurrentScene();
+        }
+        if (ImGui::MenuItem(EditorUi::label("Save scene as..."), "Ctrl+Shift+S", false, !pendingModelImport_.has_value())) {
+            saveSceneAs();
+        }
         ImGui::Separator();
         if (ImGui::MenuItem(EditorUi::label("Open model..."), nullptr, false, !pendingModelImport_.has_value())) {
             std::string dialogError;
@@ -872,7 +977,7 @@ void Application::drawMainMenu() {
             "Reset scene to current model",
             nullptr,
             false,
-            !currentModelPath_.empty() && !pendingModelImport_.has_value()
+            currentScenePath_.empty() && !currentModelPath_.empty() && !pendingModelImport_.has_value()
         )) {
             loadModel(currentModelPath_);
         }
@@ -1078,6 +1183,69 @@ void Application::drawInspectorPanel() {
                 ImGui::EndDisabled();
             }
             if (EditorUi::section("PBR & environment", true)) {
+                int shadingMode = static_cast<int>(rendererSettings_.shadingMode);
+                const char* shadingModes[] = {"Physically based", "Stylized / toon"};
+                if (EditorUi::Combo("Shading mode", &shadingMode, shadingModes, 2)) {
+                    rendererSettings_.shadingMode = static_cast<ShadingMode>(shadingMode);
+                }
+                if (rendererSettings_.shadingMode == ShadingMode::Stylized) {
+                    EditorUi::SliderInt(
+                        "Lighting bands", &rendererSettings_.stylizedBandCount, 2, 8
+                    );
+                    EditorUi::SliderFloat(
+                        "Band softness", &rendererSettings_.stylizedBandSoftness,
+                        0.0f, 0.25f, "%.3f"
+                    );
+                    EditorUi::SliderFloat(
+                        "Specular size", &rendererSettings_.stylizedSpecularSize,
+                        0.02f, 0.8f, "%.2f"
+                    );
+                    EditorUi::SliderFloat(
+                        "Specular softness", &rendererSettings_.stylizedSpecularSoftness,
+                        0.0f, 0.2f, "%.3f"
+                    );
+                    EditorUi::SliderFloat(
+                        "Rim width", &rendererSettings_.stylizedRimWidth,
+                        0.02f, 0.9f, "%.2f"
+                    );
+                    EditorUi::SliderFloat(
+                        "Rim softness", &rendererSettings_.stylizedRimSoftness,
+                        0.0f, 0.3f, "%.3f"
+                    );
+                    EditorUi::SliderFloat(
+                        "Rim intensity", &rendererSettings_.stylizedRimIntensity,
+                        0.0f, 3.0f, "%.2f"
+                    );
+                    EditorUi::ColorEdit3(
+                        "Shadow tint", &rendererSettings_.stylizedShadowTint.x
+                    );
+                    EditorUi::ColorEdit3(
+                        "Rim color", &rendererSettings_.stylizedRimColor.x
+                    );
+                    EditorUi::Checkbox(
+                        "Screen-space outline",
+                        &rendererSettings_.stylizedOutlineEnabled
+                    );
+                    if (rendererSettings_.stylizedOutlineEnabled) {
+                        EditorUi::SliderFloat(
+                            "Outline width", &rendererSettings_.stylizedOutlineWidth,
+                            0.5f, 6.0f, "%.1f px"
+                        );
+                        EditorUi::SliderFloat(
+                            "Outline depth threshold",
+                            &rendererSettings_.stylizedOutlineDepthThreshold,
+                            0.001f, 0.12f, "%.3f"
+                        );
+                        EditorUi::SliderFloat(
+                            "Outline normal threshold",
+                            &rendererSettings_.stylizedOutlineNormalThreshold,
+                            0.02f, 0.8f, "%.2f"
+                        );
+                        EditorUi::ColorEdit3(
+                            "Outline color", &rendererSettings_.stylizedOutlineColor.x
+                        );
+                    }
+                }
                 int renderPath = static_cast<int>(rendererSettings_.renderPath);
                 const char* renderPaths[] = {"Forward", "Deferred (hybrid)"};
                 if (EditorUi::Combo("Opaque render path", &renderPath, renderPaths, 2)) {
@@ -1791,8 +1959,10 @@ void Application::drawViewportPanel() {
     if (!lightStressDemoEnabled_ && !instanceStressDemoEnabled_) {
         renderItems = scene_.buildRenderItems();
     }
-    rendererSettings_.causticsReceiverPlaneY =
-        modelPosition_.y + groundOffset_ * modelScale_ + 0.002f;
+    if (!loadedSceneDocument_) {
+        rendererSettings_.causticsReceiverPlaneY =
+            modelPosition_.y + groundOffset_ * modelScale_ + 0.002f;
+    }
     rendererSettings_.causticsAnimationPhase = rendererSettings_.causticsAnimated
         ? static_cast<float>(std::fmod(glfwGetTime() * 0.16, 1.0))
         : 0.0f;
@@ -1804,7 +1974,15 @@ void Application::drawViewportPanel() {
         }
     }
     renderer_->render(renderItems, camera_, rendererSettings_, width, height);
-    if (!benchmarkMode_ && !prismReelMode_) {
+    if (referenceComparisonMode_ && !referenceComparisonComplete_
+        && !pendingModelImport_.has_value() && !scene_.entities().empty()) {
+        if (referenceComparisonWarmupFrames_ > 0) {
+            --referenceComparisonWarmupFrames_;
+        } else {
+            captureReferenceComparison(width, height);
+        }
+    }
+    if (!benchmarkMode_ && !prismReelMode_ && !referenceComparisonMode_) {
         renderer_->drawSelectionOutline(renderItems, camera_, selectedSceneEntity_, rendererSettings_.cullBackFaces);
     }
 
@@ -1876,6 +2054,66 @@ void Application::drawViewportPanel() {
         drawOrientationGizmo();
     }
     ImGui::End();
+}
+
+void Application::captureReferenceComparison(int width, int height) {
+    referenceComparisonComplete_ = true;
+    try {
+        std::filesystem::create_directories(referenceComparisonDirectory_);
+        const std::filesystem::path rasterPath = referenceComparisonDirectory_ / "raster.png";
+        std::string screenshotError;
+        if (!renderer_->saveScreenshot(rasterPath, screenshotError)) {
+            throw std::runtime_error("Raster capture failed: " + screenshotError);
+        }
+
+        pathtracer::RenderSettings settings;
+        settings.width = static_cast<std::uint32_t>(width);
+        settings.height = static_cast<std::uint32_t>(height);
+        settings.samplesPerPixel = referenceComparisonSamples_;
+        settings.maxDepth = referenceComparisonMaxDepth_;
+        settings.seed = referenceComparisonSeed_;
+        const float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
+        pathtracer::ProgressiveRenderer progressive(
+            pathtracer::captureSceneSnapshot(scene_, camera_, aspectRatio, rendererSettings_),
+            settings
+        );
+        std::cout << "Reference comparison: tracing " << width << 'x' << height
+                  << " at " << referenceComparisonSamples_ << " SPP...\n";
+        while (progressive.renderPass()) {
+        }
+        if (!progressive.complete()) {
+            throw std::runtime_error("Path-traced comparison did not complete");
+        }
+
+        const pathtracer::RenderImage& image = progressive.image();
+        const std::filesystem::path aovStem = referenceComparisonDirectory_ / "aov" / "path-traced";
+        pathtracer::writeReferenceImage(image, aovStem);
+        pathtracer::writeReferenceAovs(image, aovStem);
+        pathtracer::ReferenceComparisonOptions options;
+        options.exposure = rendererSettings_.exposure;
+        options.toneMapping = rendererSettings_.toneMapping;
+        options.targetSamplesPerPixel = settings.samplesPerPixel;
+        options.maxDepth = settings.maxDepth;
+        options.seed = settings.seed;
+        options.sceneName = currentScenePath_.empty()
+            ? currentModelPath_.filename().u8string()
+            : currentScenePath_.filename().u8string();
+        const pathtracer::ReferenceComparisonMetrics metrics = pathtracer::writeReferenceComparison(
+            image, rasterPath, referenceComparisonDirectory_, options
+        );
+        std::cout << std::fixed << std::setprecision(6)
+                  << "Reference comparison complete: MAE=" << metrics.meanAbsoluteError
+                  << ", RMSE=" << metrics.rootMeanSquaredError
+                  << ", changed=" << metrics.changedFraction * 100.0 << "%\n"
+                  << "Artifacts: " << referenceComparisonDirectory_.string() << '\n';
+        statusMessage_ = "Raster/path-traced comparison saved: "
+            + referenceComparisonDirectory_.string();
+    } catch (const std::exception& error) {
+        referenceComparisonFailed_ = true;
+        statusMessage_ = "Reference comparison failed: " + std::string(error.what());
+        std::cerr << statusMessage_ << '\n';
+    }
+    glfwSetWindowShouldClose(window_, GLFW_TRUE);
 }
 
 void Application::drawOrientationGizmo() {
@@ -2002,6 +2240,7 @@ void Application::drawAboutPopup() {
 
 void Application::discoverModels() {
     availableModels_.clear();
+    availableScenes_.clear();
     unsupportedModelCount_ = 0;
     const auto modelDirectory = sourceRoot_ / "assets" / "models";
     if (!std::filesystem::exists(modelDirectory)) {
@@ -2021,6 +2260,16 @@ void Application::discoverModels() {
         }
     }
     std::sort(availableModels_.begin(), availableModels_.end());
+    const auto sceneDirectory = sourceRoot_ / "assets" / "scenes";
+    if (std::filesystem::exists(sceneDirectory)) {
+        for (const auto& entry : std::filesystem::directory_iterator(sceneDirectory)) {
+            if (entry.is_regular_file()
+                && lowercase(entry.path().extension().string()) == myRendererSceneExtension) {
+                availableScenes_.push_back(entry.path());
+            }
+        }
+        std::sort(availableScenes_.begin(), availableScenes_.end());
+    }
 }
 
 bool Application::loadModel(const std::filesystem::path& path, bool append) {
@@ -2146,11 +2395,13 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
         });
     }
 
-    if (append && (model_ || emptySceneSession_)) {
+    if (append && (model_ || emptySceneSession_ || loadedSceneDocument_ || !scene_.entities().empty())) {
         // GPU resources are owned by the scene session, including shared duplicates.
         const auto* gpu = newModel.get();
         importedModels_.push_back(std::move(newModel));
-        selectEntity(scene_.createEntity(path.filename().u8string(), gpu));
+        selectEntity(scene_.createEntity(
+            path.filename().u8string(), gpu, path.generic_u8string()
+        ));
         SceneEntity* entity = scene_.find(selectedSceneEntity_);
         entity->transform.assetTransform =
             glm::scale(glm::mat4(1.0f), glm::vec3(1.4f / maximumExtent))
@@ -2161,6 +2412,8 @@ void Application::finishModelLoad(const std::filesystem::path& path, ModelImport
         return;
     }
     emptySceneSession_ = false;
+    loadedSceneDocument_ = false;
+    currentScenePath_.clear();
     scene_.clear();
     importedModels_.clear();
     model_ = std::move(newModel);

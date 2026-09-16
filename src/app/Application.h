@@ -20,6 +20,7 @@
 #include "render/Camera.h"
 #include "render/Renderer.h"
 #include "scene/Scene.h"
+#include "scene/SceneDocument.h"
 
 struct GLFWwindow;
 class GpuModel;
@@ -56,6 +57,14 @@ private:
     void drawAssetsPanel();
     void drawEditorLayout();
     void newEmptyScene();
+    SceneDocument captureSceneDocument() const;
+    bool saveCurrentScene();
+    bool saveSceneAs();
+    bool saveSceneTo(const std::filesystem::path& path);
+    bool openScene(const std::filesystem::path& path);
+    void openSceneFromDialog();
+    void rememberRecentScene(const std::filesystem::path& path);
+    std::filesystem::path recentScenePath() const;
     void deleteSelectedEntity();
     void selectEntity(SceneEntityId id);
     SceneEntityId pickEntity(const std::vector<RenderItem>& items, int width, int height, int x, int y);
@@ -63,6 +72,7 @@ private:
     bool editorInteractionRegression();
     void drawInspectorPanel();
     void drawViewportPanel();
+    void captureReferenceComparison(int width, int height);
     void drawOrientationGizmo();
     void drawAboutPopup();
     void drawDiagnostics();
@@ -100,6 +110,7 @@ private:
     std::vector<std::unique_ptr<GpuModel>> importedModels_;
     bool resetEditorLayout_{false};
     bool emptySceneSession_{false};
+    bool loadedSceneDocument_{false};
     bool focusObjectTab_{false};
     bool focusRendererTab_{false};
     std::uint64_t sceneGeneration_{0};
@@ -121,13 +132,16 @@ private:
 
     std::filesystem::path sourceRoot_;
     std::filesystem::path currentModelPath_;
+    std::filesystem::path currentScenePath_;
     std::filesystem::path pendingScreenshotPath_;
     std::filesystem::path pendingEditorScreenshotPath_;
     int pendingScreenshotWarmupFrames_{0};
     int pendingEditorScreenshotWarmupFrames_{3};
     std::filesystem::path benchmarkOutputPath_;
     std::filesystem::path prismReelFramesDirectory_;
+    std::filesystem::path referenceComparisonDirectory_;
     std::vector<std::filesystem::path> availableModels_;
+    std::vector<std::filesystem::path> availableScenes_;
     std::array<char, 1024> modelPathBuffer_{};
     std::string statusMessage_{"Ready"};
     std::string gpuDescription_;
@@ -191,6 +205,10 @@ private:
     int prismReelFrameIndex_{0};
     int prismReelFrameCount_{360};
     int prismReelWarmupFrames_{8};
+    int referenceComparisonWarmupFrames_{2};
+    std::uint32_t referenceComparisonSamples_{128U};
+    std::uint32_t referenceComparisonMaxDepth_{8U};
+    std::uint32_t referenceComparisonSeed_{20260915U};
 
     bool showAbout_{false};
     bool showImGuiDemo_{false};
@@ -211,6 +229,9 @@ private:
     bool prismModelVisible_{true};
     bool benchmarkMode_{false};
     bool prismReelMode_{false};
+    bool referenceComparisonMode_{false};
+    bool referenceComparisonComplete_{false};
+    bool referenceComparisonFailed_{false};
     bool temporalMotionDemoEnabled_{false};
     bool objectMotionDemoEnabled_{false};
     int objectMotionDemoFrame_{0};

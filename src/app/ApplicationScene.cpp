@@ -15,7 +15,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <unordered_map>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -24,6 +26,7 @@
 #include "app/FileDialog.h"
 #include "render/GpuModel.h"
 #include "render/Renderer.h"
+#include "scene/SceneDocument.h"
 
 namespace {
 
@@ -206,27 +209,37 @@ void Application::rebuildSceneEntities() {
         const std::string name = currentModelPath_.empty()
             ? "Model"
             : currentModelPath_.filename().string();
-        primaryEntity_ = scene_.createEntity(name, model_.get());
-        comparisonEntity_ = scene_.createEntity("Comparison instance", model_.get());
+        const std::string resource = currentModelPath_.generic_u8string();
+        primaryEntity_ = scene_.createEntity(name, model_.get(), resource);
+        comparisonEntity_ = scene_.createEntity("Comparison instance", model_.get(), resource);
         selectedSceneEntity_ = primaryEntity_;
         if (sceneFoundationDemoEnabled_) {
             for (int index = 0; index < 9; ++index) {
                 foundationDemoEntities_.push_back(scene_.createEntity(
                     "Shared scene instance " + std::to_string(index + 2),
-                    model_.get()
+                    model_.get(),
+                    resource
                 ));
             }
         }
     }
     if (glassBackdropModel_ != nullptr) {
-        backdropEntity_ = scene_.createEntity("Glass checkerboard backdrop", glassBackdropModel_.get());
+        backdropEntity_ = scene_.createEntity(
+            "Glass checkerboard backdrop", glassBackdropModel_.get(), builtinGlassBackdropResource
+        );
     }
     if (groundModel_ != nullptr) {
-        groundEntity_ = scene_.createEntity(EditorUi::label("Ground receiver"), groundModel_.get());
+        groundEntity_ = scene_.createEntity(
+            EditorUi::label("Ground receiver"), groundModel_.get(), builtinGroundResource
+        );
     }
 }
 
 void Application::syncSceneEntities(const glm::mat4& normalization) {
+    if (loadedSceneDocument_) {
+        scene_.updateWorldTransforms();
+        return;
+    }
     if (SceneEntity* primary = scene_.find(primaryEntity_); primary && !editedEntities_.count(primaryEntity_)) {
         primary->model = model_.get();
         primary->transform.translation = modelPosition_;
@@ -367,6 +380,7 @@ void Application::newEmptyScene() {
     primaryEntity_ = comparisonEntity_ = groundEntity_ = backdropEntity_ = invalidSceneEntityId;
     selectEntity(invalidSceneEntityId);
     emptySceneSession_ = true;
+    loadedSceneDocument_ = false;
     prismDemoPreviousState_.reset();
     prismDemoEnabled_ = glassVolumeDemoEnabled_ = glassCausticsDemoEnabled_ = false;
     lightStressDemoEnabled_ = instanceStressDemoEnabled_ = sceneFoundationDemoEnabled_ = false;
@@ -376,6 +390,7 @@ void Application::newEmptyScene() {
     prismCameraLocked_ = false;
     rendererSettings_ = RendererSettings{};
     currentModelPath_.clear();
+    currentScenePath_.clear();
     modelPathBuffer_.fill(0);
     modelDiagnostics_.clear();
     pendingScreenshotPath_.clear();
@@ -389,6 +404,278 @@ void Application::newEmptyScene() {
     statusMessage_ = EditorUi::chinese ? "已新建空场景，可导入多个模型。" : "New empty scene. Import models to begin.";
 }
 
+SceneDocument Application::captureSceneDocument() const {
+    SceneDocument document;
+    document.camera = camera_.orbitState();
+    document.renderer = rendererSettings_;
+    document.playback.animationEnabled = animationEnabled_;
+    document.playback.animationPlaying = animationPlaying_;
+    document.playback.animationTimeSeconds = animationTimeSeconds_;
+    document.playback.animationSpeed = animationSpeed_;
+    document.playback.animationClipIndex = animationClipIndex_;
+    document.playback.prismEnabled = prismDemoEnabled_;
+    document.playback.prismCameraLocked = prismCameraLocked_;
+    document.playback.prismPreset = prismOpticalPreset_;
+    document.playback.prismParameters = prismParameters_;
+    document.entities.reserve(scene_.size());
+    for (const SceneEntity& source : scene_.entities()) {
+        SceneDocumentEntity entity;
+        entity.id = source.id;
+        entity.name = source.name;
+        entity.parent = source.parent;
+        entity.modelResource = source.modelResource;
+        if (entity.modelResource.empty() && source.model == groundModel_.get()) {
+            entity.modelResource = builtinGroundResource;
+        } else if (entity.modelResource.empty() && source.model == glassBackdropModel_.get()) {
+            entity.modelResource = builtinGlassBackdropResource;
+        } else if (entity.modelResource.empty() && source.model == model_.get()) {
+            entity.modelResource = currentModelPath_.generic_u8string();
+        } else if (entity.modelResource.empty() && source.model != nullptr) {
+            const auto matching = std::find_if(
+                scene_.entities().begin(), scene_.entities().end(),
+                [&](const SceneEntity& candidate) {
+                    return candidate.model == source.model && !candidate.modelResource.empty();
+                }
+            );
+            if (matching != scene_.entities().end()) entity.modelResource = matching->modelResource;
+        }
+        entity.transform = source.transform;
+        entity.tint = source.tint;
+        entity.visible = source.visible && source.enabledByPreset;
+        entity.castsShadow = source.castsShadow;
+        entity.instanceCandidate = source.instanceCandidate;
+        document.entities.push_back(std::move(entity));
+    }
+    return document;
+}
+
+bool Application::saveCurrentScene() {
+    return currentScenePath_.empty() ? saveSceneAs() : saveSceneTo(currentScenePath_);
+}
+
+bool Application::saveSceneAs() {
+    std::filesystem::path suggestion = currentScenePath_;
+    if (suggestion.empty()) suggestion = sourceRoot_ / "assets" / "scenes" / "untitled.myscene";
+    std::string dialogError;
+    const auto selected = saveSceneFileDialog(suggestion, dialogError);
+    if (!selected.has_value()) {
+        if (!dialogError.empty()) statusMessage_ = "Save scene failed: " + dialogError;
+        return false;
+    }
+    std::filesystem::path path = *selected;
+    if (path.extension().empty()) path += myRendererSceneExtension;
+    return saveSceneTo(path);
+}
+
+bool Application::saveSceneTo(const std::filesystem::path& path) {
+    if (pendingModelImport_.has_value()) {
+        statusMessage_ = "Wait for the current model import before saving the scene.";
+        return false;
+    }
+    SceneDocument document = captureSceneDocument();
+    for (const SceneDocumentEntity& entity : document.entities) {
+        const SceneEntity* source = scene_.find(entity.id);
+        if (source != nullptr && source->model != nullptr && entity.modelResource.empty()) {
+            statusMessage_ = "Save scene failed: entity '" + entity.name + "' has no persistent model resource.";
+            return false;
+        }
+    }
+    std::error_code pathError;
+    const std::filesystem::path absolute = std::filesystem::absolute(path, pathError).lexically_normal();
+    std::string error;
+    if (pathError || !saveSceneDocument(pathError ? path : absolute, document, error)) {
+        statusMessage_ = "Save scene failed: " + (pathError ? pathError.message() : error);
+        return false;
+    }
+    currentScenePath_ = absolute;
+    rememberRecentScene(absolute);
+    statusMessage_ = "Saved scene " + absolute.filename().u8string();
+    std::cout << statusMessage_ << " (" << document.entities.size() << " entities)\n";
+    return true;
+}
+
+void Application::openSceneFromDialog() {
+    if (pendingModelImport_.has_value()) return;
+    std::string dialogError;
+    const auto selected = openSceneFileDialog(dialogError);
+    if (selected.has_value()) {
+        openScene(*selected);
+    } else if (!dialogError.empty()) {
+        statusMessage_ = "Open scene failed: " + dialogError;
+    }
+}
+
+bool Application::openScene(const std::filesystem::path& path) {
+    if (pendingModelImport_.has_value()) {
+        statusMessage_ = "Wait for the current model import before opening a scene.";
+        return false;
+    }
+    std::error_code pathError;
+    const std::filesystem::path absolute = std::filesystem::absolute(path, pathError).lexically_normal();
+    if (pathError) {
+        statusMessage_ = "Open scene failed: " + pathError.message();
+        return false;
+    }
+    SceneDocument document;
+    std::string documentError;
+    if (!loadSceneDocument(absolute, document, documentError)) {
+        statusMessage_ = "Open scene failed: " + documentError;
+        return false;
+    }
+
+    struct PreparedModel {
+        std::filesystem::path path;
+        std::unique_ptr<GpuModel> model;
+    };
+    std::vector<PreparedModel> prepared;
+    std::unordered_map<std::string, const GpuModel*> modelsByPath;
+    std::unordered_map<std::string, std::string> resolvedResources;
+    try {
+        for (const SceneDocumentEntity& entity : document.entities) {
+            if (entity.modelResource.empty()
+                || entity.modelResource == builtinGroundResource
+                || entity.modelResource == builtinGlassBackdropResource) {
+                continue;
+            }
+            const std::filesystem::path resolved = resolveSceneResource(entity.modelResource, absolute);
+            const std::string key = resolved.generic_u8string();
+            resolvedResources[entity.modelResource] = key;
+            if (modelsByPath.count(key) != 0U) continue;
+            if (!std::filesystem::is_regular_file(resolved)) {
+                throw std::runtime_error("Missing model resource: " + resolved.string());
+            }
+            const ModelImporter* importer = findImporter(resolved);
+            if (importer == nullptr) throw std::runtime_error("Unsupported model resource: " + resolved.string());
+            ModelImportResult imported = importer->load(resolved);
+            std::vector<TextureUploadWarning> warnings;
+            auto gpu = std::make_unique<GpuModel>(
+                std::move(imported.model), renderer_->textureCache(), warnings
+            );
+            const GpuModel* pointer = gpu.get();
+            prepared.push_back(PreparedModel{resolved, std::move(gpu)});
+            modelsByPath.emplace(key, pointer);
+        }
+
+        newEmptyScene();
+        currentScenePath_ = absolute;
+        loadedSceneDocument_ = true;
+        emptySceneSession_ = false;
+        rendererSettings_ = document.renderer;
+        camera_.setOrbitState(document.camera);
+        animationEnabled_ = document.playback.animationEnabled;
+        animationPlaying_ = document.playback.animationPlaying;
+        animationTimeSeconds_ = document.playback.animationTimeSeconds;
+        animationSpeed_ = document.playback.animationSpeed;
+        animationClipIndex_ = document.playback.animationClipIndex;
+        prismDemoEnabled_ = document.playback.prismEnabled;
+        prismCameraLocked_ = document.playback.prismCameraLocked;
+        prismOpticalPreset_ = document.playback.prismPreset;
+        prismParameters_ = document.playback.prismParameters;
+
+        if (!prepared.empty()) {
+            currentModelPath_ = prepared.front().path;
+            model_ = std::move(prepared.front().model);
+            for (std::size_t index = 1; index < prepared.size(); ++index) {
+                importedModels_.push_back(std::move(prepared[index].model));
+            }
+        }
+        const auto modelFor = [&](const std::string& resource) -> const GpuModel* {
+            if (resource.empty()) return nullptr;
+            if (resource == builtinGroundResource) return groundModel_.get();
+            if (resource == builtinGlassBackdropResource) return glassBackdropModel_.get();
+            const auto resolved = resolvedResources.find(resource);
+            if (resolved == resolvedResources.end()) return nullptr;
+            const auto found = modelsByPath.find(resolved->second);
+            return found == modelsByPath.end() ? nullptr : found->second;
+        };
+        for (const SceneDocumentEntity& saved : document.entities) {
+            const std::string persistentResource = saved.modelResource.rfind("builtin:", 0U) == 0U
+                ? saved.modelResource
+                : resolvedResources[saved.modelResource];
+            const SceneEntityId id = scene_.createEntityWithId(
+                saved.id, saved.name, modelFor(saved.modelResource), persistentResource
+            );
+            if (id == invalidSceneEntityId) throw std::runtime_error("Could not restore scene entity ID");
+            SceneEntity* entity = scene_.find(id);
+            entity->transform = saved.transform;
+            entity->tint = saved.tint;
+            entity->visible = saved.visible;
+            entity->enabledByPreset = true;
+            entity->castsShadow = saved.castsShadow;
+            entity->instanceCandidate = saved.instanceCandidate;
+            editedEntities_.insert(id);
+        }
+        for (const SceneDocumentEntity& saved : document.entities) {
+            if (saved.parent != invalidSceneEntityId && !scene_.setParent(saved.id, saved.parent)) {
+                throw std::runtime_error("Could not restore scene hierarchy");
+            }
+        }
+        scene_.updateWorldTransforms();
+        selectedSceneEntity_ = document.entities.empty()
+            ? invalidSceneEntityId
+            : document.entities.front().id;
+        showGroundPlane_ = std::any_of(
+            document.entities.begin(), document.entities.end(),
+            [](const SceneDocumentEntity& entity) {
+                return entity.modelResource == builtinGroundResource && entity.visible;
+            }
+        );
+
+        loadedMeshCount_ = loadedSubmeshCount_ = loadedTransparentSubmeshCount_ = 0U;
+        loadedVertexCount_ = loadedTriangleCount_ = loadedMaterialCount_ = loadedTextureCount_ = 0U;
+        loadedDecodedTextureCount_ = loadedFallbackTextureCount_ = loadedTextureMemoryBytes_ = 0U;
+        std::unordered_set<const GpuModel*> counted;
+        for (const SceneEntity& entity : scene_.entities()) {
+            if (entity.model == nullptr || entity.model == groundModel_.get()
+                || entity.model == glassBackdropModel_.get() || !counted.insert(entity.model).second) continue;
+            loadedMeshCount_ += entity.model->meshCount();
+            loadedSubmeshCount_ += entity.model->submeshCount();
+            loadedTransparentSubmeshCount_ += entity.model->transparentSubmeshCount();
+            loadedVertexCount_ += entity.model->vertexCount();
+            loadedTriangleCount_ += entity.model->triangleCount();
+            loadedMaterialCount_ += entity.model->materialCount();
+            loadedTextureCount_ += entity.model->textureCount();
+            loadedDecodedTextureCount_ += entity.model->loadedTextureCount();
+            loadedFallbackTextureCount_ += entity.model->fallbackTextureCount();
+            loadedTextureMemoryBytes_ += entity.model->textureMemoryBytes();
+        }
+        if (!currentModelPath_.empty()) {
+            const std::string modelPath = currentModelPath_.string();
+            std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", modelPath.c_str());
+        }
+        if (prismDemoEnabled_) updatePrismDemoOptics();
+        if (model_ != nullptr && model_->hasSkinning()) {
+            animationClipIndex_ = std::min(
+                animationClipIndex_,
+                model_->animationCount() > 0U ? model_->animationCount() - 1U : 0U
+            );
+            model_->updateAnimation(animationEnabled_, animationClipIndex_, animationTimeSeconds_);
+        }
+        rememberRecentScene(absolute);
+        statusMessage_ = "Opened scene " + absolute.filename().u8string() + " ("
+            + std::to_string(scene_.size()) + " entities, "
+            + std::to_string(counted.size()) + " model assets)";
+        std::cout << statusMessage_ << '\n';
+        return true;
+    } catch (const std::exception& exception) {
+        statusMessage_ = "Open scene failed; current scene preserved: " + std::string(exception.what());
+        std::cerr << statusMessage_ << '\n';
+        return false;
+    }
+}
+
+void Application::rememberRecentScene(const std::filesystem::path& path) {
+    std::ofstream stream("MyRenderer.recent-scene", std::ios::binary | std::ios::trunc);
+    if (stream) stream << path.generic_u8string();
+}
+
+std::filesystem::path Application::recentScenePath() const {
+    std::ifstream stream("MyRenderer.recent-scene", std::ios::binary);
+    std::string value;
+    std::getline(stream, value);
+    return value.empty() ? std::filesystem::path{} : std::filesystem::u8path(value);
+}
+
 void Application::materializeStressEntities(std::vector<RenderItem>& items) {
     // Benchmark mode keeps its original synthetic submission path.
     if (stressEntities_.empty()) {
@@ -396,6 +683,17 @@ void Application::materializeStressEntities(std::vector<RenderItem>& items) {
             const auto id = scene_.createEntity("Stress object " + std::to_string(i + 1), items[i].model);
             stressEntities_.push_back(id);
             auto* entity = scene_.find(id);
+            if (items[i].model == model_.get()) {
+                entity->modelResource = currentModelPath_.generic_u8string();
+            } else {
+                const auto source = std::find_if(
+                    scene_.entities().begin(), scene_.entities().end(),
+                    [&](const SceneEntity& candidate) {
+                        return candidate.model == items[i].model && !candidate.modelResource.empty();
+                    }
+                );
+                if (source != scene_.entities().end()) entity->modelResource = source->modelResource;
+            }
             const auto& matrix = items[i].modelMatrix;
             entity->transform.translation = glm::vec3(matrix[3]);
             entity->transform.scale = glm::vec3(glm::length(glm::vec3(matrix[0])),

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -26,7 +27,7 @@ struct SnapshotCamera {
 
 struct SnapshotDirectionalLight {
     glm::vec3 direction{-0.45f, -0.8f, -0.35f};
-    glm::vec3 radiance{1.0f};
+    glm::vec3 radiance{0.0f};
 };
 
 enum class SnapshotLocalLightType {
@@ -46,7 +47,15 @@ struct SnapshotLocalLight {
 struct SnapshotEnvironment {
     glm::vec3 backgroundColor{0.0f};
     float intensity{1.0f};
+    // IBL may remain enabled while the raster skybox is hidden. In that case
+    // primary misses use backgroundColor, while bounced rays still see the HDRI.
+    bool visibleToCamera{true};
     std::string sourceName;
+    std::filesystem::path sourcePath;
+    std::uint32_t width{0U};
+    std::uint32_t height{0U};
+    // Linear RGB, top row first. Tests and generated scenes may bypass file IO.
+    std::vector<glm::vec3> radiancePixels;
 };
 
 struct SceneSnapshotLighting {
@@ -120,5 +129,8 @@ private:
 };
 
 std::vector<Triangle> buildWorldTriangles(const SceneSnapshot& snapshot);
+// Preserves the same global primitive ids as buildWorldTriangles while only
+// materializing emissive geometry for direct-light sampling.
+std::vector<Triangle> buildWorldLightTriangles(const SceneSnapshot& snapshot);
 
 } // namespace pathtracer

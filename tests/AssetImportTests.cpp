@@ -236,6 +236,25 @@ int main() {
         require(!dae.model.meshes.empty(), "DAE fixture should import a mesh");
         require(!dae.model.textures.empty(), "DAE fixture should import its external texture reference");
 
+        for (const char* path : {
+                 "polyhaven/ArmChair_01/ArmChair_01_1k.gltf",
+                 "polyhaven/modern_coffee_table_01/modern_coffee_table_01_1k.gltf",
+                 "polyhaven/ceramic_vase_01/ceramic_vase_01_1k.gltf",
+                 "polyhaven/anthurium_botany_01/anthurium_botany_01_1k.gltf",
+                 "polyhaven/bronze_whale_statue/bronze_whale_statue_1k.gltf"}) {
+            const ModelImportResult showcase = assimp.load(asset(path));
+            require(!showcase.model.meshes.empty(),
+                    std::string("Poly Haven showcase model has no mesh: ") + path);
+            require(!showcase.model.materials.empty(),
+                    std::string("Poly Haven showcase model has no material: ") + path);
+            require(!showcase.model.textures.empty(),
+                    std::string("Poly Haven showcase model has no textures: ") + path);
+            require(showcase.model.boundsMax.x > showcase.model.boundsMin.x
+                    && showcase.model.boundsMax.y > showcase.model.boundsMin.y
+                    && showcase.model.boundsMax.z > showcase.model.boundsMin.z,
+                    std::string("Poly Haven showcase model has invalid bounds: ") + path);
+        }
+
         for (const auto& emissionResult : {obj.load(asset("emissive_test.obj")), assimp.load(asset("emissive_test.gltf"))}) {
             const auto* emission = findMaterial(emissionResult, "EmissionTest");
             require(emission && glm::length(emission->emissiveFactor - glm::vec3(0.75f, 0.5f, 0.25f)) < 1e-6f,

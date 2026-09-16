@@ -1,760 +1,386 @@
-# MyRenderer：OpenGL GPU 光栅化渲染器开发大纲
+# MyRenderer 路线图
 
-## 1. MVP 目标
+> 重排日期：2026-09-16
+>
+> 项目定位：**C++ Module-driven Scene Rendering & Simulation Lab**——同一套 Scene / Asset / Material / Camera / Light 数据，支持实时 Raster PBR、实时 Stylized/NPR、CPU/GPU Path Tracing，以及由 Timeline、Render Job 和 C++ Scene/Simulation Module 驱动的专项场景模拟。
 
-使用 C++ 与 CMake 从零搭建一个独立、精简的 OpenGL 渲染器。首个可交付版本需要：
+本文档是当前唯一活跃路线图。旧版按开发日期不断追加的清单已经压缩为“已完成里程碑”；只有“执行队列”中的未勾选项才代表当前承诺。
 
-- 在 Windows 上通过 CMake 完成配置、编译和运行。
-- 创建 OpenGL 3.3 Core Profile 窗口与渲染循环。
-- 从命令行参数或默认资源路径加载一个 `.obj` 模型。
-- 将顶点和索引上传到 GPU，并通过 `glDrawElements` 绘制模型。
-- 使用顶点着色器完成 Model/View/Projection 变换。
-- 使用片元着色器完成基础光照，能够辨认模型的立体结构。
-- 启用深度测试，模型表面遮挡关系正确。
-- 窗口缩放后画面比例正确，按 `Esc` 可退出。
+状态与优先级：
 
-### MVP 完成标准（Definition of Done）
+- `[x]`：已实现且有测试、固定图、文档或性能证据。
+- `[ ]`：尚未完成。
+- **P0**：当前连续执行，不再插入新的大型方向。
+- **P1**：P0 结束后的下一条主线。
+- **P2**：有价值但不阻塞主线的增强或研究验证。
+- **舍弃**：不再保留为项目待办；只有出现新的明确需求才重新立项。
 
-- [x] 在全新 `build` 目录中，CMake 配置和编译无错误（已用 MinGW Debug 验证）。
-- [x] 启动程序后能看到模型，而不是黑屏、纯色屏或只有一个测试三角形。
-- [x] 正确解析 OBJ 的位置、法线和面索引；无顶点法线时可生成可用法线。
-- [x] 非三角形面会在加载阶段被三角化。
-- [x] 模型自动居中并缩放到相机视野内，避免因 OBJ 尺寸差异而不可见。
-- [x] 深度遮挡正确，调整窗口大小后模型不拉伸。
-- [x] Debug 构建下没有 OpenGL 初始化、Shader 编译/链接或 OBJ 加载错误。
-- [x] 至少用两个 OBJ 验证：已实际运行 cube、bunny、sphere 三个模型。
+## 1. 当前结论
 
-## 2. MVP 技术选型
+### 1.1 已具备的能力
 
-| 模块 | 选型 | 用途 |
+| 能力 | 当前状态 | 结论 |
 | --- | --- | --- |
-| 语言 | C++17 | 保持实现简单并获得稳定的标准库支持 |
-| 构建 | CMake 3.20+ | 管理目标、资源和第三方依赖 |
-| 图形 API | OpenGL 3.3 Core Profile | 使用 GPU 固定功能光栅化阶段与可编程 Shader |
-| 窗口/上下文 | GLFW | 创建窗口、OpenGL 上下文并处理基础输入 |
-| OpenGL 函数加载 | GLAD | 加载 OpenGL 函数指针 |
-| 数学库 | GLM | 向量、矩阵及 Model/View/Projection 变换 |
-| OBJ 加载 | tinyobjloader | 仅处理 MVP 所需的 OBJ，避免引入完整 Assimp |
-| 依赖接入 | CMake `FetchContent` | 首次配置时自动获取并参与构建 |
+| OpenGL Raster PBR | 实时 GUI 可用 | 已是稳定对照后端，继续维护，不再大规模扩张 OpenGL 架构 |
+| Stylized / Toon / Outline | 实时 GUI 可用 | Toon 与屏幕空间描边已完成，尚缺组合效果、Preset、调试视图和性能分档 |
+| CPU Reference Path Tracer | 静态/自动验收可用 | 材质、灯光、HDRI、体积、MIS、AOV、SAH、BLAS/TLAS、Adaptive Sampling 已闭环；尚未接入 GUI 渐进预览 |
+| Raster / Path Traced / Difference | 三个固定 `.myscene` 可自动导出 | 作为跨算法诊断，不要求差异为零；旧固定图回归合同保持不变 |
+| Editor Workspace | Docking、Hierarchy、Viewport、Inspector、Content Browser 已有基础 | 后续做成大视口为中心的渲染/模拟工作台，不扩展成游戏编辑器 |
+| C++ Module / Batch Runtime | 未开始 | 先做静态 C++ Module API、显式参数注册、版本化 Render Job、Headless Batch 与固定时间步；DLL 动态加载后移 |
+| GPU Path Tracing | 未开始 | 当前 OpenGL 3.3 不承载 Compute/硬件 RT；在独立 Vulkan 后端实现 |
+| Denoising | 未开始 | 先做 AOV 引导的空间降噪，再做时序降噪；它降低方差，不替代正确采样 |
+| ReSTIR | 未开始 | 只在基础 GPU PT 稳定后验证 ReSTIR DI；不提前承诺 ReSTIR GI/PT |
+| MMIS | 不进入主线 | 当前标准 MIS 已有效降噪；“MMIS”需先绑定具体论文/算法和目标问题，不能视为通用去噪器 |
 
-> 依赖版本应在 `CMakeLists.txt` 中固定 tag/commit，避免后续构建结果漂移。若开发环境不能联网，再切换为仓库内 `third_party/` 子模块，不同时维护两套依赖方案。
+### 1.2 接下来只保留五条主线
 
-## 3. 与旧实验框架的关系
+1. 收口 Stylized/NPR，完成一个可发布的短周期视觉成果。
+2. 把 CPU Path Tracer 接入 GUI 渐进预览，并建立低 SPP 降噪/采样实验。
+3. 建立 C++ Module 驱动的 Editor Workspace、Headless Render Job、Timeline 与专项 Simulation Runtime。
+4. 制作物理天空 + Gerstner 海面自然 Hero Scene，并通过 C++ 模块和 Render Job 批量生成昼夜与海况序列。
+5. 建立 Vulkan Raster 基线，再进入 GPU Ray Query / Path Tracing / ReSTIR DI。
 
-旧路径 `E:/dandelion-main/src/render` 中值得保留的是渲染概念，而不是原有 CPU 实现：
+体积云、极光、FFT Ocean、浅水与完整天气不与上述主线并行开发。
 
-- 保留：MVP 矩阵、顶点/法线数据、三角形索引、基础 Blinn-Phong/Lambert 光照思想。
-- 替换：CPU `VertexProcessor` → GLSL 顶点着色器。
-- 替换：CPU `Rasterizer`、重心坐标插值和 CPU 深度缓冲 → OpenGL GPU 光栅化、插值和深度测试。
-- 替换：CPU `FragmentProcessor` → GLSL 片元着色器。
-- 精简：旧 `RenderEngine` 的多渲染器选择 → 单一实时 OpenGL `Renderer`。
-- 不迁移：Whitted 光线追踪、线程队列、自旋锁、CPU FrameBuffer、BVH、物理模拟、半边结构和 ImGui 编辑器。
-- 参考但不直接复制：旧项目的 VAO/VBO/EBO 和 Shader 封装；新项目只实现 MVP 所需的 RAII 封装。
+### 1.3 UI 与工作流目标
 
-## 4. 建议目录结构
+界面采用“大视口 + Scene Explorer + Inspector + Content Browser”的渲染工作台布局；当前 ImGui Docking 外壳继续演进，不替换 UI 框架。推荐默认工作区：
 
-```text
-MyRenderer/
-├─ CMakeLists.txt
-├─ README.md
-├─ todolist.md
-├─ assets/
-│  └─ models/
-│     └─ cube.obj
-├─ shaders/
-│  ├─ basic.vert
-│  └─ basic.frag
-└─ src/
-   ├─ main.cpp
-   ├─ app/
-   │  ├─ Application.h
-   │  └─ Application.cpp
-   ├─ io/
-   │  ├─ ObjLoader.h
-   │  └─ ObjLoader.cpp
-   └─ render/
-      ├─ Camera.h
-      ├─ Camera.cpp
-      ├─ Mesh.h
-      ├─ Mesh.cpp
-      ├─ Renderer.h
-      ├─ Renderer.cpp
-      ├─ Shader.h
-      └─ Shader.cpp
-```
+| 区域 | 职责 |
+| --- | --- |
+| 顶部菜单/工具栏 | Scene、Render、Simulation、Window；Raster/CPU PT/GPU PT；Preview/Pause/Step/Reset/Bake/Render |
+| 中央 Viewport | 实时或渐进渲染、Transform Gizmo、Beauty/AOV/Debug View、SPP 与任务进度 |
+| Scene Explorer | Camera、Mesh、Light、Atmosphere、Fog、Ocean、Volume、Simulation Module |
+| Inspector | Transform、Material、Lighting、Volume、Simulation 与 C++ 模块公开参数；不显示 Gameplay 组件 |
+| 底部工作区 | Assets、Timeline、Modules、Render Queue、Log/Profile，多标签共享空间 |
 
-MVP 数据流：
+Content Browser 只保留与渲染和模拟有关的分类：Scenes、Models、Materials、Textures、HDRI、Modules、Simulations、Caches、RenderJobs、Presets。C++ 源码使用 Visual Studio 等外部 IDE；MyRenderer 负责模块发现、参数显示、构建日志和运行控制，不自建代码编辑器。
 
-```text
-.obj 文件
-  -> ObjLoader（CPU：解析、三角化、补法线、计算 AABB）
-  -> MeshData（positions + normals + indices）
-  -> Mesh（上传 VAO/VBO/EBO）
-  -> Renderer（设置状态、uniform、Draw Call）
-  -> Vertex Shader -> GPU Rasterization -> Fragment Shader
-  -> GLFW 窗口
-```
+运行状态只有 `Edit / Preview / Bake / Render`：Preview 使用可丢弃的运行态副本，Bake 写确定性缓存，Render 从固定场景或缓存输出；顶部三角按钮不定义为 Play Game。
 
-## 5. 实施 Todo List
+## 2. 已完成里程碑
 
-### 阶段 A：工程骨架与可构建性
+### 2.1 渲染器与资产基础（2026-08-05）
 
-- [x] 创建根 `CMakeLists.txt`，设置项目名、C++17 和 Debug/Release 配置。
-- [x] 用 `FetchContent` 接入 GLFW、GLAD、GLM、tinyobjloader，并锁定版本。
-- [x] 创建可执行目标 `MyRenderer`，集中声明源文件和链接依赖。
-- [x] 设置编译警告；MSVC 使用 `/W4`，其他编译器使用 `-Wall -Wextra -Wpedantic`。
-- [x] 将 `shaders/` 和 `assets/` 在构建后复制到可执行文件附近，并定义稳定的开发资源根目录。
-- [x] 添加最小 `main.cpp`，验证程序可配置、可编译、可启动。
+- [x] C++17 / CMake / OpenGL 3.3 Core 工程、GLFW/GLAD/GLM、RAII GPU 资源和 `KHR_debug`。
+- [x] OBJ、DAE、glTF/GLB 静态资产导入；统一 `ModelData`、Mesh、Submesh、Material、Node 数据。
+- [x] UV、切线、基础色/法线纹理、纹理缓存、内嵌/外部纹理和缺失纹理回退。
+- [x] 线性工作流、sRGB 输入输出、1x/4x MSAA、截图导出和真实 OpenGL smoke test。
+- [x] 后台资产导入、文件选择/拖放、结构化诊断、CPU/GPU 时间与资源统计。
+- [x] Metallic-Roughness PBR、IBL、方向光阴影、HDR、Bloom、ACES Tone Mapping 和轻量多 Pass 编排。
 
-验收：
+### 2.2 玻璃、棱镜与焦散旗舰（2026-08-08 ～ 2026-08-25）
+
+- [x] Forward Refractive Pass、透明排序、可采样 Opaque Color/Depth、粗糙背景折射和环境回退。
+- [x] Transmission / IOR / Fresnel / TIR、双界面折射、几何厚度、Beer-Lambert、RGB 色散与对象配对。
+- [x] 标准 Split-Sum IBL、Volume Glass Preset、固定机位调试视图与 1x/4x MSAA 验收。
+- [x] Prism Spectrum：双界面 Snell 光路、连续波长采样、七色美术模式、HDR 光束、自动回归和 Demo Reel。
+- [x] Projector 与 Light-space Caustics、彩色透射阴影、空间过滤、性能报告和 GPU Capture。
+
+证据：[`docs/glass2c-volume.md`](docs/glass2c-volume.md)、[`docs/glass3-caustics.md`](docs/glass3-caustics.md)、[`docs/glass4-validation.md`](docs/glass4-validation.md)、[`docs/prism5-validation.md`](docs/prism5-validation.md)。
+
+### 2.3 现代实时渲染基线 GP-P1（2026-08-25 ～ 2026-09-01）
+
+- [x] Hybrid Deferred、G-Buffer 与逐附件调试，保留 Forward 对照。
+- [x] Point/Spot 多光源压力场景；64 灯下 Deferred GPU P50 相对 Forward 约 `1.73×`。
+- [x] Instancing、CPU Frustum Culling、三档 LOD；2,500 实例场景 Draw Call `2501 → 19`。
+- [x] TAA、动态 Motion Vector、History Reprojection、Neighborhood Clamp、SSAO 与调试视图。
+- [x] glTF Skin/Animation Sampling/GPU Skinning 最小闭环；Bind Pose、动画和权重调试可用。
+
+证据：[`docs/deferred-shading.md`](docs/deferred-shading.md)、[`docs/local-light-stress.md`](docs/local-light-stress.md)、[`docs/instance-culling-lod.md`](docs/instance-culling-lod.md)、[`docs/taa-ssao.md`](docs/taa-ssao.md)、[`docs/gpu-skinning.md`](docs/gpu-skinning.md)。
+
+### 2.4 Scene Rendering 共用基础 SR-P0（2026-09-02）
+
+- [x] 轻量 Scene / Entity / Transform / Parent-Child、多对象选择、复制、删除、显隐和共享 Mesh 实例。
+- [x] ImGui Docking 编辑器外壳、Hierarchy、Viewport、Object/Renderer Inspector 与基础 Content Browser 已具备，可在现有结构上扩展渲染工作区。
+- [x] glTF Node 与 Mesh Geometry 解耦；SceneSnapshot 能复用真实场景、相机、材质和灯光语义。
+- [x] 显式 Pass Context、OpenGL State Cache、GPU Debug Label 与失败安全 Shader Hot Reload。
+- [x] 相机、对象和骨骼上一帧数据、统一 History Reset、Jitter 与动态 Motion Vector。
+- [x] `renderer-regression-suite`、`renderer-benchmark-suite`、Windows CI、许可证清单与 CPack Release ZIP。
+- [x] 旧 `cube.obj` 许可证待办已随项目/依赖/资产许可证清单收口。
+
+证据：[`docs/scene-rendering-foundation.md`](docs/scene-rendering-foundation.md)。
+
+### 2.5 CPU Reference Path Tracer SR-P1A～M（2026-09-03 ～ 2026-09-15）
+
+| 阶段 | 已完成结果 |
+| --- | --- |
+| A | 只读 SceneSnapshot、Ray/AABB/Triangle、Surface Interaction、确定性 BVH |
+| B–C | Progressive Accumulation、可取消后台任务、确定性 RNG、Lambert/GGX PBR、Russian Roulette |
+| D–F | Emissive/Directional/Point/Spot NEE、Power-Heuristic MIS、HDRI 重要性采样、CPU 纹理/法线采样 |
+| G–H | Dielectric Fresnel/TIR、IOR、Beer-Lambert Volume、Beauty + 7 组确定性 AOV |
+| I–J | Tile 线程池、统计/Profile、16-bin SAH；测试场景 Triangle Test 降低约 `62.5%` |
+| K–L | 共享 BLAS/TLAS、400 实例压力场景、95% 置信区间 Adaptive Sampling |
+| M | 三个 `.myscene` 的同机位 Raster / Path Traced / Difference / Triptych / JSON / AOV 自动导出 |
+
+标准 MIS 已有明确收益：8 SPP 面光场景 MSE `0.210596 → 0.135364`；16 SPP 高对比 HDRI 场景 MSE `1.65474 → 0.175639`。因此下一步应优化采样分布与降噪，不应把 MMIS 当成“消除噪点”的替代方案。
+
+固定场景：
+
+- `assets/scenes/10_reference_pathtracer_pbr_hdri.myscene`
+- `assets/scenes/11_reference_pathtracer_lights.myscene`
+- `assets/scenes/12_reference_pathtracer_volume.myscene`
+
+证据：[`docs/reference-path-tracer.md`](docs/reference-path-tracer.md)。
+
+### 2.6 Stylized / NPR SR-P2A～B（2026-09-16）
+
+- [x] PBR / Stylized 实时切换、2～8 档 Toon Ramp、分层高光、Rim Light 与 Shadow Tint。
+- [x] Forward / Deferred 共用风格参数，透明/玻璃继续使用物理路径。
+- [x] View-space Relative Depth + G-Buffer Normal 的屏幕空间描边；Forward 使用 Depth-only 回退。
+- [x] 描边宽度按像素定义，在 TAA 后合成；分辨率、TAA、透明边界与 On/Off 自动验收已覆盖。
+- [x] `.myscene` 往返与 `stylized-acceptance` 已接入，输出只写构建目录，不改写既有固定图。
+
+证据：[`docs/stylized-rendering.md`](docs/stylized-rendering.md)。
+
+## 3. 活跃执行队列
+
+### P0-A：先锁定回归基线（预计 2～4 天）
+
+目标：在继续加效果前，确认当前工作树的所有“不能破坏”合同。
+
+- [ ] 跑通 CTest、`path-tracing-regression`、`path-tracing-raster-comparison`、`stylized-acceptance` 与 `renderer-regression-suite`，保存一份当前结果矩阵。
+- [ ] 审计现有 Raster 固定图中的 Glass-2C 基线漂移：先区分环境/场景选择/渲染状态问题与真实算法变化，不直接重拍覆盖。
+- [ ] 若必须更新任何固定图，单独提交并记录原因、参数、硬件、旧/新差异；不得由后续功能目标隐式更新。
+- [ ] 核对 README、参考路径追踪文档和 CMake 目标名称，确保所有验收命令可复制执行。
+
+完成门槛：除已明确登记的 Glass-2C 问题外，现有固定图和逐位 Path Tracer 回归无新增漂移。
+
+### P0-B：收口 Stylized/NPR SR-P2C（预计 1～2 周）
+
+保留能形成完整视觉交付的组合功能，不继续扩展角色专用材质系统。
+
+- [ ] 增加时序稳定的 Dither；提供开关、强度与调试视图。
+- [ ] 增加 Height Fog，并明确与深度、透明物和天空的合成顺序。
+- [ ] 增加 Color Grading LUT；Bloom 复用已有实现，只做风格化 Preset 集成。
+- [ ] 完成 Clean Toon、Painterly、Night Aurora 三组 Preset，并写入 `.myscene`。
+- [ ] 用材质展台、室内建筑/陈列场景、室外自然代理场景验证三类构图；不再强制新增角色资产。
+- [ ] 增加 Lighting Bands、Rim、Outline、Dither、Fog、LUT 调试视图和 Low/High 两档 GPU 数据。
+- [ ] 扩展 `stylized-acceptance`，继续只写构建目录，不触碰旧固定图。
+
+完成门槛：同一机位一键切换 PBR 与三种 Preset；Forward/Deferred、两种分辨率、TAA、透明物边界均有自动验收和限制说明。
+
+### P0-C：GUI CPU Progressive Path Tracing（预计 1～2 周）
+
+这是“交互式参考预览”，目标是持续更新且不阻塞 GUI，不承诺 CPU 实时帧率。
+
+- [ ] 新增 Raster / CPU Path Traced 视图切换；复用当前 SceneSnapshot 和 Camera，不建立第二套场景加载器。
+- [ ] 复用现有 `RenderTask`、Tile 线程池和取消机制；后台只写 CPU staging image，主线程负责 OpenGL Texture 上传。
+- [ ] 相机、Scene、Transform、Material、Light、分辨率或积分器设置变化时可靠取消并重启；旧任务不得覆盖新结果。
+- [ ] 提供 1/2、1/4 与全分辨率预览，交互期间低分辨率，静止后逐步升档。
+- [ ] UI 显示 SPP、进度、耗时、Ray/BVH 统计、Seed、Max Depth、AOV、Pause/Resume/Restart 和导出。
+- [ ] 在固定 Seed/分辨率/SPP 下，GUI 最终结果与 CLI/自动验收输出逐位一致或 RMSE 为 0。
+- [ ] 快速拖动相机和连续加载场景时 GUI 保持响应，无 use-after-free、陈旧纹理或退出卡死。
+
+完成门槛：GUI 可连续看到噪声随 SPP 降低，取消/重启稳定，且 `path-tracing-regression` 的旧输出合同完全不变。
+
+### P0-D：采样与降噪实验（预计 2～3 周）
+
+先建立可量化基线，再决定算法复杂度。
+
+- [ ] 为 1/2/4/8/16 SPP 保存 Raw Beauty、Albedo、Normal、Depth、Direct、Indirect、Variance；以 2048 或 4096 SPP 作为参考。
+- [ ] 第一版实现 AOV 引导的 Spatial A-Trous / Cross-Bilateral Denoiser；边缘停止权重使用 Albedo、Normal 与 Depth。
+- [ ] GUI Progressive 稳定后再实现 Temporal Accumulation + SVGF 风格方差估计、History Reprojection 与 Disocclusion Rejection。
+- [ ] 分开评估 Direct 与 Indirect；报告 Raw/Denoised 的 RMSE、PSNR、SSIM、耗时、过度模糊、拖影和 Firefly。
+- [ ] 将光源均匀离散选择升级为 Power-weighted Distribution / Alias Table；增加 GGX VNDF 采样并与现有采样做同预算对照。
+- [ ] Firefly Clamp 只作为可选有偏模式，不用于“让指标好看”的正式无偏参考图。
+- [ ] 只有在低 SPP 结果和 AOV 合同稳定后，才冻结 GPU Denoiser 所需的数据接口。
+
+完成门槛：至少三个固定场景证明低 SPP 方差显著下降，同时报告细节损失与时序失败案例；不能只展示一张平滑后的静帧。
+
+## 4. 下一阶段主线
+
+### P1-0：C++ 模块驱动的渲染与模拟工作台（预计 4～7 周）
+
+这个阶段先建立可自动运行的“场景时间与任务语义”，再让自然场景和 GPU 后端接入；核心扩展使用 C++ Scene/Simulation Module，不以制作蓝图、脚本节点、通用反射系统或游戏运行时为目标。
+
+#### P1-0A：Editor Workspace 收口（预计 1～2 周）
+
+- [ ] 固化可保存/恢复的默认 Dock Layout：中央 Viewport、Scene Explorer、Inspector、底部多标签工作区；允许用户拖动布局，不把左右位置写死进功能逻辑。
+- [ ] 顶部工具栏增加 Render Mode 与 `Edit / Preview / Bake / Render` 状态，提供 Pause、Single Step、Reset、Render Frame、Render Sequence；不得复用含糊的 Play Game 语义。
+- [ ] Viewport Overlay 统一显示 Backend、Render Mode、分辨率比例、SPP/Frame、Denoiser、任务进度和取消状态；Raster/CPU PT/GPU PT 共用同一位置。
+- [ ] Scene Explorer 只展示渲染/模拟对象；Inspector 按 Transform、Material、Lighting、Atmosphere/Volume、Simulation、Module Parameters 分组。
+- [ ] Content Browser 增加 Scenes、Models、Materials、Textures、HDRI、Modules、Simulations、Caches、RenderJobs、Presets 分类，以及搜索、筛选、刷新和缩略图缓存。
+- [ ] 底部增加 Timeline、Modules、Render Queue、Log/Profile 标签；第一版 Modules 提供打开 Visual Studio、构建指定 CMake Target、启动/停止模块实例和编译错误定位。
+- [ ] UI 只通过 EditorSession/Command 修改 Scene 与任务，不直接持有渲染线程或 GPU 资源生命周期。
+
+#### P1-0B：Headless Batch 与 Render Job（预计 1～2 周）
+
+- [ ] 把场景加载、Snapshot 捕获、Render Settings、帧推进与导出提取为无 ImGui 依赖的运行层；GUI 与 Batch 调用同一实现。
+- [ ] 定义带 `schemaVersion` 的 Render Job：Scene、Renderer、Camera、Resolution、Frame Range/FPS、SPP/Depth/Seed、AOV、Output、Simulation Cache 和失败策略。
+- [ ] 增加 `MyRendererBatch` 或等价 CLI，支持 `validate`、`render-frame`、`render-sequence`、`simulate/bake`；参数错误、模块错误、缺资源或缺产物必须返回非零。
+- [ ] 输出路径支持 Frame Token 与原子写入；先复用 PNG/RGBE HDR，再增加线性 OpenEXR/AOV 序列，颜色空间和 Tone Mapping 必须写入元数据。
+- [ ] Render Queue 显示 Pending/Running/Cancelled/Failed/Complete，支持安全取消和从已完成帧恢复；不得用 GUI 帧循环隐式决定任务进度。
+- [ ] 同一 Job 从 GUI 和 CLI 执行必须使用相同相机、时间、Seed 与设置，并生成相同最终图和报告。
+
+#### P1-0C：Timeline、C++ Module 与 Simulation Runtime（预计 2～3 周）
+
+- [ ] 定义确定性 Timeline：Frame、Time、FPS、Start/End、固定 `deltaTime`、Loop 与 Scrub；渲染序列不依赖实时 GUI 帧率。
+- [ ] 区分编辑态 Scene 与可丢弃 Runtime Scene；Preview/模块异常/Reset 不应污染未保存的编辑态，只有显式 Apply/Bake 才写回资产或缓存。
+- [ ] 定义 `ISceneModule` / `ISimulationModule` 最小生命周期：`registerParameters/initialize/reset/fixedUpdate/bake/serialize`，以及 Seed、Fixed Step、输入依赖、输出 Cache 和版本号。
+- [ ] 第一版把模块静态编译进独立 `MyRendererModules` 或等价 CMake Target，通过显式 Registry 按稳定字符串 ID 创建实例；不先处理 DLL ABI、卸载和二进制热补丁。
+- [ ] 定义轻量 Module Manifest：稳定 ID、Display Name、CMake Target、Source Root、Module API Version 与 Build ID；Content Browser/Modules 面板只读取 Manifest，不扫描或解析 C++ 源码。
+- [ ] 定义轻量 `ParameterRegistry`，支持 Bool/Int/Float/Color/Enum/Asset、默认值、范围和 Tooltip；Inspector 自动生成控件，`.myscene` 保存参数覆盖。
+- [ ] 模块不得直接拥有 Editor Widget、OpenGL/Vulkan Context 或后台线程；通过受限 `SceneContext`、Job/Cancellation Token 与 Renderer API 协作。
+- [ ] Simulation Cache 记录场景内容哈希、模块版本、Seed、时间步和帧范围；输入变化时拒绝静默复用陈旧缓存。
+- [ ] Render Job 记录模块 ID、参数、Module API Version 与 Build ID；GUI Preview 和 Batch 必须加载相同模块配置。
+- [ ] 支持模块 Initialize/Run/Stop/Reset、超时/取消、结构化日志和源码/编译错误定位；失败不能导致当前 GUI 场景或渲染上下文失效。
+- [ ] 第一版采用“重新编译并重启应用/Batch 后恢复 Scene”的可靠迭代方式；只有该成本成为真实瓶颈时，才进入 P2-D DLL Plugin Reload。
+
+P1-0 验收：一个固定 C++ Module 驱动场景与 24 帧参数动画，GUI Preview、CLI Batch 和重复运行共享同一 Timeline/Seed/Build ID；输出帧/AOV 与 Job 报告可复现，取消、模块异常和缓存失效均有自动测试。该阶段新增独立 `module-rendering-acceptance`，不改写既有固定图。
+
+### P1-A：自然 Hero Scene——天空、室外阴影与 Gerstner 海面（预计 4～6 周）
+
+- [ ] 实现 Rayleigh/Mie Atmosphere LUT 或等价可验证方案，统一太阳方向、天空、方向光、曝光和 Aerial Perspective。
+- [ ] 完成稳定 3～4 级 CSM、Texel Snapping、Bounds 拟合、Bias 与 Cascade 调试；PCSS 仅作为后续质量档。
+- [ ] 用 Projected Grid、Clipmap 或可解释的相机相关 LOD 承载大范围海面。
+- [ ] 实现多组 Gerstner Waves，输出解析位移、法线、切线与速度；明确标注为 Wave Synthesis。
+- [ ] 复用 Fresnel、IOR、Transmission、Beer-Lambert 与环境反射，增加水深、Foam、Whitecap 和 Underwater Fog。
+- [ ] 水面接入 Shadow、Motion Vector、TAA 与调试视图，制作 Calm / Windy / Storm 三组海况。
+- [ ] 将太阳时间、雾、风、波浪和相机轨迹暴露为 C++ Module 参数；通过 Render Job 输出固定昼夜/海况帧序列，而不是只保存手调静帧。
+
+完成门槛：同一海岸场景能从正午平静海面切到日落风浪，天空、太阳、雾、水面与阴影方向一致；同一 C++ Module + Render Job 可重复输出参数动画，并有 Low/High GPU 预算。
+
+### P1-B：Vulkan 与 GPU Path Tracing（预计 8～12+ 周）
+
+独立后端通过 SceneSnapshot 共享数据；不先设计大一统 RHI。
+
+1. [ ] Vulkan Raster Baseline：静态 glTF、Dynamic Rendering、Descriptor、上传、Frame-in-flight、同步验证和 RenderDoc Capture。
+2. [ ] 定义 GPU Scene/Material/Texture 数据布局；唯一 Mesh 建 BLAS、Entity 建 TLAS，先支持静态与刚体 Transform Update。
+3. [ ] 用 `VK_KHR_ray_query` 完成一种混合效果，优先 Ray-traced Shadow，并与 CSM 保留同机位质量/性能对照。
+4. [ ] 用 `VK_KHR_ray_tracing_pipeline` 实现基础 GPU Path Tracer，对齐 SR-P1 的 Camera、PBR、Light、HDRI 与固定场景语义。
+5. [ ] 加入每帧 1 SPP、Temporal Accumulation、AOV 与 SVGF；以 720p、Depth 3～4、约 30 FPS 作为首轮测量目标，不作为未测先承诺的硬指标。
+6. [ ] 对 `10/11/12_reference_pathtracer_*.myscene` 输出 CPU/GPU 同机位图和误差报告；区分浮点/算法差异与实现错误。
+7. [ ] Vulkan 作为现有 Workspace/Render Job 的新 Backend 接入；同一 Job 能在 GUI 或 Batch 运行，不维护独立的 Vulkan Demo 场景格式。
+
+完成门槛：OpenGL、CPU PT 与 Vulkan GPU PT 能加载同一场景；GPU 输出随样本收敛并与 CPU Reference 趋势一致；GUI 中可交互预览且有明确硬件、画质和性能边界。
+
+### P1-C：ReSTIR DI 可行性验证（GPU PT 基线之后，预计 2～4 周）
+
+- [ ] 建立 8/64/256/1024 灯固定压力场景，先记录传统 NEE/MIS 的时间、方差与可见性成本。
+- [ ] 实现 Candidate Generation、Weighted Reservoir Update、Temporal Reuse、Spatial Reuse 与 Visibility Test。
+- [ ] 明确目标分布、权重与 Bias Correction；通过禁用 Temporal/Spatial 的消融定位收益来源。
+- [ ] 比较相同 Ray Budget 下的 NEE/MIS 与 ReSTIR DI：RMSE/SSIM、稳定性、Ghosting、Disocclusion、GPU 时间和显存。
+- [ ] 只有 DI 在多光源动态场景中证明稳定收益，才评估 ReSTIR GI/PT；否则停在可复现实验结论。
+
+判断标准：ReSTIR 不是“所有场景都比传统光追更好”。它最可能在低 SPP、多光源、动态场景提高直接光采样效率；少量灯光或离线高 SPP 场景可能得不偿失。
+
+## 5. P2 可选分支
+
+### P2-A：体积云与极光
+
+- [ ] 统一 Half/Quarter Resolution Ray March、Blue-noise Jitter、Depth-aware Upsample、Temporal Reprojection 与 History Rejection。
+- [ ] 先以 Local/Height Fog 验证密度、吸收、单次散射和深度合成，再进入体积云。
+- [ ] 体积云实现 Shape/Detail Noise、Weather Map、Sun March、近似多重散射、云影和 Low/High 档。
+- [ ] Aurora 作为同一体积框架的发光帘幕案例；只做可导演视觉模型，不宣称磁层物理模拟。
+
+进入条件：P1-A Hero Scene 已稳定，且该阶段不会阻塞 Vulkan/GPU PT。
+
+### P2-B：FFT Ocean、浅水与 GPU Weather
+
+- [ ] Gerstner 海面达到画质/性能基线后，再用 Vulkan Compute 实现 Tessendorf FFT Ocean，并做同场景对照。
+- [ ] Shallow Water 作为独立局部 Height-field Solver；第一版不与远海 FFT 双向耦合。
+- [ ] Rain/Snow、3D Noise 和体积预计算在 Compute 后端实现；OpenGL 只保留低档或离线回退。
+
+进入条件：Vulkan Compute/同步/资源生命周期已由 P1-B 证明稳定。
+
+### P2-C：CPU Reference 增量维护
+
+以下项目只在 GPU 对齐、真实资产或实验明确需要时实现，不单独抢占主线：
+
+- [ ] 粗糙 Dielectric Transmission、透明阴影与嵌套介质。
+- [ ] 完整 glTF Sampler/Mip/UV Transform 与 Alpha Visibility。
+- [ ] TLAS Binned SAH、Transform-only Refit、环境旋转/Portal 与更鲁棒的 Adaptive Sampling。
+- [ ] Skinned Mesh 动态 Bounds 和上一帧 Skin 数据只做兼容维护；动态 BLAS Refit/Rebuild 留到 GPU RT 专项测量。
+
+### P2-D：动态 C++ Plugin 与 DCC 协作
+
+- [ ] 在 P1-0 稳定后提供轻量 Blender Helper：导出选中资产为 glTF、生成/更新 `.myscene`、提交 Render Job 并打开结果目录；不在 MyRenderer 内复制建模工具。
+- [ ] 当静态模块的重启成本成为明确瓶颈后，将稳定 Module API 编译为独立 DLL；插件入口使用版本化接口，Core 继续拥有内存、线程和 GPU 资源。
+- [ ] 安全 Reload 流程必须先暂停 Timeline/Job、销毁实例、卸载旧 DLL、加载带 Build ID 的新 DLL、恢复参数，再重启 Preview；不实现 UE 式二进制 Live Coding/Object Reinstancing。
+- [ ] DLL 边界避免传递 STL 容器所有权和 OpenGL/Vulkan 对象；为 API Version、编译器/配置不匹配、加载失败和旧缓存建立明确诊断。
+- [ ] Python 只保留为可选的外部批处理、实验汇总或 Blender Helper 实现语言，不成为 MyRenderer Runtime、Scene Module 或可复现 Render Job 的依赖。
+- [ ] 若需要更复杂后期，只增加可测试的固定 Compositor Pass/Module 参数，不实现通用合成节点图。
+
+进入条件：静态 C++ Module + Batch 已稳定；只有重复编译/重启显著阻碍模块迭代时才承担 DLL ABI 与安全卸载成本。
+
+## 6. 明确后移或舍弃
+
+| 项目 | 决策 | 原因 / 重新进入条件 |
+| --- | --- | --- |
+| Face Map | 舍弃 | 角色专用，当前没有角色 Hero Scene；需要角色项目时再立项 |
+| Direction Map | 后移 | Toon Ramp 已能完成当前 Preset；只有构图控制明显不足时再加 |
+| Inverted Hull Outline | 舍弃 | 屏幕空间描边已覆盖当前需求，避免维护第二条主路径 |
+| 蓝图 / Visual Scripting / Behavior Tree | 舍弃 | 场景逻辑由 C++ Module、Timeline 与确定性 Simulation Runtime 驱动 |
+| 通用节点材质/合成编辑器 | 舍弃 | 工作量大且不服务当前五条主线；使用固定 Shader/Pass 与代码扩展 |
+| 完整 ECS / 通用 Render Graph / 大一统 RHI | 舍弃 | 维持轻量 Scene、Pass Context 与独立 Vulkan 后端 |
+| Animation Blending / State Machine / IK / Root Motion / Morph / FBX Animation | 后移且默认不做 | 保留 glTF Skin 最小兼容；自然场景不需要角色系统 |
+| 完整 TA Asset Audit 工具 | 后移 | 只有求职主方向切换为 TA Pipeline 时恢复；轻量 Blender Export/Launch Helper 保留在 P2-D |
+| Python 作为 Runtime/Scene Module 主接口 | 舍弃 | 核心扩展统一使用 C++；Python 只允许作为可选外部工具，不进入正式渲染复现合同 |
+| 内置代码 IDE/调试器 | 舍弃 | 使用 Visual Studio 等外部 IDE；MyRenderer 只负责构建、运行、日志和参数面板 |
+| UE 级反射/UHT、Object Reinstancing 与二进制 Live Coding | 舍弃 | 第一版使用显式 Registry/Parameter Metadata；动态 DLL Reload 只有在 P2-D 有真实需求时实现 |
+| Blender 式建模、雕刻、UV、复杂绑定工具 | 舍弃 | 继续使用 Blender 等 DCC 制作资产，通过 glTF 与 Helper 协作 |
+| PCSS | 可选 | 稳定 CSM 完成后再评估画质/成本，不阻塞室外场景 |
+| 完整 Weather Simulation、SPH、3D Navier-Stokes、磁流体极光 | 舍弃 | 只做视觉可信、可解释、可测的实时近似 |
+| FFT Ocean 与 Shallow Water 同时开发 | 舍弃 | 先 Gerstner，再分别验证频谱海面与局部动力学 |
+| 首版 GPU RT 支持 Skinned BLAS | 后移 | 首版只做静态与刚体；动态几何作为独立成本实验 |
+| ReSTIR GI/PT | 后移 | ReSTIR DI 先证明价值 |
+| MMIS 主线实现 | 舍弃 | 名称/目标未绑定具体方法；标准 MIS + 更好采样 + Denoiser 优先 |
+| 通用游戏物理、音频、网络、AI 和 Gameplay | 舍弃 | 项目是渲染/模拟实验室；只实现 Hero Scene 明确需要的专项 Solver |
+
+## 7. 持续交付与作品集任务
+
+这些任务不再作为单独的大阶段，而是每个 P0/P1 里程碑的完成条件。
+
+- [ ] 每个旗舰阶段至少提供 Hero Shot、同机位 On/Off、Debug View、性能表、失败案例和复现命令。
+- [ ] GPU 阶段保存带 Pass/Resource Label 的 RenderDoc 或 Nsight Capture；性能报告同时写 CPU、GPU、显存与画质代价。
+- [ ] UI/C++ Module 阶段提供默认 Workspace 截图、完整批处理示例、Module API/Parameter Schema、Render Job Schema、错误示例和 24 帧最小可复现序列。
+- [ ] README 首屏只保留定位、最强功能、Hero 图和快速运行；长篇算法与基准放入 `docs/`。
+- [ ] 每个可发布里程碑生成无需源码目录和联网的 Windows Release ZIP，并记录硬件要求与已知限制。
+- [ ] Demo Reel 在有两个以上完整新阶段后统一更新，避免每个小功能重复剪辑。
+
+## 8. 不可破坏的验收合同
+
+### 8.1 固定图与输出策略
+
+- `path-tracing-regression`：程序化固定场景、原 Reinhard 输出和既有参考路径保持不变；用于逐位/数值正确性。
+- `path-tracing-raster-comparison`：加载三个正常 `.myscene`，固定 `256×256 / 512 SPP / Depth 8 / Seed 20260915 / ACES+sRGB / 5×5 Median 展示差异`；用于产物完整性和跨算法趋势，不以零差异判定通过。
+- `stylized-acceptance`：固定机位验证 PBR/Toon、Forward/Deferred、分辨率、TAA 与 Outline；输出只写构建目录。
+- `renderer-regression-suite`：继续覆盖既有 Glass、Prism、Deferred、Lighting、Culling/LOD、TAA/SSAO、Skinning 与 Scene 基线。
+- 新功能默认新增测试目标和输出目录，不复用旧目标去重拍历史基线。
+
+### 8.2 阶段完成定义
+
+每个阶段必须同时满足：
+
+1. 同一 Scene、Camera、分辨率和参数可重复运行。
+2. 自动入口在失败、缺产物或元数据不一致时返回非零。
+3. 正确性图、Debug/AOV、性能数据和已知限制齐全。
+4. 新功能默认关闭或有兼容默认值，旧 `.myscene` 行为不变。
+5. 全量回归无未解释漂移；固定图变化必须独立审查。
+6. Timeline、C++ Module 或 Simulation 功能必须记录固定 FPS/Time Step/Seed/API Version/Build ID 与输入哈希；GUI 和 Batch 不允许各自解释任务语义。
+
+常用验收入口：
 
 ```powershell
-cmake -S . -B build
-cmake --build build --config Debug
+ctest --test-dir build-ci-msvc -C Release --output-on-failure
+cmake --build build-ci-msvc --config Release --target path-tracing-regression
+cmake --build build-ci-msvc --config Release --target path-tracing-raster-comparison
+cmake --build build-ci-msvc --config Release --target stylized-acceptance
+cmake --build build-ci-msvc --config Release --target renderer-regression-suite
+cmake --build build-ci-msvc --config Release --target renderer-benchmark-suite
 ```
 
-### 阶段 B：窗口与 OpenGL 上下文
-
-- [x] 初始化 GLFW，显式请求 OpenGL 3.3 Core Profile。
-- [x] 创建窗口，并在失败时输出明确错误后退出。
-- [x] 使用 GLAD 加载 OpenGL 函数并打印 GPU、驱动和 OpenGL 版本。
-- [x] 实现主循环：处理事件、清屏、交换缓冲。
-- [x] 使用实时 framebuffer/视口尺寸同步 `glViewport`。
-- [x] 实现 `Esc` 退出和 GLFW 资源释放。
-- [x] Debug 构建注册 OpenGL debug callback（通过 `KHR_debug`，平台支持时启用）。
-
-验收：出现可缩放的稳定窗口，背景色正确且控制台无 OpenGL 错误。
-
-### 阶段 C：GPU 管线冒烟测试
-
-- [x] 创建最小顶点/片元 Shader 文件。
-- [x] 实现 `Shader` RAII 类：读取文件、编译、链接、错误日志、`use()`、uniform 设置。
-- [x] 使用正式 OBJ Mesh 路径完成 GPU 管线冒烟测试，不再引入临时硬编码三角形。
-- [x] 验证 Shader 文件路径在从源码目录和构建目录运行时均可解析。
-- [x] 正式代码中不存在临时三角形路径。
-
-验收：窗口中显示一个由 GPU 管线绘制的三角形；故意制造 Shader 语法错误时能看到可定位的日志。
-
-### 阶段 D：OBJ 加载与 CPU 侧网格数据
-
-- [x] 定义 `Vertex`：至少包含 `glm::vec3 position` 与 `glm::vec3 normal`。
-- [x] 定义 `MeshData`：`std::vector<Vertex>`、`std::vector<uint32_t> indices` 和 AABB。
-- [x] 用 tinyobjloader 加载 OBJ，并开启三角化。
-- [x] 正确展开 OBJ 独立的位置/法线索引，建立 OpenGL 可使用的统一顶点索引。
-- [x] 对缺失法线的模型按三角形累计并归一化，生成平滑顶点法线；退化三角形会安全跳过并报告。
-- [x] 支持一个 OBJ 内的多个 shape，MVP 中合并成一个 `MeshData`。
-- [x] 检查空模型、越界索引、文件不存在和解析失败，并输出文件路径与原因。
-- [x] 根据 AABB 计算中心和尺寸，得到自动居中/缩放的模型矩阵。
-- [ ] 添加一个小型、许可证明确的 `assets/models/cube.obj` 作为固定测试资源。
-
-验收：控制台输出顶点数、三角形数和 AABB；无论 OBJ 是否自带法线，都能得到有效的 GPU 输入数据。
-
-### 阶段 E：Mesh GPU 资源管理
-
-- [x] 实现 `Mesh` RAII 类，拥有 VAO、VBO、EBO 并禁止复制。
-- [x] 将交错布局的 `Vertex` 数据一次性上传到 VBO，将索引上传到 EBO。
-- [x] 配置属性位置：`location 0 = position`、`location 1 = normal`。
-- [x] 实现 `Mesh::draw()`，内部绑定 VAO 并调用 `glDrawElements(GL_TRIANGLES, ...)`。
-- [x] 保证 OpenGL 资源在上下文销毁前释放，避免析构顺序错误。
-
-验收：OBJ 数据替代硬编码三角形后，Draw Call 成功且没有 `GL_INVALID_*` 错误。
-
-### 阶段 F：相机、变换与基础光照
-
-- [x] 实现轨道 `Camera`，提供位置、观察目标、FOV、near/far 和 View 矩阵。
-- [x] 根据 framebuffer 宽高实时计算 Projection 矩阵，防止窗口缩放后拉伸。
-- [x] 顶点 Shader 接收 `uModel`、`uView`、`uProjection`，输出世界空间位置和正确变换后的法线。
-- [x] 法线使用 normal matrix（`transpose(inverse(mat3(model)))`）变换。
-- [x] 片元 Shader 实现环境光、方向光 Lambert 和 Blinn-Phong 高光。
-- [x] 设置清屏色、`GL_DEPTH_TEST` 和深度缓冲清理。
-- [x] 已提供可切换的背面剔除；默认关闭以兼容绕序不一致的 OBJ。
-- [x] 使用 AABB 自动取景，让不同尺寸的模型初次加载即可见。
-
-验收：模型具有稳定的明暗层次，旋转模型矩阵后明暗和遮挡变化符合预期。
-
-### 阶段 G：应用整合与 MVP 验证
-
-- [x] `Application` 负责窗口生命周期、资源加载和逐帧循环。
-- [x] 程序支持 `MyRenderer.exe [model.obj]`；未传参时加载默认 `cube.obj`。
-- [x] 启动日志输出实际模型路径、GPU/OpenGL 信息、网格统计和错误原因。
-- [x] 为模型增加自动缓慢旋转，并提供轨道相机观察深度与光照。
-- [x] 分别验证 MinGW Debug 与 Release 构建，并运行真实 OpenGL 冒烟测试。
-- [x] 在 NVIDIA RTX 4060 Laptop GPU / OpenGL 3.3 环境完成运行验证。
-- [x] 编写 `README.md`：环境要求、构建命令、运行方式、按键和已知限制。
-- [x] 已完成 cube 与 bunny 的 GUI 截图验收，确认菜单、面板、取景、硬/平滑法线和模型切换。
-
-最终运行示例：
-
-```powershell
-.\build\Debug\MyRenderer.exe .\assets\models\cube.obj
-```
-
-## 6. Post-MVP 路线清单
-
-状态约定：`[x]` 已完成，`[~]` 进行中，`[ ]` 待开始。每个阶段完成后在阶段下方追加完成日期、验证命令和结果摘要，不以“代码已写完”代替验收。
-
-### 阶段 1：MVP 基线收口
-
-- [x] 让路线清单与现有 Orbit Camera、ImGui、离屏 Framebuffer、背面剔除等实现保持一致。
-- [x] 明确格式策略：OBJ 保持兼容；DAE 与 glTF 通过统一资产导入层接入，不继续扩展 OBJ 专用架构。
-- [x] Debug 构建请求 Debug Context，并在驱动支持时注册 `KHR_debug` 回调。
-- [x] MinGW Debug 构建无错误。
-- [x] 使用真实 OpenGL 上下文完成 OBJ 五帧冒烟测试。
-
-> 完成注释（2026-08-05）：阶段 1 已完成。`cmake --build build-mingw --parallel` 构建通过；隐藏窗口加载 `sphere.obj` 渲染 5 帧并以退出码 0 结束；NVIDIA 驱动报告 `KHR_debug` 已启用。回调捕获到一条 Shader 状态重编译性能提示（NVIDIA 消息 131218），不是渲染错误，留到阶段 2 调整状态设置后复测。
-
-### 阶段 2：渲染边界与统一资产数据
-
-- [x] 从 `Application` 提取 `Renderer`，让应用层只负责窗口、循环和 UI 编排。
-- [x] 定义格式无关的 `ModelData`、`MeshData`、`SubmeshData`、`MaterialData` 和节点变换。
-- [x] 定义统一 `ModelImporter` 接口；现有 `ObjLoader` 作为第一个实现接入。
-- [x] 为位置、法线、UV0、切线、索引范围和材质编号确定稳定的数据约定。
-- [x] 保证 cube、bunny、sphere 的模型统计与真实 OpenGL 渲染路径无回归。
-
-验收：替换内部数据结构后，现有 OBJ 仍可加载；渲染代码不包含 `.obj`、`.dae`、`.gltf` 等格式判断。
-
-> 完成注释（2026-08-05）：阶段 2 已完成。新增统一 `ModelData`/`ModelImporter`、`GpuModel` 与 `Renderer`；OBJ 已能生成 UV0、材质元数据和按 shape/材质范围划分的子网格。MinGW Debug 构建通过，cube（12 面）、bunny（5002 面）、sphere（320 面）均使用真实 OpenGL 上下文渲染 5 帧并以退出码 0 结束。`cow.dae` 会由导入器注册表明确报告暂不支持，未发生崩溃。NVIDIA 131218 性能提示在首次 Draw Call 仍会出现，确认属于驱动按状态编译 Shader 变体，不影响阶段验收。
-
-### 阶段 3：DAE 与 glTF 2.0 静态模型导入
-
-- [x] 在统一导入接口下接入多格式模型库，不让第三方类型泄漏到渲染层。
-- [x] 支持 DAE 的多 Mesh、节点变换、法线、UV0 和材质关联。
-- [x] 支持 glTF/GLB 的静态 Mesh、节点变换、UV0、材质和纹理引用。
-- [x] Scene 面板展示并允许加载 `.obj`、`.dae`、`.gltf`、`.glb`。
-- [x] 保留原 `ObjLoader` 回归路径；Assimp 构建只启用 COLLADA 与 glTF 导入器。
-
-验收：`bunny_hole.dae`、`cow.dae` 至少各完成一次可视化验收；`dragon2.dae` 完成加载压力测试；增加一个带 UV 的 glTF/GLB 固定测试资产。
-
-> 完成注释（2026-08-05）：阶段 3 已完成。接入官方 Assimp 6.0.5 的 import-only 构建，新增 `AssimpImporter`，节点全局变换会静态烘焙到 GPU Mesh，同时保留内部节点结构。`bunny_hole.dae`（2503 顶点/4968 面）与 `cow.dae`（2930 顶点/5856 面）完成真实窗口可视化验收；`dragon2.dae`（1082810 顶点/360944 面）在约 2.01 秒内完成加载、五帧渲染并正常退出；新增带 UV0、材质与节点变换的 `textured_triangle.gltf`，导入和渲染通过。OBJ 三模型回归仍由独立 `ObjLoader` 保证。
-
-### 阶段 4：UV、纹理与多材质渲染
-
-- [x] 实现 `Texture2D` RAII、纹理解码、缓存和缺失纹理回退。
-- [x] 按子网格和材质范围提交 Draw Call。
-- [x] 支持 DAE 外部纹理与 glTF 外部、Data URI、GLB 内嵌纹理。
-- [x] Shader 支持基础色纹理，并兼容只有常量颜色的旧模型。
-- [x] Inspector 展示当前模型的 Mesh、材质与纹理统计。
-- [x] 为带 UV 的 Spot 奶牛固定资产绑定 `spot_texture.png`，复现眼睛、口鼻、耳朵和身体斑纹。
-
-验收：同一模型至少两个材质可正确显示；UV 朝向、纹理路径、缺失纹理和无纹理回退均有固定测试资产。
-
-> 完成注释（2026-08-05）：阶段 4 已完成。新增格式无关 `TextureData`、`Texture2D`/`TextureCache`、按子网格材质绑定和基础色贴图 Shader；Assimp 的压缩/原始内嵌纹理路径统一覆盖 glTF Data URI 与 GLB，外部路径覆盖 DAE/glTF，OBJ 继续解析 MTL 纹理。新增 `material_regression.obj`（三材质、外部纹理、常量色、故意缺图）、`textured_quad.dae`（外部纹理）并为 `textured_triangle.gltf` 增加 Data URI 图像；`spot_triangulated_good.obj` 通过新增 MTL 正式绑定 `textures/spot_texture.png`。MinGW Debug 与 Release 构建通过；Debug 下 cube、bunny、sphere、bunny_hole、cow、dragon2、纹理 glTF、纹理 DAE、多材质 OBJ 和 Spot 纹理奶牛均用真实 OpenGL 上下文渲染五帧并以退出码 0 结束。缺失纹理会记录原因并使用洋红棋盘，不破坏当前场景。
-
-### 阶段 5：颜色空间与渲染质量
-
-- [x] 建立线性空间计算和 sRGB 输入/输出约定，移除含义不清的重复 Gamma 处理。
-- [x] 为离屏 RenderTarget 增加可配置 MSAA 与 Resolve。
-- [x] 增加法线贴图所需的切线空间，并处理缺失/退化 UV。
-- [x] 增加截图导出，作为视觉回归验证基础。
-
-验收：纯色、基础色纹理和法线贴图样例颜色正确；1x/4x MSAA 可切换且窗口缩放无错误。
-
-> 完成注释（2026-08-05）：阶段 5 已完成。基础色纹理使用 `GL_SRGB8_ALPHA8` 自动解码，法线贴图保持线性采样，材质 Tint 先转换到线性空间，Blinn-Phong 光照后仅在最终输出执行一次 sRGB 编码；离屏 RenderTarget 支持 1x/4x MSAA、颜色 Resolve 和解析后 PNG 导出。OBJ 导入器会生成带手性的切线，Shader 通过 TBN 使用法线贴图；缺失或退化 UV 会记录诊断并安全回退到几何法线。新增 `normal_test.ppm` 与 `degenerate_uv.obj` 固定回归资产；MinGW Debug/Release 构建均通过，并通过真实 OpenGL 上下文验证基础色/法线贴图、缺图回退、退化 UV、1x/4x MSAA 与截图导出。
-
-### 阶段 6：加载体验、诊断与性能
-
-- [x] 增加文件选择器和拖放加载。
-- [x] 将导入错误按文件、节点、Mesh、材质和纹理分层显示。
-- [x] 增加 CPU/GPU 帧时间、Draw Call、三角形和纹理内存统计。
-- [x] 为 CPU 资产导入增加自动化测试，为 GPU 路径保留真实上下文冒烟测试。
-
-验收：错误资产不会破坏当前场景；大 DAE 加载期间有明确状态；性能数据可在 UI 中查看。
-
-> 完成注释（2026-08-05）：阶段 6 已完成。Windows 原生文件选择器与 GLFW 文件拖放均接入统一加载入口；CPU 导入通过 `std::async` 在后台执行，Scene 面板显示文件大小、已用时间和活动进度，只有 CPU 验证与主线程 GPU 上传全部成功后才事务式替换当前场景。导入诊断按 File、Node、Mesh、Material、Texture 五级结构化显示；Renderer 使用四槽 OpenGL `GL_TIME_ELAPSED` 查询环避免同步阻塞，并在 UI 中显示 CPU/GPU 帧时间、Draw Call、三角形、纹理内存与最近加载耗时。新增 `MyRendererAssetTests` CTest 和 `gpu-smoke` 目标；MinGW Debug/Release 构建及 CPU 测试均通过，真实 OpenGL 下材质渲染、大 DAE 后台加载和错误资产场景保留测试通过。
-
-> 交互增强（2026-08-05）：新增可独立开关的 XZ 地面网格、带箭头的世界 XYZ 轴线，以及视口左下角随轨道相机旋转的 XYZ 方向指示器；X/Y/Z 固定使用红/绿/蓝颜色，并把 Debug Line Draw Call 纳入运行统计。
-
-> 对象变换增强（2026-08-05）：Object 面板新增世界坐标 Position XYZ；模型矩阵统一为 `Translate × Rotate × Scale × Normalize`，导入模型的 AABB 中心先归一到局部原点，默认 Position 固定为 `(0, 0, 0)`。世界网格和 XYZ 轴恢复到 `Y=0` 的真实原点，Frame model 会对准当前 Position，Reset transform 同时恢复原点并重置相机。
-
-### 阶段 7：PBR 与多 Pass
-
-- [x] 实现 glTF 金属度/粗糙度 PBR 材质。
-- [x] 增加环境贴图、IBL、阴影映射和天空盒。
-- [x] 在出现第二个真实渲染 Pass 后再引入轻量 Pass 编排。
-- [x] 增加 Tone Mapping、Bloom 等可切换后处理。
-
-验收：使用标准 PBR 测试模型完成材质、IBL、阴影和后处理的对照截图。
-
-> 完成记录（2026-08-05）：glTF 2.0 metallic-roughness 因子与 G/B 打包纹理已接入 Cook-Torrance GGX；新增程序化 HDR Cubemap、近似 IBL、天空盒、2048² 方向光 PCF 阴影；渲染流程按 `Shadow map → HDR scene → Bloom + tone map` 编排，支持 ACES、曝光和 Bloom 开关。新增 `pbr_material_test.gltf` 回归资产、CPU 导入断言与 `stage7_pbr_full.png` / `stage7_pbr_baseline.png` 对照截图。
-
-## 7. 当前格式决策
-
-- OBJ：继续支持，适合几何调试和最小回归资产；不再作为材质与场景能力的主设计目标。
-- DAE：为了兼容仓库现有 Dandelion 资产，在阶段 3 纳入支持范围。
-- glTF 2.0/GLB：作为后续纹理、材质和 PBR 的主要交换格式。
-- FBX：暂不列入近期验收；只有出现明确资产需求时再开启。
-
-## 8. 面向图形程序 / Technical Artist 求职的后续路线图（2026-08-08）
-
-### 8.1 当前项目判断
-
-结论：当前项目可以继续作为作品集主项目的 base，建议把它定位成“实时渲染器 + 资产审阅工具”，而不是扩张成完整游戏引擎。现有实现已经能证明 C++、OpenGL、GPU 光栅化、资产导入、PBR、多 Pass、调试 UI 和基础性能统计能力；下一阶段最需要补的是标准完整性、可复现的性能证据、面向美术的工作流和作品集呈现。
-
-| 维度 | 当前状态 | 作品集判断 |
-| --- | --- | --- |
-| 渲染基础 | OpenGL 3.3、PBR、阴影、IBL、Bloom、Tone Mapping、MSAA | 已超过入门 Demo，可作为后续功能的可靠基线 |
-| 资产管线 | OBJ / DAE / glTF / GLB、后台 CPU 导入、纹理缓存、诊断 | 架构方向正确，但 glTF 核心材质语义尚不完整 |
-| 工程质量 | CMake、RAII、CPU 测试、GPU smoke、KHR_debug、GPU Timer | 有工程意识，但缺 CI、视觉回归、基准场景和 GPU Capture 证据 |
-| 编辑器 / 工具 | Docking UI、Inspector、文件选择、拖放、截图、调试网格 | 能用，但还不是面向美术生产的资产审阅与调试工具 |
-| 图形程序匹配度 | C++ / GLSL / 渲染管线基础较完整 | 需要补现代 GPU 技术、系统化 profiling 和高负载优化案例 |
-| TA 匹配度 | 材质显示、导入诊断和实时参数已有基础 | 需要补资产校验、材质调试、热重载、批处理和 DCC / 商用引擎工作流 |
-| 对外展示 | README 以功能文字为主，仓库内有截图但首页没有视觉入口 | 当前最大短板之一；招聘方无法快速看到效果、架构和性能结论 |
-
-路线原则：先完成所有人共用的 P0，再在“图形程序”与“TA”中选一个主方向。主方向做 1 个有深度、可量化的旗舰案例，副方向只补 1 个能证明协作能力的工具，不同时铺开所有高级效果。
-
-### 8.2 P0：把现有 base 收口为作品集级基线（最高优先级，预计 2～4 周）
-
-#### 架构与可维护性
-
-- [ ] 拆分 `Application.cpp`：至少分离窗口/生命周期、Scene 面板、Inspector、Viewport、导入任务和作品集 Demo 控制；UI 层不直接管理 GPU 资源生命周期。
-- [ ] 将目前只保存名称与 lambda 的 `RenderPassSequence` 升级为显式 Pass 上下文：声明输入、输出、视口、清理方式和 GPU Debug Label；此时先不做通用 Render Graph。
-- [ ] 为 OpenGL 状态增加集中管理或状态缓存，明确 Depth、Blend、Cull、Polygon Mode 的进入/退出状态；连续切换阴影、线框、天空盒和透明材质后不得出现状态泄漏。
-- [ ] 增加 Shader 热重载：监视 GLSL 文件时间戳，编译失败时保留上一份可用 Program，并在 UI 显示文件、行号和编译错误。
-- [ ] 将“单个当前模型”扩展为最小 Scene / Entity 列表，支持多个对象、独立 Transform、选择、删除、复制、显隐和层级节点；不要为此引入完整 ECS。
-
-#### 渲染正确性与标准兼容
-
-- [ ] 补全 glTF 2.0 核心材质：Occlusion、Emissive、`alphaMode`（OPAQUE / MASK / BLEND）、`alphaCutoff`、`doubleSided`、Sampler 的 wrap/filter；透明物体先做稳定的后向前排序。
-- [ ] 不再把节点全局变换永久烘焙进顶点；保留 glTF Scene / Node 层级和实例关系，同一 Mesh 被多个 Node 引用时只上传一份 GPU 几何。
-- [ ] 将当前“程序化 Cubemap + 近似 IBL”升级为标准 Split-Sum IBL：HDR equirectangular 导入、Diffuse Irradiance、Prefiltered Specular Cubemap、BRDF LUT；提供近似版与标准版对照截图。
-- [ ] 改进方向光阴影：根据相机/场景 Bounds 拟合 Light Frustum，加入可调 Bias、Peter-panning / Acne 调试视图；随后再实现 3～4 级 CSM，不先堆更软的滤波。
-- [ ] 在 Light Frustum、Texel Snapping 与 Bias 稳定后增加可切换 PCSS：Blocker Search、Penumbra 估算、Poisson Disk 可变半径过滤，并保留 Hard / PCF 作为性能和画质对照；记录不同采样数的 GPU 时间。
-- [ ] 增加渲染调试视图：Albedo、World Normal、Roughness、Metallic、AO、Emissive、Depth、Shadow Cascade、Overdraw；每个视图在 Inspector 中可直接切换。
-
-#### 测试、性能与交付
-
-- [ ] 建立视觉[回归测试](https://vibe-hub.org/regression-test)：固定资产、相机、分辨率和 Renderer Settings，输出 PNG，并以像素误差 / SSIM 阈值和差异热图判定；允许显卡差异的小容差，不做逐字节比较。
-- [ ] 增加 `renderer-benchmark` 场景和命令行模式：固定分辨率、关闭 VSync、预热后采样至少 300 帧，导出 CPU frame、GPU frame、Draw Call、Triangles、纹理显存和 P50 / P95。
-- [ ] 用 RenderDoc 与 Nsight Graphics 各保存一份可复现 Capture / 报告；先判断 CPU-bound 或 GPU-bound，再记录一个真实瓶颈的假设、修改、前后数据和结论。
-- [ ] 在关键 Pass 增加 `KHR_debug` 分组和对象 Label，让 GPU Capture 中直接显示 Shadow、Scene、Bloom、Tone Map 及纹理/FBO 名称。
-- [ ] 增加 Windows CI：Debug/Release 配置、编译、`ctest`、格式/静态检查；真实 GPU smoke 保留为本机或自托管任务，不在无 GPU Runner 上伪造通过。
-- [ ] 清点第三方库与测试资产许可证，补 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和每个外部资产的来源；解决 `cube.obj` 当前“文件存在但许可证未明确”的旧待办。
-- [ ] 打包可直接运行的 Windows Release ZIP，首次启动不依赖源码目录或联网；缺少资源时给出可定位错误。
-
-P0 验收：干净机器解压即可运行；标准 glTF 材质测试场景显示正确；Shader 改坏后界面继续显示上一帧正确材质并报告错误；CI 通过；固定视觉回归通过；README 能链接到一份包含硬件、分辨率和优化前后数据的性能报告。
-
-### 8.3 跨方向旗舰 Demo：Spectral Glass、Prism Dispersion & Real-time Caustics
-
-这个阶段放在 P0 的必要渲染基础之后、图形程序/TA 分线之前。它不要求先完成 Deferred、骨骼动画或 Vulkan；不透明物体以后可以进入 Deferred，水晶仍通过 Forward Refractive Pass 绘制。目标参考管线：
-
-```text
-Shadow / Depth
-→ Opaque HDR Scene
-→ Resolve Opaque Color + Sampleable Depth
-→ Forward Refractive Glass
-→ Additive Caustics
-→ Bloom
-→ Tone Mapping
-```
-
-#### Glass-0：折射管线基础
-
-- [x] 将 HDR Opaque Scene Color 和 Depth 改为可采样纹理；4x MSAA 模式同时 Resolve Color、Depth 和 Stencil。
-- [x] 将现有 HDR Scene 拆成 Opaque Pass 与 Forward Refractive Pass，后者位于 Bloom / Tone Mapping 之前。
-- [x] 使用独立 Opaque Color 输入与 HDR Scene 输出，避免折射 Pass 同时采样和写入同一纹理形成 Framebuffer Feedback。
-- [x] 增加透明/折射渲染队列、后向前排序，以及独立的 Depth Test、Depth Write、Blend 状态。
-- [x] 场景支持同时放置水晶主体、接收焦散的地面和辅助展示物体。
-
-> Glass-0 完成（2026-08-08）：`RenderTarget` 已拆分 Opaque HDR Color、最终 HDR Scene Color 和可采样 `GL_DEPTH24_STENCIL8`；1x 直接写入纹理附件，4x MSAA 同时 Resolve Color/Depth/Stencil。`Renderer` 按 `Opaque HDR scene → Forward transparent/refractive scene → Bloom/Tone map` 执行，并通过多个 `RenderItem` 同时提交主体、程序化阴影接收地面和可选对照实例。glTF OPAQUE/MASK/BLEND、Alpha Cutoff、双面法线、全场景透明 Draw List 后向前稳定排序、Depth Test 开启/Depth Write 关闭和标准 Over 混合均已接入。`alpha_material_test.gltf` 与 `MYRENDERER_SCENE_DEMO=1` 覆盖跨对象透明排序；MinGW 构建、2 项 CTest、4x MSAA 真实 OpenGL smoke 与截图验证通过。下一阶段进入 Glass-1：Dielectric Transmission、Fresnel、IOR 与屏幕空间折射。
-
-#### Glass-1：玻璃反射与折射
-
-- [x] 增加 Dielectric Transmission 材质路径，支持 IOR、Transmission、Roughness 和 Fresnel。
-- [x] 使用 Snell 定律计算折射方向并处理 Total Internal Reflection。
-- [x] 实现屏幕空间折射：根据法线、IOR 和厚度代理采样 Opaque Scene Color / Depth；屏幕外或追踪失败时回退到 Prefiltered Environment Cubemap。
-- [x] 为粗糙玻璃生成 Opaque Scene Color Mip，按 Roughness 采样模糊背景或预过滤环境。
-- [x] 增加 Reflection、Refraction、IOR 与 Refracted UV 调试视图。
-
-> Glass-1 完成（2026-08-08）：已通过 Assimp 接入 `KHR_materials_transmission` 与 `KHR_materials_ior`，并保持光学透射和 `alphaMode` 覆盖率语义相互独立。Transmissive OPAQUE 材质进入 Refractive Queue；Shader 使用 IOR 计算介质 F0、Schlick Fresnel、Snell 折射和 Total Internal Reflection。屏幕空间折射沿折射方向执行最多 32 步 Opaque Depth Ray March，Refraction Scale 作为 Glass-2 真实厚度完成前的最大追踪距离代理；命中后按 Roughness 选择 Opaque HDR Mip，越界、遮挡失败或全反射时回退到预过滤环境 Cubemap。Refractive FBO 使用独立 Depth/Stencil Renderbuffer，避免 Depth Feedback。Inspector 提供 Transmission、Scale、Steps 和 Final/Reflection/Refraction/IOR/Refracted UV 视图。`glass_material_test.gltf` 同时覆盖光滑/粗糙玻璃、两个 IOR 和背景物体；2 项 CTest、完整 GPU smoke 与 4x MSAA Final/Debug 截图通过。下一阶段进入 Glass-2：真实 Thickness、Beer-Lambert 体积吸收和 RGB 光谱色散。
-
-#### Glass-2：厚度、体积吸收与光谱色散
-
-- [x] 接入 `KHR_materials_volume` 的均匀 Thickness、Attenuation Color 与 Attenuation Distance。
-- [x] 支持 Thickness Texture，并通过前/后表面深度 Pass 估算闭合模型的真实几何厚度；替换当前按均匀厚度和折射角估算的路径长度。
-- [x] 使用 Beer-Lambert Law 实现体积吸收，避免透明物体呈现为无体积的彩色塑料。
-- [x] 按 Khronos `KHR_materials_dispersion` 公式分别计算 R/G/B 折射率并执行三通道 Ray March；现已支持材质级扩展导入、全局 Dispersion Override 与对应 Abbe Number 显示。
-- [x] 区分材质光谱色散与全屏 Chromatic Aberration；当前色散发生在 Glass Shader 的三条折射射线上，不使用全屏 RGB 偏移。
-- [x] 增加 Thickness、Transmittance 与 RGB Dispersion 调试视图。
-- [ ] 可选增加 Thin-film Iridescence。
-
-> Glass-2A 完成（2026-08-24）：Assimp 的 `AI_MATKEY_VOLUME_*` 已映射到格式无关 `MaterialData` 与 GPU 材质，`glass_material_test.gltf` 为两种玻璃增加不同的均匀厚度、吸收颜色与吸收距离。Shader 按折射方向和表面法线估算介质路径长度，并使用 `T(x) = attenuationColor^(x / attenuationDistance)` 计算 Beer-Lambert Transmittance；Dispersion Override 使用 Khronos 推荐的 `halfSpread = (IOR - 1) × 0.025 × dispersion`，分别追踪 R/G/B 后重组透射颜色。Inspector 与环境变量支持 Thickness Scale、Dispersion 和 8 种 Glass Debug View。MinGW 构建、2 项 CTest、完整 GPU smoke 通过，并导出 4x MSAA Final / Thickness / Transmittance / RGB Dispersion 截图。Prism-2 随后补齐了材质级 `KHR_materials_dispersion` 导入与 Abbe Number 显示；Glass-2B 仍需 Thickness Texture 和前后表面深度厚度。
-
-> Glass-2B 完成（2026-08-24）：新增 `Glass front/back thickness` Pass，以两张 R32F 纹理和 `GL_MIN` / `GL_MAX` 分别保存每个像素最近入口深度与最远退出深度，不依赖资产的 `doubleSided` 或三角形绕序。玻璃 Shader 把深度跨度换算为表面法线方向厚度，再按折射角得到介质路径长度，统一供 Beer-Lambert 与 RGB 色散使用；无有效退出表面时回退到 glTF 规范的 `thicknessFactor × thicknessTexture.g`。Assimp/GPU 材质现支持线性 Thickness Texture，新增 `volume_texture_test.gltf` 和 CPU 导入断言；Inspector 增加 Geometric Glass Thickness 开关与 Front/Back Thickness Data 调试视图。当前屏幕空间方法以局部平行退出界面近似第二界面法线，多个重叠或凹形玻璃仍可能合并错误的前后深度，后续可通过对象 ID/分层深度或 Ray Query 路线扩展。经参考效果缺口复核，下一阶段先完成 Glass-2C 弯曲双界面折射，再进入 Glass-3 彩色焦散与透射阴影。
-
-#### Glass-2C：弯曲体积玻璃与 Khronos 参考效果补齐
-
-目标：让封闭球体等弯曲玻璃稳定呈现 `KHR_materials_volume` 参考图中的边缘反射、背景扭曲和随内部路径长度变化的黄绿色吸收。此阶段解决的是玻璃主体本身的可信度；Glass-3 的焦散不是该参考图成立的前置条件。
-
-- [x] 新增平滑、封闭且法线连续的 glTF/GLB 球体回归资产，材质同时覆盖 `KHR_materials_transmission`、`KHR_materials_ior` 与 `KHR_materials_volume`；不使用无法携带这些扩展且面数过低的现有 `sphere.obj` 作为最终验收资产。
-- [x] 将 Glass Front/Back Pass 扩展为可供折射路径查询的退出表面数据，至少保存退出位置/深度、退出法线和对象 ID；玻璃 Shader 在空气→玻璃和玻璃→空气两个界面分别应用 Snell 折射，不再对弯曲球体使用“退出面与入口面局部平行”的假设。
-- [x] 让入口/退出表面按对象 ID 或逐对象分层配对，避免两个玻璃物体投影重叠时把 A 的入口与 B 的出口组合成错误厚度；为单球、双球相邻、双球重叠和凹形失败边界建立调试截图。
-- [x] 把 P0 的标准 Split-Sum IBL 作为本阶段画质依赖：加载真实 HDR equirectangular 环境，生成 Diffuse Irradiance、GGX Prefiltered Specular Cubemap 与 BRDF LUT；保留程序化环境作为离线/失败回退。
-- [x] 增加 `Volume Glass` 材质预设与 Inspector 参数：Transmission、IOR、Roughness、Attenuation Color、Attenuation Distance、Thickness Scale，并提供 Clear / Olive / Amber 三组可复用配置；Dispersion 默认关闭，以免把体积吸收误认为彩虹色散。
-- [x] 制作与 Khronos 参考图具有相同“验证意图”但不复制其资产的测试舞台：原创棋盘格背景、两个并排球体、柔和地面和高对比 HDRI；固定相机分别输出 Final、Thickness、Exit Normal、Object ID、Transmittance 与 Refraction Hit。
-- [x] 建立 Glass-2C 视觉回归与性能验收：1080p、1x/4x MSAA 下保存 Approximate / Two-interface On-Off 对照；记录完整 Glass Frame 的 GPU P50/P95 与显存，并用 Exit Normal 的洋红区域显式标记屏幕外/无有效退出回退。对象缓存和折射在透明排序阶段交错执行，IBL 则在启动时 CPU 预计算，因此不伪造并不存在的独立每帧 Pass 计时。
-
-> Glass-2C 完成（2026-08-24）：新增 1,986 顶点 / 3,968 三角形的闭合流形 glTF 球体，并以逐边双引用断言验证封闭性。透明排序绘制前按 `RenderItem` 生成 R32F 入口/出口深度、RGBA16F 出射法线与 R32UI Object ID，Shader 沿内部折射方向查询退出深度场、插值交点并使用真实出射法线执行第二次 Snell 折射；屏幕外、凹形或无效退出继续回退到 Glass-2B 局部平行近似。环境系统加载原创 `glass_studio.hdr`，预计算 Diffuse Irradiance、GGX Prefiltered Specular Cubemap 和 BRDF LUT，文件缺失时保留程序化 Studio 回退。View 菜单新增 Volume Glass Preset，自动创建双球 + 原创棋盘格固定舞台；Inspector 提供双界面开关、完整体积参数、Clear / Olive / Amber Preset、Exit Normal 与 Object ID 调试视图。7 张 1920×1080 视觉基线在 1x/4x MSAA 下自动重拍比较为 7/7 通过。RTX 4060 Laptop 的 4x MSAA 双界面 On GPU P50/P95 为 2.271/3.611 ms，完整 Glass 管线估算显存 243.16 MiB；由于 IBL 在启动时 CPU 预计算、对象缓存与折射在排序阶段交错执行，报告以完整 Glass Frame 而不是虚构的独立 IBL Pass 计时。详细记录见 `docs/glass2c-volume.md`。下一阶段进入 Glass-3 彩色焦散与透射阴影。
-
-Glass-2C 验收：球体中心因路径更长而具有更浓的吸收色，边缘保持较薄且反射增强；棋盘格经过球体时产生连续、方向合理的双界面扭曲；两个球体相邻或局部重叠时不串用前后表面；关闭体积吸收、真实退出法线或标准 IBL 后的差异能在固定机位截图中明确观察。
-
-#### Prism Spectrum Demo：棱镜光谱分光专项
-
-目标：制作一个受经典棱镜分光构图启发、但使用原创模型与镜头的实时 Demo。黑色背景中，一束窄白光进入透明三棱镜，在两个空气/玻璃界面发生折射，离开后形成从红到紫、方向连续且可调的光谱带。这里要实现的是 **Light Transport（光传播）**，不是把最终画面做一次全屏 RGB 偏移。
-
-当前 base 已具备可复用能力：HDR、Bloom、透明/折射 Pass、IOR、Beer-Lambert、RGB 色散、地面/多对象场景和 GPU 时间统计。仍缺少的是“从光源出发”的光路求交、第二个出射界面、可见光束几何、连续波长采样以及专用 Demo 场景。
-
-排期建议（单人连续开发约 8～12 个工作日，视觉打磨不计入底层算法返工）：
-
-| 子阶段 | 预计时间 | 前置依赖 | 可交付结果 |
-| --- | ---: | --- | --- |
-| Prism-0：目标场景与基线 | 0.5～1 天 | Glass-2A | 固定镜头、黑背景、原创三棱镜、白色入射光占位与基准截图 |
-| Prism-1：双界面光路求解 | 1.5～2 天 | Prism-0 | CPU 可测试的入射点、内部路径、出射点与 Snell/TIR 结果 |
-| Prism-2：连续光谱模型 | 2～3 天 | Prism-1 | 15～31 波长采样、Cauchy/Abbe IOR、线性 RGB 光谱权重与能量归一化 |
-| Prism-3：HDR 可见光束 | 1.5～2 天 | Prism-2 | 白色入射束、棱镜内部束、连续/七色出射束、柔边与 Bloom |
-| Prism-4：管线/UI/调试整合 | 1～2 天 | Prism-3 | 专用 Pass、Preset、参数面板、光路与法线调试视图 |
-| Prism-5：测试与作品集验收 | 1.5～2 天 | Prism-4 | 单元测试、视觉回归、1080p 性能数据、On/Off 对照与 Demo 录屏素材 |
-
-##### Prism-0：目标场景与视觉基线
-
-- [x] 新增原创的封闭三棱柱固定资产或程序化网格；不要直接复制专辑封面的画面资产、字体或版式。
-- [x] 增加 `Prism Spectrum` Demo Preset：正面长焦固定镜头、纯黑环境、低粗糙高透射玻璃和关闭地面网格的独立场景配置。
-- [x] 定义世界空间的 `IncidentBeam` 占位：固定起点、入射方向、HDR 白色与入射面接触点；Prism-1 再替换为可调光束和真实求交结果。
-- [x] 保存固定分辨率、相机和参数的 baseline PNG；后续物理实现必须与同一基线对照。
-
-> Prism-0 完成（2026-08-24）：新增原创 `prism_spectrum.gltf` 封闭三棱柱（18 顶点 / 8 三角形），材质使用 `KHR_materials_transmission`、`KHR_materials_ior` 与 `KHR_materials_volume`。`MYRENDERER_PRISM_DEMO=1` 和 View 菜单的 `Prism spectrum preset` 会启用纯黑背景、固定正面 Orbit Pose、4x MSAA、HDR/Bloom、隐藏网格/地面/天空盒和世界空间白色入射束占位。`docs/images/prism0_baseline.png` 作为后续同机位比较基准；CPU 导入测试断言闭合网格与玻璃参数，MinGW 构建、CTest 与真实 OpenGL 截图验证通过。下一阶段 Prism-1 将把硬编码接触点升级为可测试的双界面 Ray/Prism 求交与 Snell 光路。
-
-##### Prism-1：双界面棱镜光路求解
-
-- [x] 新增不依赖 OpenGL 的 `PrismOptics` 模块，对入射 Ray 与三棱柱表面求最近交点、入射面法线、内部 Ray、出射交点和出射面法线。
-- [x] 在空气 → 玻璃与玻璃 → 空气两个边界分别应用 Snell's Law；每个边界计算 Fresnel 能量，并安全处理 Total Internal Reflection。
-- [x] 光学求解只在 Prism Preset 激活或参数重新应用时更新；格式无关 `PrismOpticalPath` 缓存交点、方向、法线、TIR 与能量，渲染层只上传动态调试线。
-- [x] 增加 CPU 单元测试：法线入射不偏折、相同 IOR 路径重合、不同 IOR 产生角分离、高 IOR 角度扫描覆盖 TIR 且不产生 NaN。红/紫顺序与连续光谱能量测试归入 Prism-2。
-
-> Prism-1 完成（2026-08-24）：新增 `src/optics/PrismOptics.*`，使用二维凸三角截面完成 Ray/Segment 最近求交，自动兼容 CW/CCW 顶点顺序；两个介质边界分别计算 Snell 折射与 Schlick Fresnel Transmittance，出射失败时返回有限的 TIR 反射方向。`DebugGrid` 的硬编码入射线已替换为动态 VBO，一次绘制 Incident / Internal / Exit 三段 HDR 光路；`PrismOpticalPath` 结果由应用层计算并缓存，Renderer 不包含求交逻辑。新增独立 `prism-optics` CTest，总测试数增至 3 项；MinGW 构建、CTest、Prism 4x MSAA 光路截图与完整 GPU smoke 通过。`docs/images/prism1_optical_path.png` 记录单波长中心光路；下一阶段 Prism-2 扩展为材质级色散与连续波长采样。
-
-##### Prism-2：连续光谱与材质参数
-
-- [x] 接入材质级 `KHR_materials_dispersion`；按规范使用 `dispersion = 20 / AbbeNumber`，Inspector 对非零 Override 同时显示换算后的 Abbe Number。
-- [x] 使用 Cauchy's Equation 从中心 IOR 和 Abbe Number 计算 380～700 nm 的波长相关 IOR；默认 21 个样本，提供 7 / 15 / 21 / 31 四档质量。
-- [x] 使用 Wyman、Sloan、Shirley 的 CIE 1931 解析近似把波长转换到线性 sRGB；在 HDR 线性空间输出，Tone Mapping 前不做 sRGB 编码。
-- [x] 对光谱样本做能量归一化，并把两次 Fresnel 透射和波长相关 Beer-Lambert 吸收计入每条波长的强度，避免采样数越高画面越亮。
-- [x] 提供 `Continuous Spectrum` 与 `Seven-band Art Direction` 两种模式：前者用于算法展示，后者用于接近参考图的清晰彩虹条带。
-
-> Prism-2 完成（2026-08-24）：`PrismOptics` 现按 `KHR_materials_dispersion` 的 `Vd = 20 / dispersion` 与两项 Cauchy 公式，为 380～700 nm 的 7/15/21/31 档样本分别计算 IOR 和双界面光路；CIE XYZ 使用 Wyman / Sloan / Shirley 解析近似并转换为线性 sRGB。每条样本把两次 Fresnel 与 Beer-Lambert 衰减相乘，再把光谱总能量归一到 1。新增窄范围 glTF/GLB JSON 适配器补齐 Assimp 6.0 尚未公开的材质扩展，Prism 资产的 `dispersion=0.33` 已经贯通 CPU 材质、GPU Uniform 与 Shader；全局 Override 为 0 时使用材质值。动态调试线现可显示 21 样本连续光谱或七色模式，`docs/images/prism2_*.png` 保存同机位结果。CPU 测试覆盖材质导入、波长颜色、红/紫 IOR 顺序、角分离、零色散重合、Beer-Lambert 正值与能量归一化。下一阶段 Prism-3 将把这些数学光路升级为相机朝向的柔边 HDR Ribbon，而不再依赖 OpenGL 线宽。
-
-##### Prism-3：可见光束渲染
-
-- [x] 新增 `SpectralBeamRenderer`，把 CPU 光路生成相机朝向的柔边 Ribbon Mesh；入射束为白色，出射束按相邻波长构建连续带状几何。
-- [x] 使用 HDR Emissive + Additive Blend 输出光束，让高亮自然进入 Bloom；光束宽度、边缘柔度、强度和曝光可调。
-- [x] 明确物理与美术边界：干净空气中的侧视光束本来不可见，本 Demo 的 Ribbon 是光路可视化；后续若实现 Volumetric Scattering，作为独立高质量模式而不是偷换概念。
-- [x] 处理 Depth Test、棱镜遮挡和内部光束裁切：外部光束不能无条件穿透实体，棱镜内部段只在棱镜轮廓内显示。
-- [x] 设计 Pass 顺序，使光束辐射可被 Glass Pass 采样，同时避免采样/写入同一 HDR 附件产生 Feedback；把 Incident / Internal / Exit Beam 分组写入 GPU Debug Label。
-
-> Prism-3 完成（2026-08-24）：新增 CPU `SpectralBeamMesh` 和 GPU `SpectralBeamRenderer`，用动态三角形 VBO 替换 Prism-2 的 `GL_LINES`。入射光使用白色柔边 Ribbon，内部光束在两个界面处收窄以限制在棱镜截面内；Continuous 模式把相邻光谱样本连接成插值扇面，Seven-band 模式保留归一化的独立色带。独立 `Spectral beam HDR` Pass 位于 Opaque 几何之后、Glass 之前，复用 Opaque Depth 做遮挡，以 `GL_ONE + GL_ONE` 加法混合写入 RGBA16F，Resolve 后同时供 Glass Refraction、Bloom 和 Tone Mapping 使用，避免 Framebuffer Feedback。三个光束批次分别使用 GPU Debug Group。Inspector 与环境变量可调 Width / Intensity / Edge Softness，并沿用全局 Exposure / Bloom。CPU 测试新增网格批次、三角形数量、有限值与边缘坐标断言；`docs/images/prism3_*.png` 保存连续和七色 4x MSAA 结果。下一阶段 Prism-4 将把完整光学参数、材质 Preset 和调试视图统一到控制层。
-
-##### Prism-4：控制、调试与可复用性
-
-- [x] Inspector 增加 Beam Direction、Width、Intensity、White Point、Central IOR、Dispersion/Abbe、Spectral Samples、Spectrum Mode、Edge Softness 与 Bloom Contribution。
-- [x] 增加 `Optical Path` 调试视图：显示入射/出射交点、表面法线、每个波长的世界空间路径、TIR 状态和每段能量。
-- [x] 至少提供 Crown Glass、Water-like、Diamond-like、Exaggerated Cover 四个 Preset；Preset 只保存参数，不复制 Shader。
-- [x] 支持暂停自动旋转、锁定镜头和一键恢复 Hero Shot，保证录屏与截图可重复。
-
-> Prism-4 完成（2026-08-24）：新增无 OpenGL 依赖的 `PrismDemo` 参数/求解层，Inspector 的入射角、中心 IOR、色散/Abbe、7/15/21/31 采样、连续/七色模式与 White Point 修改后会立即重算同一份光谱数据；Beam Width / Intensity / Edge Softness / Bloom Contribution 继续作为实时绘制参数。Crown Glass、Water-like、Diamond-like 与 Exaggerated Cover 四个 Preset 只保存参数并复用同一套 Shader；中心 IOR 同时覆盖玻璃 Shader，避免可见玻璃与 CPU 光路使用不同介质。新增独立 `Optical path debug` HDR Overlay Pass，用彩色世界空间线、界面交点、入射/出射法线和 TIR 橙色标记显示路径，Inspector 表格逐波长列出 Entry / Exit / Total Transmittance。Prism 模式支持锁定镜头、暂停旋转和一键恢复 Hero Shot，并提供环境变量用于自动截图。3 项 CTest、完整 GPU smoke 与 4x MSAA 成果图均通过；`docs/images/prism4_exaggerated_cover.png` 和 `prism4_optical_debug.png` 保存本阶段结果。下一阶段进入 Prism-5，重点是视觉回归矩阵、1080p 性能数据、On/Off 证据和作品集素材。
-
-- [x] Prism Preset 生命周期收尾：成功加载非棱镜模型时自动退出 Prism 模式，关闭光束与光路 Overlay，并恢复进入 Preset 前保存的通用 Renderer/Scene 状态；导入失败时继续保留当前棱镜场景。
-
-##### Prism-5：验收与作品集证据
-
-- [x] 视觉验收：Dispersion=0 时出射束保持白色或完全重合；开启后红到紫顺序稳定，旋转光束/棱镜时出射方向连续变化，没有屏幕空间粘连。
-- [x] 建立固定相机视觉回归，覆盖 No Prism、No Dispersion、7-band、Continuous、TIR 与 1x/4x MSAA。
-- [x] 在 1920×1080、4x MSAA 下分别记录 7/15/21/31 波长的 CPU 更新耗时、GPU Beam Pass 时间、Draw Call 和显存；若新增 Beam Pass 超过 2 ms，先分析 Fill-rate/Bloom/几何开销再优化。
-- [x] 输出同机位的 `White Beam → Prism → Spectrum` 分阶段图、调试光路图和最终 Hero Shot；录制 15～30 秒参数变化片段作为 Demo Reel 的一个章节。
-- [x] `docs/prism-spectrum.md` 与 `docs/prism5-validation.md` 已记录公式、完整 Pass 顺序、物理近似、运行参数、失败边界、视觉矩阵和性能数据。
-
-> Prism-5 完成（2026-08-24）：新增固定 RenderTarget 分辨率与无 VSync Benchmark 模式，使用 60 帧预热和 180 帧采样输出 JSON；Renderer 以独立 GPU Timestamp Query 测量 Beam Pass，并统计整帧、Draw Call 与 RenderTarget/Bloom/MSAA/Shadow/Cubemap/Beam/几何/纹理显存估算。在 RTX 4060 Laptop、1920×1080、4x MSAA 下，7/15/21/31 样本的 Beam P95 分别为 0.0205/0.0287/0.0317/0.0328 ms，均远低于 2 ms 阈值，31 样本整帧 GPU P95 为 2.8324 ms。新增 10 场景视觉回归目标和轻量 PNG MAE/Changed-pixel 比较器，覆盖 No Prism、No Dispersion、Continuous、Seven-band、TIR、角度、1x/4x MSAA 与最终 Hero Shot；同机重拍 10/10 为零差异。CPU 测试新增 2°～12° 连续角度扫描和红/紫顺序断言。生成 `White Beam → Prism → Spectrum` 1920×1080 分阶段图，以及 360 帧、24 fps、15 秒的 `docs/media/prism5_demo_reel.mp4`。原始数据和方法记录在 `docs/prism5-validation.md`；Prism Spectrum 专项至此完成，后续转入 Glass-3 彩色焦散与透射阴影。
-
-Prism Demo 验收：出射光谱必须由世界空间入射光经过两个棱镜界面求解得到，而不是固定在屏幕上的彩虹贴图；关闭色散时各波长光路重合，改变 IOR / Abbe / 入射角时结果符合预期；最终画面同时提供“物理连续光谱”和“七色美术模式”作为图形程序与 TA 两种叙事证据。
-
-#### Glass-3：彩色焦散与透射阴影
-
-- [x] 第一版实现可控 Caustics Projector / Decal，以 HDR 浮点纹理和 Additive Blend 快速复现地面彩虹。
-- [x] 增加彩色透射阴影，避免高透射玻璃继续投射纯黑阴影。
-- [x] 图形程序进阶版实现 Light-space Caustics：折射入射光并把 RGB 能量累积到接收表面。
-- [x] 为焦散增加强度、尺度、方向、锐度和动画控制，并测试漏光、离屏失败、低采样密度与闪烁。
-- [x] 增加时序稳定或空间过滤，并记录画质、GPU 时间和显存代价。
-
-> Glass-3 完成（2026-08-24）：新增 1024² RGBA16F `CausticsMap`，Projector/Decal 模式以程序化 RGB 环带提供 TA 快速定向；Light-space 模式从方向光折射玻璃入射三角形，按 R/G/B IOR 将 Photon Splat 加法累积到水平接收面。2048² RGBA16F Transmission Shadow 以乘法混合累积 Beer-Lambert 透射率，并与不透明 PCF 可见度合成，透明玻璃不再产生纯黑阴影。Inspector 提供模式、强度、尺度、方向、锐度、动画和独立开关，Debug 11/12 显示焦散与透射阴影。两次空间滤波替代历史缓冲，降低低采样网格闪烁；文档明确单接收平面、单次入射折射、离屏与低面数边界。6 张 1080p 固定回归覆盖 1x/4x、On/Off、两种模式和调试图。RTX 4060 Laptop 4x MSAA 下 Projector GPU P50/P95 为 0.071/0.072 ms，Light-space 为 0.091/0.091 ms；新增预分配显存为 48 MiB。详细记录见 `docs/glass3-caustics.md`。下一阶段进入 Glass-4 最终展示、对照矩阵与 Capture 验收。
-
-#### Glass-4：展示、测试与验收
-
-- [x] 制作两套专用展示场景：水晶主体 + 白色地面 + 黑色背景的焦散 Hero Scene，以及平滑体积球 + 棋盘格背景 + 高对比 HDRI 的 `KHR_materials_volume` 验收场景。
-- [x] 提供 Glass、Dispersion、Caustics 独立开关和相同机位的 On / Off 对照截图。
-- [x] 建立固定相机视觉回归，覆盖 IOR、Thickness、Attenuation、真实退出法线、双物体配对、Dispersion、Caustics 和 1x/4x MSAA。
-- [x] 输出 1080p 下各 Pass 的 GPU 时间、Draw Call 和显存占用，并保存带 Pass 标记的 RenderDoc / Nsight Capture。
-- [x] 为 TA 展示准备至少 3 个可复用玻璃 Preset；为图形程序展示准备算法、失败案例和优化前后报告。
-
-> Glass-4 完成（2026-08-25）：固化双球棋盘格 KHR volume 验收场景与白地黑背景 Crystal 焦散 Hero Scene；Glass、Dispersion、Caustics 现为互不耦合的开关，Clear / Olive / Amber / Crystal 四组 Preset 共用同一 Shader。新增 14 张 1920×1080 固定机位视觉回归，覆盖 IOR、Thickness、Attenuation、Exit Normal、Object ID、近似/真实双界面、色散、焦散和 1x/4x MSAA。RenderPassSequence 为每个顶层 Pass 写入 `KHR_debug` 范围并用查询环记录 GPU Timestamp；Benchmark JSON 输出逐 Pass P50/P95、Draw Call 和 291.3 MiB 实测资源估算。RTX 4060 Laptop 上真实曲面出口 Forward P50 为 0.703 ms，Light-space RGB Caustics P50 为 0.094 ms。已保存 `docs/captures/glass4_caustics.nsys-rep`，算法、失败边界与近似/高质量代价对照见 `docs/glass4-validation.md`。Glass 专项阶段至此完成，下一阶段按路线进入 GP-P1 的 Deferred Shading 基线。
-
-Glass 阶段验收：Glass-2C 完成后，弯曲球体应达到 Khronos `KHR_materials_volume` 参考图所表达的核心效果——稳定环境反射、双界面背景折射和厚度相关体积吸收；Glass-3 完成后，水晶 Hero Scene 的地面还应出现与光源/物体关系一致的彩色焦散。两套参考目标分别验收，不用焦散掩盖玻璃主体的折射错误。
-
-### 8.4 图形程序主线（Graphics Programmer Track）
-
-#### GP-P1：可观测的现代实时渲染能力（优先做）
-
-- [x] 增加 G-Buffer / Deferred Shading 路径，并保留当前 Forward 路径作对照；至少包含 Albedo、Encoded Normal、Metallic/Roughness、Depth，支持逐附件调试。
-- [x] 建立多光源压力场景：点光 / 聚光、至少三档灯光数量；记录 Forward 与 Deferred 在同一机器同一画面下的 GPU 时间、带宽和 Draw Call 差异。
-- [x] 实现实例化、CPU Frustum Culling 和 LOD 选择；用同一 Mesh 的大规模实例场景证明提交与几何优化，不以空场 FPS 作为结果。
-- [x] 从 SSAO、TAA、SSR 中选择两项实现，其中优先 TAA：需要 Motion Vector、Halton Jitter、History Reprojection、Neighborhood Clamp、静止/运动 Ghosting 对照。
-- [x] 增加骨骼动画最小闭环：glTF Skin、Joint/Weight、Animation Sampling、GPU Skinning；提供 bind pose、动画和骨骼/权重调试视图。
-- [ ] 给每项优化建立 Before / After Capture；报告必须同时写画质代价、CPU/GPU/显存变化，不能只写“FPS 提升”。
-
-> GP-P1A Deferred 基线完成（2026-08-25）：新增可切换的 Forward / Hybrid Deferred 路径；不透明物以 MRT 写入 RGBA8 Albedo、RGBA16F Encoded Normal、RG8 Metallic/Roughness 与 Depth24/Stencil8，再由全屏 Lighting Pass 重建世界坐标并计算 PBR/IBL/Shadow/Caustics；透明与玻璃保留 Forward Refractive Pass。Inspector 提供 Final + 4 种原始 Attachment 调试，调试时自动绕过天空盒、Overlay、透明和后处理。6 张 1080p 固定回归中 Forward/Deferred 最终画面 MAE 0.000517、变化像素 0.135%。RTX 4060 Laptop 4× MSAA 下 Forward/Deferred GPU P50 为 1.435/1.860 ms，显存估算为 291.2/469.1 MiB；当前单光源阶段不宣称性能收益。详见 `docs/deferred-shading.md`。下一项进入点光/聚光多光源压力场景与扩展性曲线。
-
-> GP-P1B 多光源压力场景完成（2026-08-26）：新增 Point/Spot 各半的 8/32/64 三档局部灯、有限半径逆平方衰减、平滑聚光锥，以及 100 个独立 Draw 的固定立方体舞台。Forward/Deferred 使用同一 Uniform Light Array 与 GGX BRDF；4 张 1080p 回归中同档 MAE 均低于 0.0008。RTX 4060 Laptop 4× MSAA 下，64 灯 GPU P50 为 Forward 3.773 ms、Deferred 2.183 ms（约 1.73×）；Draw Call 111/112，RenderTarget 显存 291.2/469.1 MiB，估算 Opaque Attachment 流量 213.6/387.6 MiB/frame。报告明确流量为格式推导下限而非硬件 Counter，并记录局部灯无阴影、最多 64 灯、尚未做 Light Volume/Tiled/Clustered 的边界。详见 `docs/local-light-stress.md`。下一项进入 Instancing、CPU Frustum Culling 与 LOD。
-
-> GP-P1C 实例提交与几何优化完成（2026-08-29）：新增 2,500 个 `sphere.obj` 实例的固定场景，按 GpuModel、Tint 与 LOD 使用 `glDrawElementsInstanced` 合批；CPU 从 View-Projection 提取六平面视锥，用保守世界包围球剔除，并按投影像素半径选择三档顶点聚类索引 LOD。RTX 4060 Laptop、1080p、4×MSAA 下，完整路径将 Draw Call 从 2,501 降至 19，提交三角形从 800,000 降至 477,636，CPU Frame P50 从 5.386 ms 降至 2.077 ms，GPU Frame P50 从 1.465 ms 降至 0.653 ms；2,390 个可见实例的 CPU 准备成本为 0.110 ms。已保存优化前后视觉基线和 Baseline / Instancing / +Culling / +LOD 四段 JSON，边界与复现命令见 `docs/instance-culling-lod.md`。下一项进入 TAA 与 SSAO/SSR 二选一。
-
-> GP-P1D TAA 与 SSAO 完成（2026-08-31）：TAA 使用 8 样本 Halton(2,3) Jitter、当前深度世界坐标重建、上一帧 View-Projection History Reprojection、历史深度拒绝与 3×3 Neighborhood Clamp，并以 RG16F 输出 Motion Vector、RGBA16F Alpha 输出历史接受权重；SSAO 使用 16 样本观察空间半球、G-Buffer Depth/Normal 和 5×5 深度感知滤波，仅调制 Ambient/IBL。7 张 1080p 固定回归覆盖 SSAO Final/Debug、TAA 静止/运动、Motion Vector 与 History Weight。RTX 4060 Laptop、1080p、1×MSAA 下 Baseline / TAA moving / SSAO+TAA 的 GPU P50 分别为 0.536 / 0.695 / 1.457 ms；SSAO 与 TAA Pass P50 分别约 0.728 / 0.230 ms。对象自身 Motion Vector 尚未实现，下一项进入 glTF Skin / Animation / GPU Skinning 最小闭环。详见 `docs/taa-ssao.md`。
-
-> GP-P1E 骨骼动画最小闭环完成（2026-09-01）：Assimp glTF 导入现保留每顶点四组 Joint/Weight、每 Mesh 独立 Skin Palette、Inverse Bind Matrix、完整节点层级与 Animation Channel；运行时线性采样 Translation/Scale、Quaternion Slerp Rotation，并为主渲染、Shadow、Transmission Shadow、Caustics 和 Glass Thickness Pass 上传最多 64 个关节矩阵执行 GPU Linear Blend Skinning。Inspector 支持 Bind Pose、Clip、播放/暂停、时间 Scrub、速度和 Joint Influence / Dominant Weight 调试。新增原创 3-Joint `skinning_test.gltf`、CPU 导入断言、4 张固定视觉回归和 3 组 1080p 基准；Bind/Animated GPU P50 为 0.592/0.675 ms，但小资产只用于正确性验证。动画混合、Root Motion、动态 Bounds 和骨骼 Motion Vector 属于已知后续项。详见 `docs/gpu-skinning.md`。
-
-#### GP-P2：旗舰方向三选一（只选一个做深）
-
-- [ ] **推荐：Vulkan 后端。** 复用现有格式无关资产层与场景层，使用 Vulkan 1.4、Dynamic Rendering、Timeline Semaphore、Vulkan-Hpp RAII；先完成同一 glTF 场景与 OpenGL 的画面一致性，再做资源上传、Frame-in-flight、同步验证和 RenderDoc Capture。不要一开始设计“大一统 RHI”。
-- [ ] **备选：GPU-Driven Rendering。** 将 OpenGL 基线提升到支持 Compute / SSBO / Multi-Draw Indirect 的版本，实现 GPU Frustum/Occlusion Culling、Indirect Command 生成和实例批次；用 1k / 10k / 100k 实例曲线展示扩展性。
-- [ ] **备选：高级阴影与全局光照。** 完成稳定 CSM、PCSS 或 EVSM，再实现 Probe / DDGI 风格的动态间接光近似；以稳定性、漏光、时间抖动和性能作为主要评估，不只展示静帧。
-
-GP-P2 验收：有一篇独立技术说明，包含问题定义、算法/资源生命周期图、关键 Shader 或同步设计、GPU Capture、失败尝试、硬件环境和可复现实验数据；面试时能在 10 分钟内讲清楚为什么这样设计。
-
-### 8.5 TA 主线（Technical Artist Track）
-
-#### TA-P1：把 Viewer 变成资产审阅与材质调试工具（优先做）
-
-- [ ] 增加 Asset Audit 面板，对 Mesh、材质、纹理和节点做[数据校验](https://vibe-hub.org/data-validation)：三角形/顶点数、退化三角形、缺失/越界 UV、无效切线、负缩放、材质槽、透明模式、纹理尺寸/格式/Mip/估算显存、缺失引用和命名规则。
-- [ ] 为校验规则增加 Warning / Error 阈值配置，并支持一键导出 JSON / CSV / Markdown 报告；同一资产重复导入得到稳定结果。
-- [ ] 增加 Material Inspector：逐通道预览、贴图替换、数值 Override、UV Tiling/Offset、法线强度、Alpha Cutoff、双面开关；保存为非破坏性的 Material Instance 配置。
-- [ ] 增加“问题定位”操作：点击诊断即可选中 Node / Mesh / Material，并在视口高亮对应对象、线框、UV Seam 或错误顶点。
-- [ ] 增加批处理模式：扫描文件夹、并行导入、汇总失败与预算超限资产；后台任务可取消，界面保持响应。
-- [ ] 增加 Blender 小工具或脚本：导出选中物体为 glTF、调用 MyRenderer 校验、回传报告路径；这比继续支持更多文件格式更能体现 TA Pipeline 能力。
-
-#### TA-P2：视觉旗舰方向二选一（只选一个做成完整案例）
-
-- [ ] **推荐：Stylized Material / NPR 套件。** Toon Ramp、可控 Rim Light、描边（Inverted Hull 或 Screen-space）、分层高光、Face/Direction Map、雾与 Color Grading；提供美术参数预设、不同角色/场景适配、画质与性能档位。
-- [ ] **备选：GPU VFX 套件。** Compute 粒子、Emitter、Curve/Gradient、Flipbook、Soft Particle、Depth Collision、Ribbon 或 Trail；提供 Overdraw、粒子数、CPU/GPU 时间、LOD、Pooling 和预算可视化。
-
-#### TA-P3：生产工作流证据
-
-- [ ] 为旗舰效果制作 3 个可复用 Preset，而不是只适配一个模型；参数命名、范围和 Tooltip 让陌生美术可以独立使用。
-- [ ] 制作“错误资产 → 自动报告 → 定位 → 修复 → 重新导入”的 30～60 秒无旁白流程视频。
-- [ ] 另做一个小型 Unreal Engine 5 或 Blender 对照案例，复现同一材质/效果并说明参数映射；独立渲染器证明底层理解，商用引擎案例证明可进入生产协作。
-- [ ] 为资产预算写明确平台档位，例如 PC Low / High 的三角形、纹理尺寸、显存和 Shader Complexity 阈值，并在面板中实时显示是否超标。
-
-TA 路线验收：一个未参与开发的使用者能在文档指导下导入资产、读懂问题、调整材质、保存预设并导出报告；作品集同时展示最终画面、工具交互和性能预算，不只放 Shader 静帧。
-
-### 8.6 作品集包装与求职材料（两条路线都要做）
-
-- [ ] 重写 README 首页：首屏放 Hero 图 / GIF、一句话定位、3～5 个最强能力、快速运行；把长篇构建细节下移。
-- [ ] 提供中英双语说明，至少保证英文版包含 Overview、Features、Architecture、Controls、Build、Benchmarks、Known Limitations 和 Roadmap。
-- [ ] 增加渲染帧流程图、资产数据流图和核心类关系图；图必须与当前代码一致，不画未来架构。
-- [ ] 为 PBR / IBL、阴影、后处理、调试视图和旗舰功能制作相同机位的 On / Off 对照；现有 `stage7_pbr_full.png` 只能作为开发记录，需要重新制作有构图、布光和材质层次的展示场景。
-- [ ] 录制 60～90 秒 Demo Reel：5 秒内看到最终效果，中段展示调试视图 / 工具，结尾展示性能数据与项目链接；避免长时间拖 UI 参数。
-- [ ] 增加 `docs/architecture.md`、`docs/rendering.md`、`docs/benchmarks.md` 和 `docs/asset-pipeline.md`，每篇只解释真实实现与取舍。
-- [ ] 建立 Release 页面：可执行包、Demo 视频、硬件要求、已知限制、测试状态；为招聘方提供无需编译的体验入口。
-- [ ] 每个旗舰功能都准备一段面试讲稿：需求、约束、方案、失败点、调试手段、性能数据、下一步；不只背算法定义。
-
-### 8.7 推荐执行顺序（默认选择）
-
-> 路线更新（2026-09-01）：GP-P1 已完成到骨骼动画最小闭环，项目目标随后明确为“场景渲染、路径追踪参考、风格化 Shader 与自然现象”。本节保留为历史路线；新的默认优先级、阶段门槛和取舍以第 9 节为准。
-
-1. P0 架构拆分、Shader 热重载、glTF 材质完整性、标准 IBL。
-2. P0 视觉回归、Benchmark、GPU Debug Label、RenderDoc / Nsight 前后对比。
-3. 若以棱镜分光为近期目标：按 `Glass-0～Glass-2A → Prism-0～Prism-5` 推进；随后按 `Glass-2B → Glass-2C → Glass-3 → Glass-4` 补齐真实厚度、弯曲双界面折射、通用焦散和最终展示，不让通用体积/焦散阻塞专用 Hero Demo。
-4. 若主投图形程序且不以水晶 Demo 为旗舰：先做 Deferred + 多光源 + Culling/LOD，再选择 Vulkan 作为旗舰。
-5. 若主投 TA 且不以水晶 Demo 为旗舰：先做 Asset Audit + Material Inspector + Blender 脚本，再选择 NPR 套件作为旗舰。
-6. 最后集中完成英文 README、展示场景、Demo Reel、技术文章和 Release 包。
-
-暂不优先：继续增加 FBX 等文件格式、完整 ECS、物理/音频/网络、从零制作通用节点材质编辑器、在 Vulkan 基线未稳定前做实时光追。它们工作量大，但对当前作品集主叙事的增益低。
-
-### 8.8 调研依据（访问于 2026-08-08）
-
-- Ubisoft 的 [3D Graphics Engineer / Rendering Programmer](https://www.ubisoft.com/en-us/company/careers/search/744000113760857-3d-graphics-engineer-rendering-programmer-graphics-programmer) 明确强调运行时渲染管线、可维护 C++、渲染工具和性能瓶颈分析。
-- Ubisoft 的 [Senior Render Programmer](https://www.ubisoft.com/en-us/company/careers/search/744000129436368-senior-render-programmer-tom-clancy-s-the-division-2-) 强调 C++ / Shader、图形 API、3D 数学、跨硬件、显存/性能意识和 GPU 调试。
-- Ubisoft 的 [Junior Technical Artist](https://www.ubisoft.com/en-us/company/careers/search/744000125831490-junior-technical-artist-rainbow-six-siege) 把资产技术校验、预算、内容管线、工具、模板和文档列为核心职责。
-- PlayStation 的 [Graphics Engineer](https://careers.playstation.com/senior-game-engineer-graphics/job/6003126004) 同时要求渲染系统、性能优化，以及面向设计师/美术的组件和工具，说明两条路线的共同交集是“可用工具 + 可测性能”。
-- Khronos [glTF 2.0 Specification](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) 是材质、纹理、Sampler、Skin、Animation 与 Scene 语义的验收基准。
-- Khronos 的 [Vulkan Tutorial](https://docs.vulkan.org/tutorial/latest/00_Introduction.html) 当前以 Vulkan 1.4、Dynamic Rendering、Timeline Semaphore、Slang 和现代 C++ 为教学基线，可作为 GP-P2 的版本选择依据。
-- NVIDIA [Nsight Graphics Features](https://developer.nvidia.com/nsight-graphics-features) 覆盖 Frame Capture、GPU Trace、Shader Profiling 和 GPU Pipeline State 检查，适合作为性能案例的证据工具。
-
-> 岗位页面会随招聘状态变化；本节提取的是长期能力信号，不把某一条在招职位当作唯一目标岗位。
-
-## 9. 面向场景渲染、路径追踪与自然现象的重排路线（2026-09-01）
-
-### 9.1 新的项目定位与范围
-
-项目后续定位为 **Scene Rendering Lab**：复用同一套 glTF 资产、Scene、材质、相机和灯光数据，提供实时 PBR、Stylized/NPR 与渐进式 Path Tracing 三种可对照输出；自然场景选择一个“海岸 / 海岛天气”作为长期 Hero Scene，逐步加入物理天空、水体、体积云、极光与天气状态。项目仍然不是完整游戏引擎，不扩张到玩法、音频、网络或通用编辑器。
-
-| 方向 | 是否适合 | 当前决策 | 原因与边界 |
-| --- | --- | --- | --- |
-| 骨骼动画 | 适合，但不是主线 | 保留当前最小闭环，暂停功能扩张 | 已能验证动态顶点、阴影一致性和 glTF Animation；角色混合树、Root Motion、Morph Target 对自然场景收益低 |
-| 渐进式路径追踪 | 很适合，列为核心主线 | 先做 CPU Reference Path Tracer，再迁移 GPU | 可复用现有资产/PBR 数据，并为实时光栅、玻璃和风格化结果提供 Ground Truth / 对照图 |
-| 实时光线追踪 | 适合，但放在后段 | Vulkan Raster Baseline 稳定后再做 Ray Query / RT Pipeline | 当前 OpenGL 3.3 没有 Compute Shader 或标准硬件光追接口；不应把 Vulkan、BVH、Shader Binding Table 和降噪一次性塞进当前 Renderer |
-| 风格化场景 | 很适合，短周期高回报 | 作为独立 Render Mode，小范围完成一套 NPR 套件 | 直接复用 G-Buffer、深度、法线、后处理和调试 UI，能与真实感模式形成清晰对照 |
-| 海洋 / 水体 | 很适合，建议作为自然场景旗舰 | 先做 Gerstner 水面渲染，再做 FFT Ocean；浅水交互单独立项 | Gerstner Wave 是解析动画，不宣称流体模拟；FFT 是频谱海面合成；Shallow Water 才是局部水体动力学求解 |
-| 体积云 | 很适合 | 在物理天空、Temporal Framework 与低分辨率体积合成稳定后实现 | 需要 Ray March、噪声/Weather Map、云影、时序重投影与性能分档，不能只做一张静态噪声图 |
-| 极光 | 适合，作为体积框架复用案例 | 放在体积云之后，用可控帘幕密度场实现 | 目标是可导演的 Aurora Curtain 与体积发光，不宣称完整磁层/等离子体物理模拟 |
-| 天气效果 | 适合，但必须拆分 | 用 Weather State 驱动天空、云、雾、风、降水、湿润和闪电 | 不做一套“全物理耦合天气模拟”；每个子效果有独立质量档位、调试视图和性能预算 |
-
-路线原则：**一个长期 Hero Scene、三个渲染模式、分阶段共用基础设施。** 不同时启动路径追踪、Vulkan、FFT 海洋和体积云；每阶段完成可复现验收后再进入下一阶段。
-
-### 9.2 骨骼动画模块的后续决策
-
-- [x] 保留 glTF Skin / Joint / Weight / Clip Sampling / GPU Skinning 最小闭环及固定回归资产。
-- [ ] 近期只做兼容性维护，不实现 Animation Blending、State Machine、IK、Root Motion、Morph Target 或 FBX Animation。
-- [ ] 在统一动态 Motion Vector 阶段补上一帧 Model Matrix 与上一帧 Skin Palette，解决动画配合 TAA 时的 Ghosting。
-- [ ] 为 Skinned Mesh 增加保守动态 Bounds；只有它真正进入多对象 Scene / Culling 时再实现逐帧 Bounds 更新或离线包围范围。
-- [ ] 到 Vulkan Ray Tracing 阶段，用同一资产对比 Static BLAS、Rigid TLAS Update 与 Skinned BLAS Refit/Rebuild 成本；在此之前不为光追提前扩张动画系统。
-
-结论：骨骼动画的必要程度是“资产兼容与动态几何验证需要，角色系统不需要”。现有投入已经达到合适深度，不应继续抢占路径追踪和自然场景预算。
-
-### 9.3 SR-P0：先收口共用基础（预计 2～4 周）
-
-这一阶段从 8.2、8.4 和现有已知限制中只抽取后续场景真正依赖的事项；其余 P0 包装任务后移，不机械清空旧清单。
-
-- [x] 拆分 `Application.cpp`，把 Scene 面板与 Scene 同步逻辑迁入独立编译单元；窗口、Inspector、Viewport、导入和 Demo/Preset 继续保留明确成员边界，后续按改动热点渐进拆分。
-- [x] 建立最小 `Scene` / `Entity` / `Transform` 列表：多对象、父子关系、显隐、选择、复制/删除和独立 Tint 材质实例；不引入完整 ECS。
-- [x] glTF Node Transform 与 Mesh Geometry 解耦，同一 Mesh 多实例只保存一份 GPU 几何；为后续 CPU BVH、TLAS 和场景编辑建立稳定语义。
-- [x] 将 `RenderPassSequence` 升级为显式 Pass Context：输入/输出、尺寸、清理、状态、Debug Label；增加集中式 OpenGL State Cache，先不做通用 Render Graph。
-- [x] 增加 Shader Hot Reload：失败时保留上一 Program，并在 UI 显示编译/链接日志；为 NPR、水体和体积效果迭代服务。
-- [x] 统一 Temporal Framework：相机、对象和骨骼上一帧变换、History Reset、Jitter 与 Dynamic Motion Vector；TAA 不再只覆盖相机运动。
-- [x] 把现有分散的 Visual Regression / Benchmark 汇总为 `renderer-regression-suite` / `renderer-benchmark-suite` 统一入口，并保留各专项报告。
-- [x] 增加 Windows CI、项目/依赖/资产许可证清单和 CPack Release ZIP；运行时优先从可执行文件目录解析资源。
-
-SR-P0 验收：同一场景包含至少 10 个独立 Entity 与 2 个共享 Mesh 实例；对象移动时 Motion Vector 正确，TAA 无明显拖影；Shader 编译失败不黑屏；所有现有玻璃、Deferred、TAA/SSAO、Skinning 回归继续通过。
-
-> SR-P0 完成（2026-09-02）：新增轻量 Scene Graph、10 对象共享几何固定场景、glTF Node/Mesh 实例语义、显式 Pass Context、OpenGL State Cache 与失效安全 Shader Hot Reload。G-Buffer 新增对象/骨骼 Motion Vector，GpuModel 保存上一帧节点/关节矩阵并使用保守动态包围球；三张固定回归分别验证多 Entity、刚体运动和 Skinning 运动。工程侧新增统一回归/基准目标、Windows CI、MIT 项目许可证、第三方/资产清单以及不依赖源码目录的 CPack ZIP。架构、复现命令和当前边界见 `docs/scene-rendering-foundation.md`。下一阶段进入 SR-P1 静态 Reference Path Tracer，先定义共享 `SceneSnapshot` 和可单元测试的 Ray/AABB/Triangle/BVH。
-
-### 9.4 SR-P1：静态 Reference Path Tracer（预计 4～6 周）
-
-先做 CPU 渐进式参考渲染器，用正确性和可测试性隔离 Vulkan/API 复杂度。它不是旧 Whitted Renderer 的简单迁回，而是与当前 glTF Metallic-Roughness、Transmission、IOR、Volume 和 HDRI 对齐的 Monte Carlo Path Tracer。
-
-- [x] 定义只读 `SceneSnapshot`，由实时 Scene 导出实例化 Mesh、世界变换、材质、纹理、相机、灯光与环境；Rasterizer 和 Path Tracer 不各自解析资产。
-- [x] 实现可单元测试的 Ray/AABB、Ray/Triangle、Surface Interaction、BVH Build/Traversal；先 Median Split，再用数据决定是否升级 SAH。
-- [x] SR-P1B：实现 Progressive Accumulation、确定性 Camera Ray/随机种子、Samples Per Pixel、Max Depth 和可取消单工作线程后台渲染。
-- [x] SR-P1C：补充默认第三次反弹后启用、可关闭的 Russian Roulette；Max Depth 保留为硬上限。
-- [x] SR-P1B：最小常量 Diffuse/Emissive、线性 HDR 与 Tone-mapped PNG、原创固定图与 CPU 回归。
-- [x] SR-P1C：对齐常量 glTF PBR 因子：Fresnel 能量分配的 Lambert、GGX Specular、Metallic、Roughness 与 Emissive，并提供 mixture sampling/PDF 单测和 PBR 固定图。
-- [ ] 接入 baseColor / metallic-roughness / normal 纹理采样；随后加入 Dielectric Transmission、IOR 与 Beer-Lambert Volume。
-- [ ] 实现 Next Event Estimation 与 Multiple Importance Sampling，支持方向光、点/聚光、面光源和 HDR Environment Importance Sampling。
-- [ ] 输出线性 HDR 与 Tone-mapped PNG；保留 Albedo、Normal、Depth、Direct、Indirect、Sample Count 与 Variance 调试层。
-- [ ] 建立原创 Cornell-style 场景、`pbr_material_test.gltf` 和 Volume Glass 三组固定对照；同机位输出 Raster / Path Traced / Difference。
-- [ ] 在正确性稳定后再加线程池、BVH 构建/遍历 Profile 和 Tile 调度；不以“多线程跑起来”代替能量与采样验证。
-
-> SR-P1A 完成（2026-09-03）：新增只读 `SceneSnapshot`，从实时 Scene/Camera 捕获可见 Entity、Mesh Instance、共享 `ModelData`、材质/纹理来源、相机与灯光/环境参数。`GpuModel` 接管导入后的 CPU 资产并以 `shared_ptr<const ModelData>` 与参考路径共享，同一 Mesh 的多 Node/多 Entity 不会重复解析或复制资产。CPU 几何层新增带区间的 Ray、稳健 AABB slab test、双面 Möller–Trumbore Triangle、完整 `SurfaceInteraction`，以及确定性最大质心轴 Median-Split BVH；快照可展开带稳定 Asset/Instance/Mesh/Material ID 的世界空间三角形。新增 `path-tracing-foundation` CTest，覆盖正反面、退化面、平行光线、最近命中、有限遮挡和共享实例数据链；MSVC Release 全量构建与 5 项 CTest 通过。设计与边界见 `docs/reference-path-tracer.md`。下一批进入 SR-P1B：确定性 Camera Ray、Progressive Accumulation、可取消后台任务与最小 Diffuse/Emissive 输出。
-
-> SR-P1B 完成（2026-09-05）：在共享 Snapshot/BVH 上新增按 Seed/Pixel/Sample 定位的采样流、透视 Camera Ray、完整 SPP 事务式累积、Max Depth 与单工作线程 RenderTask；取消保留完整采样前缀，重启清空，异常可读取，析构 join。共享材质增加 OBJ/glTF Emissive 因子，最小 Lambert 余弦采样与发光面命中输出到线性 RGBE HDR 和 Reinhard+sRGB PNG。原创 256×256 / 256 SPP / Depth 6 / Seed 20260905 固定图在 `docs/reference-images/sr-p1b-diffuse.{hdr,png}`。新增 CPU 测试验证相机、解析能量、确定性、取消/重启、导出解码和收敛趋势；完整构建/测试与固定图复现命令见 `docs/reference-path-tracer.md`。验证：`cmake --build build-ci-msvc --config Release --parallel 6`；`ctest --test-dir build-ci-msvc -C Release --output-on-failure`；`cmake --build build-ci-msvc --config Release --target path-tracing-regression`。PBR、NEE/MIS、RR、AOV 和多线程优化保持待做；构建 BVH 期间取消需等待构建结束。
-
-> SR-P1C 完成（2026-09-14）：新增独立 `PbrBsdf`，以 glTF 常量 Base Color / Metallic / Perceptual Roughness 构造 Lambert + Cook-Torrance GGX，按 F0 亮度混合 cosine diffuse 与 GGX half-vector sampling，并统一使用 mixture PDF 更新 throughput。积分器改用 shading normal 求值、geometric normal 偏移，默认第三次反射后执行 `[0.05,0.95]` 生存率 RR，设 0 可关闭。原创验收房间加入 Metallic 1 / Roughness 0.32 的橙铜箱体与冷色常量环境，固定 256×256 / 256 SPP / Depth 6 / Seed 20260914 图为 `docs/reference-images/sr-p1c-pbr.{hdr,png}`。CPU 测试覆盖粗糙度峰值、金属 F0、mixture sample/PDF、半球反射率、RR 执行和确定性；下一批进入 emissive triangle / 显式灯光 NEE + MIS。纹理、Transmission/IOR/Volume、HDRI importance sampling、AOV、VNDF 与多线程仍待做。
-SR-P1 验收：固定随机种子可复现；增加 SPP 后误差总体下降；Diffuse、Metal、Roughness、Emissive、Glass 与 HDRI 有独立对照；报告明确采样噪声、Firefly、收敛速度、BVH 时间和当前不支持项。
-
-### 9.5 SR-P2：Stylized / NPR 渲染模式（预计 2～3 周）
-
-该阶段是短周期视觉成果，严格复用现有 Scene、灯光、G-Buffer 和后处理，不再造一套资产系统。
-
-- [ ] 增加 PBR / Stylized Render Mode，支持 Toon Ramp、可控明暗分层、分层高光、Rim Light 与 Shadow Tint。
-- [ ] 实现一种稳定描边主路径：优先 Screen-space Depth/Normal Edge；可选 Inverted Hull 只用于适合的封闭模型。
-- [ ] 增加 Face/Direction Map、Dither、Height Fog、Bloom 与 Color Grading LUT 的风格化组合，但不做通用节点材质编辑器。
-- [ ] 提供 Clean Toon、Painterly、Night Aurora 三组 Preset；同一套参数至少在角色、建筑和自然场景三类资产上可复用。
-- [ ] 提供 Lighting Bands、Rim、Outline、Fog、LUT 调试视图和 Low/High 两档性能数据。
-
-SR-P2 验收：同一相机可一键切换 PBR 与三种 Stylized Preset；参数不是只适配一个模型；轮廓在分辨率变化、TAA 和透明物体附近有明确边界与回归图。
-
-### 9.6 SR-P3：自然场景地基与实时水面（预计 4～6 周）
-
-先建立室外光照一致性，再做水。海面首先是一套可实时导演的 Surface Synthesis 与 Water Shading，不提前宣称流体模拟。
-
-#### Atmosphere-0：物理天空与室外光照
-
-- [ ] 实现 Rayleigh / Mie Atmosphere LUT 或等价可验证方案，统一太阳方向、天空颜色、Aerial Perspective、方向光和 IBL 更新。
-- [ ] 增加昼夜时间、太阳/月亮、曝光与雾参数；提供 Transmittance、Sky View、Aerial Perspective 调试视图。
-- [ ] 把稳定 CSM、Texel Snapping、Bias 调试和室外场景 Bounds 拟合作为本阶段依赖；PCSS 仅在 CSM 正确后作为可选质量档。
-
-#### Water-0：实时海面渲染
-
-- [ ] 使用 Projected Grid、Clipmap 或可解释的相机相关 LOD 承载大范围海面；避免固定高细分平面无限扩展。
-- [ ] 先实现多组 Gerstner Waves，输出解析位移、法线、切线与速度；在 UI 中明确标注为 Wave Synthesis，不称为 Fluid Simulation。
-- [ ] 复用现有 Fresnel、IOR、Transmission、Beer-Lambert、环境反射和屏幕空间折射；加入水深着色、岸边 Foam、Whitecap 与 Underwater Fog。
-- [ ] 让水面参与 Shadow、Motion Vector、TAA 和深度合成；提供 Displacement、Normal、Depth/Absorption、Foam 与 Reflection/Refraction 调试视图。
-- [ ] 建立 Calm / Windy / Storm 三组海况，记录网格档位、波数、反射质量和屏幕覆盖率对应的 GPU 时间。
-
-SR-P3 验收：同一个海岸 Hero Scene 可从正午平静海面连续切到日落风浪；太阳、天空、雾、水面反射/折射和阴影方向一致；相机移动与波浪动画在 TAA 下稳定。
-
-### 9.7 SR-P4：体积云、极光与天气系统（预计 6～10 周，拆分交付）
-
-#### Volume-0：统一体积框架
-
-- [ ] 建立 Half/Quarter Resolution Ray March、Depth-aware Upsample、Blue-noise Jitter、Temporal Reprojection 与 History Rejection。
-- [ ] 先用 Height Fog / Local Fog Volume 验证密度、吸收、单次散射、相函数和与不透明深度的合成顺序。
-
-#### Cloud-0：体积云
-
-- [ ] 使用 Shape Noise + Detail Noise + Weather Map 控制覆盖率、云型、高度和侵蚀；噪声可离线生成，运行时不强求 Compute。
-- [ ] 实现 Sun Light March、近似多重散射、Powder/Silver Lining、云影和与物理天空一致的日夜光照。
-- [ ] 提供 Coverage、Density、Light Transmittance、Step Count、History Weight 和 Cloud Shadow 调试视图；按 1080p Low/High 档记录预算。
-
-#### Aurora-0：可导演极光
-
-- [ ] 用 Spline / Flow Map 定义 Aurora Curtain 足迹，以距离场或窄带密度场生成帘幕；叠加时变细节和高度方向发光分布。
-- [ ] 在体积框架中积分 Emission/Absorption，并通过 HDR/Bloom 与夜空、云和地面反照联动；提供 Curtain、Density、Emission 与 Composite 调试视图。
-- [ ] 明确这是实时视觉模型，不宣称磁层粒子或等离子体全物理模拟。
-
-#### Weather-0：状态驱动的天气组合
-
-- [ ] 定义 Weather State / Preset，统一驱动太阳、云量、风、雾、降水、地表湿润、闪电和音画之外的曝光变化。
-- [ ] 第一版降雨使用实例化 Rain Streak / Splash、Depth Collision 与 Wetness/Puddle 材质响应；大规模 GPU 粒子放到现代 Compute 后端。
-- [ ] 支持 Clear → Overcast → Storm 的确定性 Timeline，记录每个子系统 GPU 时间，并允许独立关闭排查耦合问题。
-
-SR-P4 验收：同一 Hero Scene 有晴天、暴风雨和极光夜三种完整 Preset；每种状态不是单独换背景图，而是共享太阳/天空/云/雾/水面/地表参数；所有体积效果有分辨率与步数档位，避免填充率失控。
-
-### 9.8 SR-P5：现代 GPU 后端、实时光追与真正的水体计算（预计 8～12+ 周）
-
-当前 OpenGL 3.3 Rasterizer 继续作为稳定对照，不直接升级成混杂的“OpenGL 4.6 + Vulkan 双重抽象”。先复用格式无关 Scene/Asset 数据，在旁路建立最小 Vulkan Renderer；同一场景画面稳定后再加入 Compute 与 Ray Tracing。
-
-- [ ] 完成 Vulkan 静态 glTF Raster Baseline：Dynamic Rendering、Descriptor、资源上传、Frame-in-flight、同步验证和 RenderDoc Capture；不先设计通用 RHI。
-- [ ] 为每个唯一 Mesh 建 BLAS、每个 Scene Entity 建 TLAS Instance；先实现静态场景与刚体 Transform Update。
-- [ ] 用 `VK_KHR_ray_query` 做混合 Ray-traced Shadow / Reflection，与 Shadow Map / SSR 保留同机位质量和性能对照。
-- [ ] 再实现 `VK_KHR_ray_tracing_pipeline` 渐进式 GPU Path Tracing，共享 SR-P1 的 BSDF、灯光语义和验收场景；加入时空积累与基础降噪。
-- [ ] 骨骼动画只作为动态几何专项：测量 BLAS Refit/Rebuild、显存和同步代价；默认 Hero Scene 不依赖动画角色。
-- [ ] 实现 Compute FFT Ocean：Tessendorf Spectrum、Inverse FFT、Choppy Displacement、Normal/Jacobian 与 Whitecap，并与 Gerstner Low 档同场景对照。
-- [ ] 将 Shallow Water 单独实现为局部 Height-field Solver，支持障碍、Impulse 与边界条件；不与远海 FFT 在第一版强行双向耦合。
-- [ ] 大规模 Rain/Snow Particle、3D Noise 生成和体积预计算可在 Compute 后端迁移；每项迁移必须保留 OpenGL Low 档或离线生成回退。
-
-SR-P5 验收：Vulkan 与 OpenGL 能加载同一 SceneSnapshot；Ray Query 至少完成阴影或反射中的一项可信案例；GPU Path Tracer 与 CPU Reference 在固定场景中趋势一致；FFT Ocean 和浅水求解明确展示频谱合成与动力学模拟的区别。
-
-### 9.9 默认执行顺序与阶段门槛
-
-1. **现在先做 SR-P0**：Scene/Entity、Node/Instance 语义、Application 拆分、Pass Context、Shader Hot Reload、Dynamic Motion Vector。
-2. **随后做 SR-P1**：静态 CPU Reference Path Tracer，先建立光线、BVH、BSDF、采样与 Ground Truth 能力。
-3. **用 SR-P2 做一次短周期视觉交付**：完成 Stylized/NPR 三 Preset，不扩成材质编辑器。
-4. **进入 SR-P3 长期 Hero Scene**：物理天空 → 室外阴影 → Gerstner 海面 → 水体材质与泡沫。
-5. **按 SR-P4 分三次交付**：体积框架/雾 → 体积云 → 极光与天气组合；每次都可独立发布。
-6. **最后进入 SR-P5**：Vulkan Baseline → Ray Query → GPU Path Tracing → FFT Ocean / Shallow Water / GPU Weather。
-7. **作品集包装贯穿阶段**：每一阶段必须同时留下 Hero Shot、Debug View、Before/After、GPU Capture、性能表、失败边界和复现命令，不集中到最后补证据。
-
-阶段门槛：若当前阶段没有固定场景、自动回归、性能预算和限制说明，则不开始下一个大型效果。单人排期中同一时间只允许一个“底层系统任务”和一个“小型视觉打磨任务”，不并行开四个旗舰模块。
-
-### 9.10 暂缓或明确不做
-
-- 暂缓动画混合树、IK、Root Motion、Morph Target、FBX Animation 和角色 Gameplay。
-- 暂缓完整 ECS、通用 Render Graph、通用节点材质编辑器和编辑器 Undo/Redo 系统。
-- 暂缓把所有 OpenGL 类抽象成大一统 RHI；Vulkan 第一版允许独立后端，通过 `SceneSnapshot` 共享数据。
-- 暂缓全物理海气耦合、SPH 大规模液体、Navier-Stokes 3D 天气、磁流体极光模拟；先做视觉可信、可解释、可测的实时模型。
-- 暂缓实时光追体积云和水体多次散射；Raster/Compute 版本达到画质与性能基线后再评估 Ray Tracing 的真实收益。
-
-### 9.11 技术依据
-
-- Khronos OpenGL 4.3 Core 首次提供 Compute Shader；当前 OpenGL 3.3 主路径不适合承载 FFT 海洋、大规模 GPU 粒子或通用 Compute Path Tracing：[OpenGL 4.3 Core Specification](https://registry.khronos.org/OpenGL/specs/gl/glspec43.core.pdf)。
-- Vulkan 实时光追依赖 Acceleration Structure、Ray Query 或 Ray Tracing Pipeline；BLAS/TLAS 的构建、更新和同步本身就是独立工程阶段：[Khronos Vulkan Ray Tracing Guide](https://docs.vulkan.org/guide/latest/extensions/ray_tracing.html)。
-- 频谱海面与 FFT 路线参考 Jerry Tessendorf 的原始课程讲义：[Simulating Ocean Water](https://jtessen.people.clemson.edu/reports/papers_files/coursenotes2004.pdf)。
-- 体积云的 Shape/Detail Noise、Weather Control、Lighting 与性能分档参考 Guerrilla 的原始分享：[The Real-Time Volumetric Cloudscapes of Horizon Zero Dawn](https://www.guerrilla-games.com/read/the-real-time-volumetric-cloudscapes-of-horizon-zero-dawn)。
-- 物理天空可从 Rayleigh/Mie 预计算散射建立正确性基线：[Precomputed Atmospheric Scattering](https://onlinelibrary.wiley.com/doi/pdf/10.1111/j.1467-8659.2008.01245.x)。
-- Aurora Curtain、距离场与 GPU 体积积分的可行性参考原论文：[Interactive Volume Rendering Aurora on the GPU](https://www.cs.uaf.edu/~olawlor/papers/2010/aurora/lawlor_aurora_2010.pdf)。
+## 9. 实际执行顺序
+
+1. **P0-A 回归基线审计**。
+2. **P0-B Stylized/NPR 收口**。
+3. **P0-C GUI CPU Progressive Preview**。
+4. **P0-D AOV Denoising + Sampling 改进**。
+5. **P1-0 C++ 模块渲染工作台**：Workspace → Headless Render Job → Timeline → 静态 Scene/Simulation Module → Parameter Registry。
+6. **P1-A 物理天空 + CSM + Gerstner Water Hero Scene**，同时交付由 C++ Module 驱动的可重复昼夜/海况序列。
+7. **P1-B Vulkan Raster → Ray Query → GPU Path Tracing + SVGF**，接入同一 Workspace/Render Job。
+8. **P1-C ReSTIR DI 对照实验**。
+9. 根据作品集缺口在 **P2 体积**、**P2 水体/天气 Compute** 与 **P2-D 动态 C++ Plugin/DCC 协作**中只选一个继续。
+
+同一时间最多进行一个底层系统任务和一个小型视觉打磨任务。任何阶段没有自动回归、性能预算和限制说明时，不启动下一个大型效果。

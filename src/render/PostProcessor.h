@@ -5,6 +5,7 @@
 #include <memory>
 
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 
 class RenderTarget;
 class Shader;
@@ -22,6 +23,14 @@ struct PostProcessSettings {
     float temporalHistoryWeight{0.9f};
     unsigned int depthTexture{0};
     unsigned int objectMotionTexture{0};
+    bool outline{false};
+    bool outlineNormalAvailable{false};
+    float outlineWidth{1.5f};
+    float outlineDepthThreshold{0.025f};
+    float outlineNormalThreshold{0.25f};
+    glm::vec3 outlineColor{0.025f, 0.035f, 0.055f};
+    unsigned int outlineNormalTexture{0};
+    glm::mat4 inverseProjection{1.0f};
     glm::mat4 inverseCurrentViewProjection{1.0f};
     glm::mat4 previousViewProjection{1.0f};
 };

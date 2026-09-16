@@ -3,6 +3,14 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
+struct CameraOrbitState {
+    glm::vec3 target{0.0f};
+    float yawDegrees{42.9718f};
+    float pitchDegrees{20.0535f};
+    float distance{3.2f};
+    float fieldOfViewDegrees{45.0f};
+};
+
 class Camera {
 public:
     Camera();
@@ -22,6 +30,9 @@ public:
         float distance,
         float fieldOfViewDegrees
     );
+
+    CameraOrbitState orbitState() const;
+    void setOrbitState(const CameraOrbitState& state);
 
     float fieldOfView() const { return fieldOfViewDegrees_; }
     void setFieldOfView(float degrees);

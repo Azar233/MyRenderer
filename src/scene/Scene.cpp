@@ -15,13 +15,29 @@ glm::mat4 SceneTransform::matrix() const {
     return result * assetTransform;
 }
 
-SceneEntityId Scene::createEntity(std::string name, const GpuModel* model) {
+SceneEntityId Scene::createEntity(
+    std::string name,
+    const GpuModel* model,
+    std::string modelResource
+) {
     const SceneEntityId id = nextId_++;
+    return createEntityWithId(id, std::move(name), model, std::move(modelResource));
+}
+
+SceneEntityId Scene::createEntityWithId(
+    SceneEntityId id,
+    std::string name,
+    const GpuModel* model,
+    std::string modelResource
+) {
+    if (id == invalidSceneEntityId || find(id) != nullptr) return invalidSceneEntityId;
     SceneEntity entity;
     entity.id = id;
     entity.name = std::move(name);
     entity.model = model;
+    entity.modelResource = std::move(modelResource);
     entities_.push_back(std::move(entity));
+    nextId_ = std::max(nextId_, id + 1U);
     return id;
 }
 
@@ -64,6 +80,7 @@ bool Scene::setParent(SceneEntityId child, SceneEntityId parent) {
 
 void Scene::clear() {
     entities_.clear();
+    nextId_ = 1U;
 }
 
 SceneEntity* Scene::find(SceneEntityId id) {

@@ -6,6 +6,7 @@
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 namespace pathtracer {
 
@@ -35,6 +36,7 @@ struct Triangle {
     glm::vec3 positions[3]{};
     glm::vec3 normals[3]{};
     glm::vec2 texCoords[3]{};
+    glm::vec4 tangents[3]{};
     glm::vec3 tint{1.0f};
     std::uint32_t primitiveIndex{0U};
     std::uint32_t instanceIndex{0U};
@@ -53,6 +55,8 @@ struct SurfaceInteraction {
     glm::vec3 shadingNormal{0.0f, 1.0f, 0.0f};
     glm::vec3 barycentrics{0.0f};
     glm::vec2 texCoord{0.0f};
+    // xyz is the interpolated world-space tangent; w is bitangent handedness.
+    glm::vec4 tangent{0.0f};
     glm::vec3 tint{1.0f};
     std::uint32_t primitiveIndex{0U};
     std::uint32_t instanceIndex{0U};

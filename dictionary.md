@@ -2,7 +2,7 @@
 
 本文档记录 MyRenderer 已使用、正在实现和路线图中即将使用的图形学与工程术语。解释优先服务于理解本项目，不追求替代完整教材。
 
-最后更新：2026-09-03
+最后更新：2026-09-14
 
 ## 阅读与维护约定
 
@@ -110,6 +110,8 @@
 | 术语 | 通俗解释 | 在 MyRenderer 中的作用 | 状态 |
 | --- | --- | --- | --- |
 | Texture Sampling（纹理采样） | Shader 根据 UV 从纹理读取颜色或数据。 | 基础色、法线、金属度/粗糙度、阴影等都通过采样获得。 | 已实现 |
+| CPU Texture Cache | 在离线路径追踪开始前把快照中的纹理解码为线性可查询 texel，避免每条光线路径重复读文件或解码。 | `SceneTextures` 按 Asset 保存 Base Color、Metallic-Roughness、Normal 与 Thickness 的只读 CPU 副本。 | 已实现 |
+| Bilinear Filtering（双线性过滤） | 取 UV 周围四个 texel，并按小数位置插值，避免最近邻采样的方块跳变。 | CPU Reference Path Tracer 采用 Repeat 与 texel-center 双线性，并让 sRGB texel 在线性空间参与过滤。 | 已实现（基础层） |
 | Sampler | 定义纹理过滤与超出 UV 范围时如何重复/截断的规则。 | 当前 OpenGL Texture 有固定参数；完整 glTF Sampler 语义待补。 | 部分实现 |
 | Mip / Mipmap | 同一纹理的多级缩小版本，远处或模糊采样时减少闪烁并提高缓存效率。 | 环境 Cubemap 与 Opaque HDR Color 都有完整 Mip；粗糙玻璃按 Roughness 选择更模糊层级。 | 已实现 |
 | sRGB | 面向显示和图片存储的非线性颜色编码。 | 基础色纹理以 sRGB 格式上传并由 GPU 解码。 | 已实现 |
@@ -125,6 +127,11 @@
 | --- | --- | --- | --- |
 | Blinn-Phong | 经典经验光照模型，用漫反射和高光近似表面明暗。 | 可作为非 PBR 对照路径。 | 已实现 |
 | PBR（Physically Based Rendering） | 使用接近物理规律、参数可跨环境复用的材质与光照方法。 | 当前采用 glTF Metallic-Roughness 工作流。 | 已实现 |
+| NPR（Non-Photorealistic Rendering） | 不追求照片级物理还原，而是有意识地控制明暗、轮廓和色彩语言。 | SR-P2 复用现有 Scene、灯光与后处理，提供独立 Stylized / Toon Render Mode。 | 已实现（表面光照） |
+| Toon Ramp / Lighting Bands | 把连续光照量化成少量明暗层级，形成动画或插画式块面。 | 主光与局部灯的 `N·L` 可量化为 2～8 档，并以 Band Softness 控制过渡。 | 已实现 |
+| Rim Light（边缘光） | 根据表面与视线的夹角强化物体轮廓附近的亮边。 | Stylized 模式可调颜色、宽度、软度与强度，背光侧权重更高。 | 已实现 |
+| Shadow Tint（阴影染色） | 用指定颜色替代纯黑阴影，让暗部保持统一的美术色调。 | Toon 方向光把 Shadow Map 可见度与场景级 Shadow Tint 混合。 | 已实现 |
+| Screen-space Outline（屏幕空间描边） | 从已经渲染的深度和法线图寻找轮廓，不要求复制并膨胀原模型。 | SR-P2B 在 TAA 后按像素宽度合成；Deferred 使用 Depth/Normal，Forward 使用 Depth-only。 | 已实现 |
 | BRDF | 描述光从某方向射入后，会以多少能量反射到观察方向的函数。 | Cook-Torrance 用多个项组合出 PBR 高光与漫反射。 | 已实现 |
 | Cook-Torrance | 常用微表面 PBR BRDF 框架。 | `basic.frag` 组合 GGX 分布、几何遮蔽和 Fresnel。 | 已实现 |
 | GGX | 描述微表面法线分布的模型，能产生较自然的长尾高光。 | 当前用于 PBR Specular Distribution。 | 已实现 |
@@ -132,7 +139,9 @@
 | Roughness（粗糙度） | 表面越粗糙，高光越宽越模糊。 | glTF 打包纹理 G 通道与 Factor 相乘。 | 已实现 |
 | Fresnel Effect（菲涅耳效应） | 观察角度越贴近表面，反射通常越强。 | PBR 当前使用 Schlick 近似；玻璃反射/透射也依赖它。 | 已实现 |
 | Energy Conservation（能量守恒） | 反射、透射、吸收的光能总和不应凭空超过入射能量。 | 当前不透明 PBR近似遵循；Glass 材质需继续保证。 | 部分实现 |
-| IBL（Image-based Lighting） | 用环境图像提供来自四面八方的光照和反射。 | 当前使用程序化 Cubemap 与近似预滤波。 | 部分实现 |
+| IBL（Image-based Lighting） | 用环境图像提供来自四面八方的光照和反射。 | 实时路径使用预积分 Cubemap；CPU 参考路径直接采样等距柱状 HDR Environment。 | 已实现 |
+| Environment Importance Sampling | 按环境 texel 的亮度与球面面积选择方向，让太阳等高亮小区域获得更多样本。 | SR-P1F 使用 Rec.709 Luminance × `sin(theta)` CDF，并输出立体角 PDF 参与 MIS。 | 已实现 |
+| Infinite-area Light（无限环境光） | 位于无限远、只由方向决定亮度的光源；阴影查询没有有限终点。 | HDR Environment 作为 `SceneLights` 条目执行 NEE，无限 Shadow Ray 检查几何遮挡。 | 已实现 |
 | Cubemap | 由六个方向组成的立方体纹理，适合表示远处环境。 | 用于天空盒与 PBR 环境采样。 | 已实现 |
 | Skybox（天空盒） | 把环境 Cubemap 作为无限远背景显示。 | 在主场景模型之前绘制。 | 已实现 |
 | Split-sum IBL | 把环境镜面反射积分拆成预过滤 Cubemap 与 BRDF LUT，运行时快速组合。 | P0 计划从当前近似 IBL 升级。 | 计划 |
@@ -286,6 +295,29 @@
 | Ray Intersection（射线求交） | 判断一条带方向和有效距离的射线最先撞到哪个几何表面。 | SR-P1A 支持 Ray/AABB 和双面 Ray/Triangle，并输出重心坐标、UV 与法线。 | 已实现（CPU） |
 | Surface Interaction（表面交互） | 汇总一次命中的位置、距离、几何/着色法线、UV、朝向及材质身份，是后续 BSDF 计算的输入。 | 几何求交会保留 Asset/Instance/Mesh/Material/Primitive ID。 | 已实现（CPU） |
 | BVH（Bounding Volume Hierarchy） | 用层级包围盒排除大量不可能命中的三角形，减少逐三角形测试。 | SR-P1A 使用确定性的最大质心轴 Median Split，并优先遍历近节点。 | 已实现（CPU Median Split） |
+| Next Event Estimation（NEE） | 在表面主动选择一个光源并发射阴影射线，而不是只等待随机反弹碰巧撞到光源。 | SR-P1D/F 统一采样发光三角形、显式灯光与 HDR Environment，显著降低小亮区噪声。 | 已实现 |
+| Multiple Importance Sampling（MIS） | 将不同采样策略按各自 PDF 加权组合，减少某一种策略在不擅长区域产生的高方差。 | Power Heuristic 同时配对 BSDF 与面光、HDR Environment 的采样/命中贡献。 | 已实现 |
+| Delta Light（Delta 光源） | 只从唯一方向或位置贡献能量、在立体角上没有有限面积的理想光源。 | CPU 参考路径把方向光、点光和聚光灯作为 Delta Light，只用 NEE 估计，不与 BSDF 方向 PDF 混合。 | 已实现 |
+| Dielectric Transmission（绝缘体透射） | 光在非金属透明材质的界面按反射或折射继续传播。 | SR-P1G 按 `Transmission × (1-Metallic)` 选择光滑 Delta 介质分支，保留剩余不透明 PBR 分支。 | 已实现（CPU 光滑介质） |
+| Exact Dielectric Fresnel | 根据入射角与界面两侧 IOR 精确计算非偏振反射率；无法折射时结果为 1。 | CPU 参考路径用它选择镜面反射、Snell 折射或全反射，并对 Delta 路径跳过连续 PDF 的 MIS。 | 已实现 |
+| Beer-Lambert Volume（比尔-朗伯体积吸收） | 光在吸收介质中传播越远，各颜色通道按指数规律衰减越多。 | SR-P1G 使用 `attenuationColor^(distance/attenuationDistance)`，在闭合材质的进入与退出界面之间累计真实世界距离。 | 已实现（单层介质） |
+| AOV（Arbitrary Output Variable） | 把 Beauty 之外的材质、几何或光照中间量保存为独立图像，便于定位误差和后期合成。 | SR-P1H 同步输出 Albedo、Normal、Depth、Direct、Indirect、Sample Count 与 Variance 的 HDR/PNG。 | 已实现（CPU） |
+| Direct / Indirect AOV | 把相机到第一表面的直接贡献与经过一次以上散射的间接贡献分开。 | 两者逐样本相加可重建 Beauty；第一表面 NEE 和直接可见光源属于 Direct。 | 已实现（CPU） |
+| Sample Variance（样本方差） | 衡量同一像素不同 Monte Carlo 样本波动大小；高值通常意味着噪声仍明显。 | 对线性 Beauty 的 Rec.709 亮度保存一/二阶矩，并以 `N-1` 输出无偏估计，供后续 Adaptive Sampling 使用。 | 已实现（CPU） |
+| Tile Scheduling（分块调度） | 把图像切成小矩形任务，让多个线程动态领取，减少快慢像素造成的线程空闲。 | SR-P1I 默认按 16×16 row-major Tile 建表，Worker 用原子索引领取，完成后仍按像素顺序提交。 | 已实现（CPU） |
+| Persistent Thread Pool（持久线程池） | 创建一次工作线程并重复使用，避免每轮渲染反复创建和销毁线程。 | `TileThreadPool` 跨全部 SPP Pass 保留线程，支持自动/指定 Worker 和协作取消。 | 已实现（CPU） |
+| Progress Publication Throttling（进度发布节流） | 限制大型中间结果复制给 UI/调用方的频率，同时不降低内部渲染速度。 | `RenderTask` 默认每 100 ms 发布一次完整 Beauty/AOV，结束状态强制发布。 | 已实现（CPU） |
+| BVH Traversal Profile | 统计射线遍历时测试过多少包围盒和三角形，用数据判断加速结构是否有效。 | SR-P1I 分别记录 Path/Shadow Ray、Bounds/Triangle Test，并与 BVH 构建时间、节点和深度一同输出。 | 已实现（CPU） |
+| Surface Area Heuristic（SAH） | 用候选子节点的表面积和 Primitive 数估计未来遍历成本，比单纯从中间切开更贴合空间分布。 | SR-P1J 使用 16-bin SAH，将固定场景 Triangle Test 降低约 62.5%，并保留 Median 对照。 | 已实现（CPU） |
+| Conservative Bounds（保守包围盒） | 包围盒需略大于真实几何，避免浮点舍入让本应命中的射线在 BVH 上层被错误剔除。 | Triangle Bounds 按坐标尺度增加极小 Padding，保证 Median/SAH 对掠射光线结果一致。 | 已实现（CPU） |
+| Stable Hit Tie-break（稳定命中裁决） | 多个表面距离几乎相同时使用固定身份决定结果，而不是依赖遍历先后。 | SR-P1J 在尺度相关近等距窗口内选择较小 Primitive ID，使不同 BVH 树形输出一致。 | 已实现（CPU） |
+| BLAS（Bottom-Level Acceleration Structure） | 为一份局部空间 Mesh Geometry 建一次加速结构，供多个刚体实例共享。 | SR-P1K 按 Asset/Mesh 去重；400 个立方体只保存一份 12 Triangle BLAS。 | 已实现（CPU） |
+| TLAS（Top-Level Acceleration Structure） | 在场景层组织带 Transform 的实例包围盒，命中后把 Ray 变换到对应 BLAS 的局部空间。 | SR-P1K 使用确定性单实例叶 TLAS，并把命中法线、切线、材质和稳定 Primitive ID 还原到世界空间。 | 已实现（CPU 静态快照） |
+| Acceleration Auto Selection（加速结构自动选择） | 根据场景是否真正复用几何选择单层世界 BVH 或 BLAS/TLAS，避免一种结构在所有场景中硬套。 | 展开 Triangle 数至少为唯一 Triangle 数两倍时选择 BLAS/TLAS，否则保留 World SAH BVH。 | 已实现（CPU） |
+| Adaptive Sampling（自适应采样） | 低噪声像素提前停止，把路径预算留给玻璃、间接光等仍未收敛区域。 | SR-P1L 每隔固定 SPP Batch 用亮度样本均值/方差估计 95% 置信区间，并为每像素保存独立 Sample Count。 | 已实现（CPU） |
+| Confidence Interval（置信区间） | 用样本方差与数量估计当前像素均值的不确定范围，而不是直接把低亮度误判为低噪声。 | 停止条件为 `1.96 × sqrt(variance / N) <= max(relative × abs(mean), absolute)`。 | 已实现（CPU 亮度） |
+| Cross-renderer Comparison（跨渲染器对照） | 用同一场景、相机和显示变换比较实时 Raster 与离线 Path Tracer，定位算法近似差异。 | SR-P1M 输出 Raster、ACES/sRGB Path Traced、原始 4× Difference、5×5 Median 展示 Difference、Triptych、未滤波 JSON 指标和 AOV。 | 已实现 |
+| PSNR（Peak Signal-to-Noise Ratio） | 将图像 RMSE 转为分贝；数值越高表示显示空间误差越小，零误差时为无穷大。 | SR-P1M 与 MAE、RMSE、Changed Fraction 一起报告，但不把不同渲染算法设成像素等价门槛。 | 已实现（诊断） |
 | Temporal Reprojection（时序重投影） | 根据运动向量把上一帧结果映射到当前帧。 | TAA 使用上一帧 Color/Depth ping-pong，越界或深度不兼容时拒绝历史。 | 已实现 |
 | Jitter | 每帧轻微移动投影采样位置，用多帧积累获得更密集采样。 | TAA 使用 8 样本 Halton(2,3) 序列偏移投影矩阵。 | 已实现 |
 | Frustum Culling（视锥剔除） | CPU/GPU 不提交相机视野外的物体。 | GP-P1C 从 View-Projection 提取六个平面，以世界空间包围球保守判断 2,500 个实例的可见性。 | 已实现（CPU） |

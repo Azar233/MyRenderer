@@ -135,7 +135,9 @@ SceneSnapshot SceneSnapshotBuilder::finish() {
     return std::move(snapshot_);
 }
 
-std::vector<Triangle> buildWorldTriangles(const SceneSnapshot& snapshot) {
+namespace {
+
+std::vector<Triangle> buildWorldTrianglesImpl(const SceneSnapshot& snapshot, bool emissiveOnly) {
     std::size_t triangleCapacity = 0U;
     for (const SceneSnapshotInstance& instance : snapshot.instances()) {
         if (instance.assetIndex >= snapshot.assets().size()) continue;
@@ -145,7 +147,8 @@ std::vector<Triangle> buildWorldTriangles(const SceneSnapshot& snapshot) {
     }
 
     std::vector<Triangle> triangles;
-    triangles.reserve(triangleCapacity);
+    if (!emissiveOnly) triangles.reserve(triangleCapacity);
+    std::uint32_t globalPrimitiveIndex = 0U;
     for (std::size_t instanceIndex = 0; instanceIndex < snapshot.instances().size(); ++instanceIndex) {
         const SceneSnapshotInstance& instance = snapshot.instances()[instanceIndex];
         if (!instance.transformInvertible || instance.assetIndex >= snapshot.assets().size()) continue;
@@ -178,9 +181,20 @@ std::vector<Triangle> buildWorldTriangles(const SceneSnapshot& snapshot) {
                 || indices[2] >= mesh.vertices.size()) {
                 continue;
             }
+            const glm::vec3 localCross = glm::cross(
+                mesh.vertices[indices[1]].position - mesh.vertices[indices[0]].position,
+                mesh.vertices[indices[2]].position - mesh.vertices[indices[0]].position
+            );
+            if (!std::isfinite(glm::dot(localCross, localCross))
+                || glm::dot(localCross, localCross) <= 1.0e-12f) {
+                continue;
+            }
+            const std::uint32_t primitiveIndex = globalPrimitiveIndex++;
 
             Triangle triangle;
             bool finitePositions = true;
+            const glm::mat3 tangentToWorld(instance.objectToWorld);
+            const float handednessScale = glm::determinant(tangentToWorld) < 0.0f ? -1.0f : 1.0f;
             for (std::size_t corner = 0; corner < 3U; ++corner) {
                 const Vertex& vertex = mesh.vertices[indices[corner]];
                 triangle.positions[corner] = glm::vec3(
@@ -188,6 +202,11 @@ std::vector<Triangle> buildWorldTriangles(const SceneSnapshot& snapshot) {
                 );
                 triangle.normals[corner] = transformNormal(instance.normalToWorld, vertex.normal);
                 triangle.texCoords[corner] = vertex.texCoord0;
+                const glm::vec3 tangent = transformNormal(tangentToWorld, glm::vec3(vertex.tangent));
+                triangle.tangents[corner] = glm::vec4(
+                    tangent,
+                    vertex.tangent.w == 0.0f ? 0.0f : vertex.tangent.w * handednessScale
+                );
                 finitePositions = finitePositions && finiteVector(triangle.positions[corner]);
             }
             const glm::vec3 geometricNormal = glm::cross(
@@ -197,15 +216,34 @@ std::vector<Triangle> buildWorldTriangles(const SceneSnapshot& snapshot) {
             if (!finitePositions || glm::dot(geometricNormal, geometricNormal) <= 1.0e-12f) continue;
 
             triangle.tint = instance.tint;
-            triangle.primitiveIndex = static_cast<std::uint32_t>(triangles.size());
+            triangle.primitiveIndex = primitiveIndex;
             triangle.instanceIndex = static_cast<std::uint32_t>(instanceIndex);
             triangle.meshIndex = instance.meshIndex;
             triangle.materialIndex = materialByIndex[firstIndex];
             triangle.assetIndex = instance.assetIndex;
+            if (emissiveOnly) {
+                if (triangle.materialIndex < 0
+                    || static_cast<std::size_t>(triangle.materialIndex) >= model->materials.size()
+                    || glm::all(glm::lessThanEqual(
+                        model->materials[triangle.materialIndex].emissiveFactor,
+                        glm::vec3(0.0f)))) {
+                    continue;
+                }
+            }
             triangles.push_back(std::move(triangle));
         }
     }
     return triangles;
+}
+
+} // namespace
+
+std::vector<Triangle> buildWorldTriangles(const SceneSnapshot& snapshot) {
+    return buildWorldTrianglesImpl(snapshot, false);
+}
+
+std::vector<Triangle> buildWorldLightTriangles(const SceneSnapshot& snapshot) {
+    return buildWorldTrianglesImpl(snapshot, true);
 }
 
 } // namespace pathtracer
