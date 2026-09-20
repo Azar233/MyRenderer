@@ -182,7 +182,8 @@ std::vector<float> RenderImage::variancePixels() const {
 }
 ProgressiveRenderer::ProgressiveRenderer(SceneSnapshot snapshot, RenderSettings settings)
     : snapshot_(std::move(snapshot)), settings_(settings),
-      lights_(snapshot_, buildWorldLightTriangles(snapshot_)), textures_(snapshot_),
+      lights_(snapshot_, buildWorldLightTriangles(snapshot_), settings.lightSelectionStrategy),
+      textures_(snapshot_),
       tiles_(makeRenderTiles(settings.width, settings.height, settings.tileSize)),
       tilePool_(resolvedWorkerCount(settings.workerCount, tiles_.size())) {
     validate(snapshot_.camera(), settings_);
@@ -343,7 +344,8 @@ ProgressiveRenderer::TraceResult ProgressiveRenderer::trace(
                                                 : powerHeuristic(
                                                       light.pdf,
                                                       materialBsdfPdf(
-                                                          evaluated, n, -ray.direction, light.direction
+                                                          evaluated, n, -ray.direction, light.direction,
+                                                          settings_.ggxSamplingStrategy
                                                       )
                                                   );
                     const glm::vec3 contribution =
@@ -361,7 +363,8 @@ ProgressiveRenderer::TraceResult ProgressiveRenderer::trace(
             -ray.direction,
             hit.frontFace,
             sampler.next(),
-            {sampler.next(), sampler.next()}
+            {sampler.next(), sampler.next()},
+            settings_.ggxSamplingStrategy
         );
         if (!bsdf.valid) break;
         const float geometricSide = glm::dot(hit.geometricNormal, bsdf.direction);
@@ -509,55 +512,119 @@ RenderTask::~RenderTask() {
 }
 void RenderTask::cancel() {
     cancel_.store(true);
+    pauseCondition_.notify_all();
 }
 void RenderTask::wait() {
     if (worker_.joinable())
         worker_.join();
 }
 RenderProgress RenderTask::progress() const {
+    const auto snapshot = progressSnapshot();
+    return snapshot ? *snapshot : RenderProgress{};
+}
+std::shared_ptr<const RenderProgress> RenderTask::progressSnapshot() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return progress_;
 }
-void RenderTask::start(SceneSnapshot snapshot, RenderSettings settings) {
+void RenderTask::setPaused(bool paused) {
+    paused_.store(paused);
+    if (!paused) pauseCondition_.notify_all();
+}
+std::uint64_t RenderTask::start(
+    SceneSnapshot snapshot,
+    RenderSettings settings,
+    RenderOutput output,
+    DenoiseSettings denoise
+) {
     cancel();
     wait();
     cancel_.store(false);
+    paused_.store(false);
+    const std::uint64_t taskId = nextTaskId_++;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        progress_ = {};
-        progress_.status = RenderStatus::Running;
+        auto initial = std::make_shared<RenderProgress>();
+        initial->taskId = taskId;
+        initial->status = RenderStatus::Running;
+        progress_ = std::move(initial);
     }
     try {
-        worker_ = std::thread([this, snapshot = std::move(snapshot), settings]() mutable {
+        worker_ = std::thread([
+            this, taskId, snapshot = std::move(snapshot), settings, output, denoise
+        ]() mutable {
             try {
+                const SnapshotCamera camera = snapshot.camera();
                 ProgressiveRenderer renderer(std::move(snapshot), settings);
+                TemporalDenoiseState temporalState;
                 auto lastPublication = std::chrono::steady_clock::now();
-                while (renderer.renderPass(&cancel_)) {
+                auto publish = [&](RenderStatus status) {
+                    auto publication = std::make_shared<RenderProgress>();
+                    publication->taskId = taskId;
+                    publication->status = status;
+                    publication->image = renderer.image();
+                    if (publication->image.completedSamples > 0U) {
+                        if (denoise.enabled || denoise.temporalEnabled
+                            || denoise.fireflyClampEnabled) {
+                            publication->denoised = denoiseAovs(
+                                publication->image, denoise, &camera, &temporalState
+                            );
+                        }
+                        publication->staging.width = publication->image.width;
+                        publication->staging.height = publication->image.height;
+                        publication->staging.completedSamples =
+                            publication->image.completedSamples;
+                        const bool denoisedOutput = !publication->denoised.empty()
+                            && (output == RenderOutput::Beauty
+                                || output == RenderOutput::Direct
+                                || output == RenderOutput::Indirect);
+                        publication->staging.rgba = denoisedOutput
+                            ? makeDisplayRgba8BottomUp(publication->denoised, output)
+                            : makeDisplayRgba8BottomUp(publication->image, output);
+                    }
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (progress_ && progress_->taskId == taskId) {
+                        progress_ = std::move(publication);
+                    }
+                };
+                while (!cancel_.load()) {
+                    {
+                        std::unique_lock<std::mutex> pauseLock(pauseMutex_);
+                        pauseCondition_.wait(pauseLock, [&] {
+                            return !paused_.load() || cancel_.load();
+                        });
+                    }
+                    if (!renderer.renderPass(&cancel_)) break;
                     const auto now = std::chrono::steady_clock::now();
                     if (settings.progressPublishMilliseconds == 0U
                         || now - lastPublication >= std::chrono::milliseconds(
                             settings.progressPublishMilliseconds
                         )) {
-                        std::lock_guard<std::mutex> lock(mutex_);
-                        progress_.image = renderer.image();
+                        publish(RenderStatus::Running);
                         lastPublication = now;
                     }
                 }
-                std::lock_guard<std::mutex> lock(mutex_);
-                progress_.image = renderer.image();
-                progress_.status = renderer.complete()
-                                       ? RenderStatus::Completed
-                                       : RenderStatus::Cancelled;
+                publish(renderer.complete()
+                    ? RenderStatus::Completed
+                    : RenderStatus::Cancelled);
             } catch (const std::exception &e) {
+                auto failure = std::make_shared<RenderProgress>();
+                failure->taskId = taskId;
+                failure->status = RenderStatus::Failed;
+                failure->error = e.what();
                 std::lock_guard<std::mutex> lock(mutex_);
-                progress_.error = e.what();
-                progress_.status = RenderStatus::Failed;
+                if (progress_ && progress_->taskId == taskId) {
+                    progress_ = std::move(failure);
+                }
             }
         });
     } catch (const std::exception &e) {
+        auto failure = std::make_shared<RenderProgress>();
+        failure->taskId = taskId;
+        failure->status = RenderStatus::Failed;
+        failure->error = e.what();
         std::lock_guard<std::mutex> lock(mutex_);
-        progress_.error = e.what();
-        progress_.status = RenderStatus::Failed;
+        progress_ = std::move(failure);
     }
+    return taskId;
 }
 } // namespace pathtracer

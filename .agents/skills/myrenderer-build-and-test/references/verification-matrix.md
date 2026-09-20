@@ -18,6 +18,25 @@ Use the narrowest matching row, then expand when the change crosses contracts.
 | Stylized shading or outline | `stylized-acceptance` | `deferred-visual-regression`, `screen-space-visual-regression` if shared code changed |
 | Broad pass/state/resource integration | full CTest; `gpu-smoke`; `renderer-regression-suite` | `renderer-benchmark-suite` only for performance acceptance |
 
+## Compiler coverage
+
+The rows above are compiler-independent. These are not: MSVC and GCC report different
+warning sets, so a green `build-ci-msvc` does not prove a clean GCC build.
+
+| Change area | Add this check |
+|---|---|
+| Widely constructed aggregates or structs that gain fields (`EditorSession.h` / `EditorCommand` and its payloads, `BatchFrameResult`, module payloads) | `cmake --build build-mingw --parallel`; read the `warning:` lines |
+| New or removed functions, changed includes, new translation units | same GCC build as above |
+| Any "no new warnings" statement or hand-off | one GCC tree, because MSVC does not implement `-Wmissing-field-initializers` |
+| Release-only or optimisation-dependent warnings | `cmake --build build-release --clean-first --parallel` |
+| Behaviour that can differ per compiler (libstdc++ vs MSVC STL, `std::filesystem` paths, floating point formatting) | `ctest --test-dir build-mingw --output-on-failure` |
+
+GCC only warns for translation units it actually recompiles, so a clean incremental build is
+not evidence: rebuild the tree (or touch the affected files) before concluding it is quiet.
+`warning:` lines under `_deps/` are third-party headers; wrap them at the include site with
+`#pragma GCC diagnostic ignored` as `src/pathtracer/TextureSampling.cpp` and
+`src/pathtracer/EnvironmentSampling.cpp` do, and fix project-code warnings at the cause.
+
 Build custom targets with:
 
 ```powershell

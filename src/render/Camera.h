@@ -37,10 +37,27 @@ public:
     float fieldOfView() const { return fieldOfViewDegrees_; }
     void setFieldOfView(float degrees);
 
+    // The projection's own depth range. Every consumer that has to agree with what the camera
+    // rasterises -- shadow cascade fitting, depth reconstruction, reverse-engineering a view ray --
+    // reads these instead of keeping a second copy of the numbers, because a cascade fitted around
+    // a different near plane than the one being rendered is invisible until a shadow goes missing.
+    float nearPlane() const { return nearPlane_; }
+    float farPlane() const { return farPlane_; }
+
+    // The view basis in world space. `forward` points from the camera towards its target, matching
+    // `viewMatrix()`'s -Z axis; `right` and `up` are the other two axes. Exposed because consumers
+    // that build their own cameras or frusta -- shadow cascades, for one -- have to use the same
+    // basis the projection was built from rather than re-deriving it.
+    glm::vec3 forwardDirection() const;
+    glm::vec3 rightDirection() const;
+    glm::vec3 upDirection() const;
+
 private:
     glm::vec3 target_{0.0f};
     float yawRadians_{0.75f};
     float pitchRadians_{0.35f};
     float distance_{3.2f};
     float fieldOfViewDegrees_{45.0f};
+    float nearPlane_{0.1f};
+    float farPlane_{100.0f};
 };

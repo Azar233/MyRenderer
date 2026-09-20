@@ -30,7 +30,13 @@ Post-MVP 阶段已将文件导入、CPU 模型数据、GPU 模型和渲染执行
 - 相机、刚体对象与骨骼的统一 Temporal History；G-Buffer 输出动态 Motion Vector，TAA 可处理对象与蒙皮运动。
 - SR-P1A CPU Reference Path Tracer 基础：实时 Scene/Camera 可导出共享只读 `SceneSnapshot`，保留 Mesh Instance、材质/纹理来源、相机与灯光/环境；提供 Ray/AABB、Ray/Triangle、Surface Interaction 和确定性 Median-Split BVH 构建/遍历。
 - SR-P1B～M CPU Reference Path Tracer：确定性渐进累积、可取消后台任务、线性 HDR/PNG、glTF PBR/纹理、Russian Roulette、发光/显式/HDR Environment NEE/MIS、介质 Fresnel/IOR/Beer-Lambert、七组 AOV、确定性 Tile 线程池、16-bin SAH、共享几何 BLAS/TLAS、逐像素 Adaptive Sampling，以及同场景/相机的 Raster / Path Traced / Difference 自动验收。
-- SR-P2A/B Stylized / NPR 模式：同一 Scene/Camera 可在 PBR 与 Toon 间切换，支持 2～8 档明暗分层、可调分层高光、Rim Light、Shadow Tint，以及 TAA 后合成的屏幕空间描边；Deferred 使用 Depth/Normal，Forward 使用 Depth-only 回退，参数可持久化并有跨路径、分辨率和透明边界自动图像验收。
+- P0-C 编辑器 CPU Progressive Preview：Viewport 可在 Raster / CPU Path Traced 间切换；后台 `RenderTask` 发布带代次的 CPU RGBA staging image，主线程上传 OpenGL Texture，并在相机/场景/材质 Tint/灯光/尺寸/积分器设置变化时取消旧任务。支持自动 1/4→1/2→全分辨率、固定分辨率、八种 Beauty/AOV、Pause/Resume/Restart、统计 Overlay 以及 Beauty/HDR/AOV 导出。详见 [`docs/cpu-progressive-preview.md`](docs/cpu-progressive-preview.md)。
+- P0-D 采样与降噪：CPU Preview 支持 Direct/Indirect 分离的 AOV A-Trous、SVGF 风格时序方差、History Reprojection/Disocclusion Rejection、可选有偏 Firefly Clamp、Power-weighted Light Alias Table 与 GGX VNDF。三场景 1/2/4/8/16 SPP 对 2048 SPP 的 Raw/Denoised 指标和失败边界见 [`docs/p0-d-sampling-denoising.md`](docs/p0-d-sampling-denoising.md)。
+- P1-0B Batch/Queue 闭环：版本化 `.renderjob` 通过无 ImGui Runtime 复用 `.myscene`、Model Importer、Builtin Model、SceneSnapshot 与 CPU Progressive Renderer；CLI 与持久多任务 GUI Render Queue 共用 Sequence Runtime、取消令牌和明确状态，逐帧按需原子输出 PNG/RGBE HDR/线性 FP32 OpenEXR、八类 AOV 与 Schema 2 Frame Report。CLI 支持事务性 Output Override；Resume 会精确校验 Manifest，并结构化诊断/安全恢复 `.partial`、缺失报告、格式变化和提交中断。Queue 状态使用主备原子替换、正常/中断 Session 标记及 Running/Cancelling 恢复，并自动验证 GUI/直接 Runtime 的产物一致性。Schema、命令、退出码和当前边界见 [`docs/render-job-batch.md`](docs/render-job-batch.md)。
+- SR-P2A～C Stylized / NPR 模式：同一 Scene/Camera 可在 PBR 与 Toon 间切换，支持 2～8 档明暗分层、可调分层高光、Rim Light、Shadow Tint、TAA 后描边、时序稳定的有序 Dither、解析 Height Fog、32³ 3D Color Grading LUT，以及 Clean Toon / Painterly / Night Aurora 三组 Preset；参数可持久化并有六种调试视图、跨路径图像验收和 Low/High GPU 分档。
+- P1-0C Module Runtime：`Timeline`（Frame/Time/FPS/Start-End/固定 `deltaTime`/Loop/Scrub，GUI 与 Batch 共用同一定义，时间只由帧号与固定帧率导出）、编辑态与可丢弃 `RuntimeScene` 的分离（含顺序无关、对变换敏感的 `sceneContentHash`）、`ISceneModule` 最小生命周期与受限 `SceneContext`（无 Widget/GL/线程句柄，宿主注入取消检查）、六类参数并带范围与事务性覆盖的 `ParameterRegistry`、按稳定字符串 ID 显式注册的 Module Registry/Manifest/Build ID、`ModuleRuntime` runner（只向前固定步进、起始帧也求值、失败隔离），以及独立 `MyRendererModules` 目标与首个确定性模块 `myrenderer.core.turntable`。Inspector 新增 `Module` 页：由参数元数据自动生成控件，Viewport 的 Raster 与 CPU Path Traced 预览都渲染模块驱动的运行态场景，编辑态不被写回。`.renderjob` schema 2 可用 `module` 段驱动渲染序列，Frame Report 记录模块 Manifest（id/API 版本/Build ID/Seed/内容哈希/状态），模块、版本或 Seed 变化都会让 Resume 帧失效；`simulate` 只运行并输出每帧内容哈希，`bake` 写出确定性 Simulation Cache（键含场景哈希/模块/版本/Build ID/Seed/时间步/帧范围，复用时重新哈希校验，陈旧或损坏一律报 `Stale` 并重新模拟）。`module-rendering-acceptance` 逐步验证 simulate/bake、缓存命中与无缓存序列逐字节一致、陈旧缓存被拒；实测两条独立 CLI 序列（含事务性 `--output` 覆盖）帧 PNG 逐字节一致。详见 [`docs/module-runtime.md`](docs/module-runtime.md)。
+- P1-A 切片 1 解析式天空与统一太阳：`src/optics/Atmosphere.*` 提供 Rayleigh/Mie 单次散射模型（Kasten-Young 气团、闭式指数积分、太阳盘与地面反照率），一个 `sunDirection()` 同时驱动环境立方体贴图（天空盒 + IBL）、方向光方向、阴影贴图与方向光能量；`skyIntensity`/`sunIntensity` 分别控制环境天空与关键光+日盘，`skyLightColor()` 让关键光携带逐通道太阳颜色。`.myscene` 持久化天空参数，Inspector 新增 `Atmosphere` 分组（`SetAtmosphereSettings` 域命令，场景启用时自动展开），太阳盘亮度锚定晴天地面照度比 `E_sun/E_sky≈10` 使环境下半球与受光地面一致，辐照度卷积刻意排除日盘以避免重复计算与萤火虫。重建成本约 0.6 s 并在控制台/Inspector 如实显示。模型、参数、验证与已知边界见 [`docs/atmosphere-sky.md`](docs/atmosphere-sky.md)。
+- P1-A 切片 2 Aerial Perspective：`opticalDepthAlongSegment()` 用同一套 Rayleigh/Mie 系数与同一气团约定积分相机到表面的有限线段，`verticalOpticalDepth()` 给出整根垂直气柱作为计量单位。合成在 `postprocess.frag`：复用已有的深度重建，因此不需要新增 render target，透明物体会与背后的几何一起淡出；顺序为 Height Fog → Aerial Perspective → 显示变换。in-scatter 取不含太阳盘的天顶/地平线天空色，保证射线走到无穷远时精确收敛到天空、零距离处不改变像素。`.myscene` 增加三个字段，Inspector 增加 `Aerial perspective` 子节。已知边界：CPU Path Tracer 尚未接入。实现、近似与 On/Off 证据见 [`docs/atmosphere-sky.md`](docs/atmosphere-sky.md)。
 - Debug 构建在驱动支持时启用 OpenGL `KHR_debug` 诊断。
 - Model/View/Projection 变换与基础 Blinn-Phong 光照。
 - 离屏 Framebuffer 渲染视口、可切换 1x/4x MSAA Resolve 与解析后视口 PNG 导出。
@@ -103,6 +109,11 @@ cmake --build build-mingw --parallel
 - `12_reference_pathtracer_volume`：闭合玻璃、双界面折射、Beer-Lambert 体积与背景参照物。
 - `13_polyhaven_studio_lounge`：暖色室内陈列，验证复杂 glTF 材质、Alpha 植物、局部灯光、阴影与构图。
 - `14_polyhaven_material_gallery`：中性材质展台，集中验收织物/木材、石材、陶瓷和氧化金属。
+- `15_stylized_clean_toon_gallery`：Clean Toon 材质展台，固定硬分层、细描边和 Clean LUT。
+- `16_stylized_painterly_interior`：Painterly 室内陈列，固定暖色 Rim、轻 Dither、Height Fog 与低强度 Bloom。
+- `17_stylized_night_aurora_outdoor`：Night Aurora 室外自然代理构图，固定冷色分层、浓雾、Night LUT 与 Bloom。
+- `18_atmosphere_sky`：P1-A 解析式天空外景夹具（地面、球、立方体、立柱），默认启用 `Atmosphere` 与 `Aerial perspective`，由太阳同时驱动天空、方向光、阴影与光照能量；用于正午/黄金时刻固定截图与 `atmosphere-model` 之外的端到端验收。模型、参数、成本与已知边界见 [`docs/atmosphere-sky.md`](docs/atmosphere-sky.md)。
+- `19_coastal_cascades`：P1-A 级联阴影海岸夹具（80×80 地面、近/中/远三排礁石与海蚀柱，跨约 110 单位进深），低太阳制造长阴影，默认 3 级级联。用于验证远景阴影：单级正交盒在这个跨度上会出现可见的阴影分辨率断层，级联把它抹平。对比与量化见 [`docs/shadow-cascades.md`](docs/shadow-cascades.md)。
 
 `10`～`12` 专门冻结光追相关的模型、材质、灯光、环境和相机配置，可作为实时预览、SceneSnapshot 捕获及 Raster/Path Traced 对照的统一输入；`13`～`14` 是面向展示和材质验收的 Hero Scene。离线路径追踪的 SPP、Max Depth 和 Seed 仍由渲染任务设置控制，不写入 `.myscene` v1。
 
@@ -112,15 +123,18 @@ cmake --build build-mingw --parallel
 
 五个 1K glTF 模型来自 Poly Haven，均为 CC0：Arm Chair 01、Modern Coffee Table 01、Ceramic Vase 01、Anthurium Botany 01 与 Bronze Whale Statue。作者、原始页面和文件校验信息见 [`assets/models/polyhaven/README.md`](assets/models/polyhaven/README.md)。植物使用 Alpha Mask，目前只进入实时展示场景；严格 Raster/Path Tracer 对照暂不使用它，避免 CPU Alpha Visibility 尚未实现时产生无意义差异。
 
-- Scene 面板：查看、选择、显隐、复制/删除 Entity，调整父子关系，并切换 `assets/models` 中的 OBJ、DAE、glTF/GLB；也可使用原生文件选择器、输入路径或拖放文件。CPU 导入期间当前场景保持可用。
-- Inspector / Object：以“属性名 / 控件”两列调整世界坐标 Position、旋转、缩放与 Tint；长名称会自动换行，不再被窄面板遮挡。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
-- Inspector / Renderer：参数按 Stage、Material、PBR、Lighting、Glass、Post processing、Rasterization 等抽屉收纳；单击分组标题展开或折叠。`PBR & environment > Shading mode` 可在 Physically Based 与 Stylized / Toon 间一键切换，并调整明暗层级、分层高光、Rim 与 Shadow Tint；这里也可选择 glTF Animation Clip、切换 Forward / Deferred、查看 G-Buffer/SSAO/TAA 调试结果及 GPU 时间。完整说明见 [`docs/stylized-rendering.md`](docs/stylized-rendering.md)。
+- Scene Explorer：查看、选择、显隐、复制/删除 Entity，调整父子关系；这些 Scene 操作通过 `EditorSession` / `EditorCommand` 集中提交。模型仍可使用原生文件选择器、输入路径或拖放导入，CPU 导入期间当前场景保持可用。
+- Inspector / Object：按 Transform、Material、Lighting 与 Object actions 分组，以“属性名 / 控件”两列调整 Position、旋转、缩放、Tint、Visibility 与 Casts Shadow；长名称会自动换行，不再被窄面板遮挡。这些修改和 Delete 均提交 `EditorCommand`，由集中入口校验并更新 Scene，不再由 Inspector 直接改写实体。模型导入后以 AABB 中心作为局部原点，默认世界 Position 为 `(0, 0, 0)`。
+- Inspector / Renderer：参数按 Stage、Material、Directional Light、PBR、Atmosphere、Glass、Post processing、Rasterization 等抽屉收纳；单击分组标题展开或折叠。Stage、Material、Directional Light、PBR / Environment、Atmosphere、Shading / Stylized、Post processing、Rasterization、Camera、Runtime、Glass、Caustics 与 Instancing 全部按领域快照提交 `EditorCommand`，由集中入口校验并应用，并按领域失效语义统一处理 CPU Preview 重启与 TAA History：PBR/Environment、Atmosphere 与 Camera 同时失效两者，Shading/Stylized 与 Glass/Caustics 只失效 TAA History，Post processing 仅在 SSAO/TAA 参数变化时失效 History，Runtime 不影响画面。`PBR & environment > Shading mode` 可在 Physically Based 与 Stylized / Toon 间一键切换，并调整明暗层级、分层高光、Rim、Shadow Tint、描边、Dither、Height Fog、3D LUT 和三组风格 Preset；这里也可选择 glTF Animation Clip、切换 Forward / Deferred、查看 G-Buffer/SSAO/TAA 及六种 Stylized 调试结果和 GPU 时间。完整说明见 [`docs/stylized-rendering.md`](docs/stylized-rendering.md) 与 [`docs/editor-workspace-p1.md`](docs/editor-workspace-p1.md)。
+- 顶部工作流工具栏切换 `Raster` / `CPU Path Traced` 与 `Edit / Preview / Bake / Render`，并提供 Pause、Single Step、Reset、Render Frame、Render Sequence。GPU Path Traced 在 Vulkan 后端完成前明确显示为不可用；Render Sequence 提交 Render Queue 当前选择的版本化 `.renderjob`。
+- CPU 模式的 `CPU Settings` 提供 SPP、Max Depth、Seed、Beauty/AOV、Auto/1/4/1/2/Full 分辨率、AOV A-Trous/Temporal Denoising、Power-weighted Lights、GGX VNDF 和可选有偏 Firefly Clamp；Raster/CPU 共用同一 Overlay 位置，CPU 额外显示进度、Render/Denoise 耗时、History、Path/Shadow Ray 与 BVH 测试数。`Export` 会保存原始与降噪 PNG/HDR 及 AOV。
+- 底部 Workspace 提供 Assets、Timeline、Modules、Render Queue、Log/Profile；Assets 递归索引 Scenes/Models/Materials/Textures/HDRI/Modules/Simulations/Caches/RenderJobs/Presets，支持路径/名称搜索、扩展名筛选、名称/大小排序、网格/列表和稳定预览缓存键，Scene/Model/Render Job 动作统一走 `EditorCommand`。真实图像缩略图仍待后续切片。Timeline 已使用与 Batch 共用的确定性 `Timeline`（Frame/FPS/Range/Loop/Scrub）。Modules 页读取静态模块注册表的真实 Manifest（Module ID、Name、Kind、CMake Target、Source、Module API 版本与 Build ID），不扫描也不解析 C++ 源码；模块实例运行与参数控件属于后续切片。Render Queue 支持多个 Job 的持久队列、Pending 重排/移除、进度与结果、运行中安全取消、失败重试，以及主状态损坏或进程中断后的可诊断恢复；工作线程仍按顺序一次执行一个任务。P1 工作台当前切片、限制与验证见 [`docs/editor-workspace-p1.md`](docs/editor-workspace-p1.md)。
 - View / `Prism spectrum preset`：加载 `prism_spectrum.gltf` 并恢复 Prism-0 固定镜头与黑场参数；Renderer 面板可单独开关 `Prism incident beam guide`。成功加载其他模型时会自动退出 Prism 模式，关闭光束/光路 Overlay，并恢复进入 Preset 前的通用渲染与场景显示设置。
 - View / `Volume glass preset`：加载平滑闭合球体，自动创建两个独立玻璃实例、原创棋盘格背景和固定正面机位；Renderer 面板可切换真实双界面折射，并使用 Clear / Olive / Amber / Crystal 四组体积玻璃参数。
 - View / `Glass caustics preset`：加载透明水晶球、白色接收地面与固定高机位，默认启用 Light-space RGB 焦散、彩色透射阴影和空间滤波；可即时切到 Projector / Decal 做美术对照。
 - View / `Local light stress preset`：加载 10×10 立方体固定舞台，并在 Renderer 面板选择 8/32/64 档 Point/Spot 灯光；切换 Forward/Deferred 可查看相同画面下的活动 Pass、Draw Call 与估算 Opaque Attachment 流量。
 - 渲染视口：鼠标右键拖动旋转相机，中键拖动平移，滚轮缩放；工具栏或 File 菜单可将当前解析后画面保存为 PNG。
-- 面板收纳：使用视口工具栏 `Panels` 或 `View > Panels` 显示/隐藏 Hierarchy、Inspector 和 Content Browser；`Reset layout` 会恢复完整默认工作区。
+- 面板收纳：使用视口工具栏 `Panels` 或 `View > Panels` 显示/隐藏 Scene Explorer、Inspector 和 Workspace；`Reset layout` 会恢复完整默认工作区。
 - `Esc`：退出程序。
 
 ImGui 窗口支持拖动与 Docking，布局会保存到运行目录下的 `MyRenderer.editor.ini`。应用窗口最小为 1100×680，Dock 叶节点最小为 260×120；启动时会自动修复旧配置中小于该界限的异常布局。隐藏的 Smoke Test、Benchmark 与 Demo Reel 不会写入交互布局文件。
@@ -167,6 +181,8 @@ OBJ、DAE 与 glTF/GLB 材质可使用切线空间法线贴图；缺失或退化
 ctest --test-dir build-mingw --output-on-failure
 ```
 
+改动验收会同时编译 MSVC（`build-ci-msvc`）与 MinGW/GCC（`build-mingw` Debug、`build-release` Release）两套编译器：两者的警告集合不同，GCC 的 `-Wextra` 会额外报告聚合体部分初始化（`-Wmissing-field-initializers`，为每个被省略且有默认值的成员各报一条）等问题，只跑 MSVC 看不出来。GCC 只对真正重新编译的翻译单元报警告，所以审计整棵树要 `cmake --build build-release --clean-first --parallel` 后再看 `warning:` 行；第三方头（`_deps/`）在 include 处用 `#pragma GCC diagnostic ignored` 隔离，项目自身代码则修因不屏蔽。
+
 隐藏窗口模式会创建真实 OpenGL 上下文、加载模型并渲染 5 帧后退出：
 
 ```powershell
@@ -179,10 +195,16 @@ Remove-Item Env:MYRENDERER_SMOKE_TEST
 
 自动测试还可通过 `MYRENDERER_MSAA=1|4` 选择采样数，并用 `MYRENDERER_SCREENSHOT=<输出.png>` 在渲染后导出截图。交互模式下截图默认写入运行目录的 `screenshots` 文件夹。
 
-SR-P2A/B 的同机位 Stylized 验收会自动捕获 PBR/Toon、Forward/Deferred、640×360/960×540、TAA On、Outline On/Off 和玻璃边界，检查模式/描边确实改变画面，并限制两条 Toon 渲染路径的显示空间差异；该目标不会改写既有固定图回归：
+SR-P2A～C 的同机位 Stylized 验收会自动捕获 PBR/Toon、Forward/Deferred、640×360/960×540、TAA On、Outline、Dither、Height Fog、三张 LUT、三组 Preset、六种调试视图和玻璃边界，检查效果确实改变画面，并限制两条 Toon 渲染路径的显示空间差异；该目标不会改写既有固定图回归：
 
 ```powershell
 cmake --build build-ci-msvc --config Release --target stylized-acceptance
+```
+
+Low/High 两档固定 GPU 数据可独立重测：
+
+```powershell
+cmake --build build-ci-msvc --config Release --target stylized-benchmark
 ```
 
 设置 `MYRENDERER_PRISM_DEMO=1` 会默认加载 Prism-0 固定资产和 Hero Shot 参数；可与隐藏窗口截图组合，用于生成同机位 baseline：
@@ -306,6 +328,8 @@ python tools/encode_prism5_reel.py build-release/prism5-reel-frames docs/media/p
 
 ## 代码结构
 
+文档写作规范与一致性审计见 [`docs/README.md`](docs/README.md)；阶段文档在 [`docs/`](docs/)，回归基线清单在 [`docs/images/README.md`](docs/images/README.md)，文档插图在 [`docs/media/`](docs/media/)，调研简报表在 [`docs/research/`](docs/research/)。
+
 ```text
 src/app/Application.*    窗口、主循环、后台导入、ImGui 与模块整合
 src/app/FileDialog.*     Windows 原生模型文件选择器
@@ -313,6 +337,13 @@ src/asset/ModelData.h    格式无关的顶点、材质、Mesh、Skin、骨架�
 src/io/ModelImporter.h   统一模型导入接口与导入结果
 src/io/AssimpImporter.*  DAE 与 glTF/GLB 模型、Skin 与 Animation 导入适配
 src/io/ObjLoader.*       OBJ 导入器：统一索引、UV、法线与 AABB
+src/runtime/BatchRuntime.*  无 ImGui 的批处理运行层：Render Job 帧/序列、原子提交、恢复诊断
+src/runtime/Timeline.h   GUI 与 Batch 共用的确定性 Frame/Time/FPS/Loop/Scrub 定义
+src/module/SceneModule.h  ISceneModule 最小生命周期、Module Manifest、受限 SceneContext
+src/module/ParameterRegistry.*  Bool/Int/Float/Color/Enum/Asset 参数、范围校验与事务性覆盖
+src/module/RuntimeScene.*  编辑态与运行态 Scene 分离、场景内容哈希
+src/module/ModuleRegistry.*  稳定字符串 ID 的显式模块注册、API 版本与 Build ID 诊断
+src/module/BuiltinModules.*  静态链接模块集与首个模块 myrenderer.core.turntable
 src/optics/PrismOptics.* 无 OpenGL 依赖的三棱镜求交、双界面折射、Fresnel 与 TIR
 src/optics/PrismDemo.*   Prism 参数、四组光学 Preset、White Point 与实时求解入口
 src/pathtracer/RayGeometry.* Ray/AABB/Triangle 求交与 Surface Interaction

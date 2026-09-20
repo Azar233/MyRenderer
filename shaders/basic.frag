@@ -1,10 +1,14 @@
 #version 330 core
 
+// Must match `shadow::maximumCascadeCount`; an array-sized varying needs the constant first.
+const int MAX_SHADOW_CASCADES = 4;
+
 in vec3 vWorldPosition;
 in vec3 vWorldNormal;
 in vec2 vTexCoord0;
 in vec4 vWorldTangent;
-in vec4 vShadowPosition;
+in vec4 vShadowPosition[MAX_SHADOW_CASCADES];
+in float vViewDepth;
 in vec3 vSkinJointColor;
 in float vSkinDominantWeight;
 
@@ -15,7 +19,13 @@ uniform sampler2D uMetallicRoughnessTexture;
 uniform samplerCube uIrradianceMap;
 uniform samplerCube uPrefilteredEnvironmentMap;
 uniform sampler2D uBrdfLut;
-uniform sampler2D uShadowMap;
+// Array sampler: the depth attachment is a 2D array with one layer per shadow cascade. The sampler
+// type and the attachment type are one contract -- a 2D-array texture bound to a `sampler2D` is
+// undefined sampling, not an error, so a mismatch would only show as drifting baselines.
+uniform sampler2DArray uShadowMap;
+// Cascade count and the ascending split distances that select between them.
+uniform int uShadowCascadeCount;
+uniform float uCascadeSplits[MAX_SHADOW_CASCADES];
 uniform sampler2D uCausticsMap;
 uniform sampler2D uTransmissionShadowMap;
 uniform sampler2D uOpaqueColorTexture;
@@ -46,6 +56,7 @@ uniform float uStylizedRimSoftness;
 uniform float uStylizedRimIntensity;
 uniform vec3 uStylizedShadowTint;
 uniform vec3 uStylizedRimColor;
+uniform int uStylizedDebugView;
 uniform bool uIblEnabled;
 uniform bool uShadowsEnabled;
 uniform bool uColoredTransmissionShadowsEnabled;
@@ -61,6 +72,10 @@ uniform vec3 uCameraPosition;
 uniform float uAmbientStrength;
 uniform float uDiffuseStrength;
 uniform float uSpecularStrength;
+// Spectrum of the directional key light. White unless the analytic sky is driving the scene, in
+// which case it is the sun's atmospheric transmittance normalised to its brightest channel: the
+// light's brightness stays in the two strengths above, so this only carries colour.
+uniform vec3 uLightColor;
 uniform float uShininess;
 uniform float uMetallicFactor;
 uniform float uRoughnessFactor;
@@ -163,23 +178,38 @@ vec3 localLightRadiance(int index, vec3 worldPosition, out vec3 lightDirection) 
     return colorIntensity.rgb * colorIntensity.w * attenuation;
 }
 
+// Cascade selection: the first cascade whose split reaches this fragment. The search is in order
+// because the splits ascend, and clamping to the last cascade means a fragment past every split
+// keeps the widest shadow rather than losing shadows outright.
+int selectCascade() {
+    int selected = 0;
+    for (int cascade = 0; cascade < MAX_SHADOW_CASCADES; ++cascade) {
+        if (cascade >= uShadowCascadeCount) break;
+        selected = cascade;
+        if (vViewDepth <= uCascadeSplits[cascade]) break;
+    }
+    return selected;
+}
+
 vec3 lightProjectionCoordinates() {
-    vec3 projected = vShadowPosition.xyz / max(vShadowPosition.w, 0.0001);
+    vec4 shadowPosition = vShadowPosition[selectCascade()];
+    vec3 projected = shadowPosition.xyz / max(shadowPosition.w, 0.0001);
     return projected * 0.5 + 0.5;
 }
 
 vec3 shadowVisibility(vec3 normal, vec3 lightDirection) {
     if (!uShadowsEnabled) return vec3(1.0);
+    int cascade = selectCascade();
     vec3 projected = lightProjectionCoordinates();
     if (projected.z > 1.0 || projected.z < 0.0
         || any(lessThan(projected.xy, vec2(0.0)))
         || any(greaterThan(projected.xy, vec2(1.0)))) return vec3(1.0);
     float bias = max(0.0015 * (1.0 - dot(normal, lightDirection)), 0.00035);
-    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0).xy);
     float visible = 0.0;
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
-            float depth = texture(uShadowMap, projected.xy + vec2(x, y) * texel).r;
+            float depth = texture(uShadowMap, vec3(projected.xy + vec2(x, y) * texel, float(cascade))).r;
             visible += projected.z - bias <= depth ? 1.0 : 0.0;
         }
     }
@@ -191,7 +221,9 @@ vec3 shadowVisibility(vec3 normal, vec3 lightDirection) {
 
 vec3 causticRadiance() {
     if (!uCausticsEnabled) return vec3(0.0);
-    vec3 projected = lightProjectionCoordinates();
+    // Caustics are a single-cascade effect: the map is built from cascade 0's light matrix, so this
+    // deliberately uses cascade 0 instead of following the fragment's cascade choice.
+    vec3 projected = vShadowPosition[0].xyz / max(vShadowPosition[0].w, 0.0001) * 0.5 + 0.5;
     if (projected.z > 1.0 || projected.z < 0.0
         || any(lessThan(projected.xy, vec2(0.0)))
         || any(greaterThan(projected.xy, vec2(1.0)))) return vec3(0.0);
@@ -489,6 +521,17 @@ void main() {
 
     if (uStylizedEnabled && uTransmissionFactor <= 0.0001) {
         float diffuseBand = stylizedBand(nDotL);
+        float rim = stylizedRim(nDotV)
+            * mix(0.35, 1.0, 1.0 - nDotL)
+            * max(uStylizedRimIntensity, 0.0);
+        if (uStylizedDebugView == 1) {
+            fragmentColor = vec4(vec3(diffuseBand), 1.0);
+            return;
+        }
+        if (uStylizedDebugView == 2) {
+            fragmentColor = vec4(vec3(clamp(rim, 0.0, 1.0)), 1.0);
+            return;
+        }
         vec3 shadowColor = mix(
             max(uStylizedShadowTint, vec3(0.0)),
             vec3(1.0),
@@ -501,10 +544,12 @@ void main() {
         }
         vec3 specularColor = mix(vec3(1.0), albedo, metallic);
         vec3 color = ambient
-            + albedo * uDiffuseStrength * diffuseBand * shadowColor
-            + specularColor * uSpecularStrength
-                * stylizedHighlight(max(dot(normal, halfDirection), 0.0), nDotL)
-                * shadowColor;
+            + uLightColor * (
+                albedo * uDiffuseStrength * diffuseBand * shadowColor
+                + specularColor * uSpecularStrength
+                    * stylizedHighlight(max(dot(normal, halfDirection), 0.0), nDotL)
+                    * shadowColor
+            );
         for (int index = 0; index < uLocalLightCount; ++index) {
             vec3 localDirection;
             vec3 radiance = localLightRadiance(index, vWorldPosition, localDirection);
@@ -517,9 +562,6 @@ void main() {
                 )
             );
         }
-        float rim = stylizedRim(nDotV)
-            * mix(0.35, 1.0, 1.0 - nDotL)
-            * max(uStylizedRimIntensity, 0.0);
         color += max(uStylizedRimColor, vec3(0.0)) * rim;
         color += caustics * albedo;
         fragmentColor = vec4(color, outputAlpha);
@@ -546,7 +588,9 @@ void main() {
         }
         fragmentColor = vec4(
             uAmbientStrength * albedo
-            + visibility * (uDiffuseStrength * nDotL * albedo + uSpecularStrength * specular)
+            + visibility * uLightColor * (
+                uDiffuseStrength * nDotL * albedo + uSpecularStrength * specular
+            )
             + caustics * albedo + localLighting,
             outputAlpha
         );
@@ -570,6 +614,8 @@ void main() {
     vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
     vec3 directDiffuse = diffuseWeight * albedo / PI * nDotL * uDiffuseStrength;
     vec3 directSpecular = specular * nDotL * uDiffuseStrength;
+    directDiffuse *= uLightColor;
+    directSpecular *= uLightColor;
     vec3 localDirectDiffuse = vec3(0.0);
     vec3 localDirectSpecular = vec3(0.0);
     for (int index = 0; index < uLocalLightCount; ++index) {

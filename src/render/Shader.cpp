@@ -196,6 +196,16 @@ void Shader::setVec4Array(
     );
 }
 
+void Shader::setFloatArray(const char* name, const float* values, std::size_t count) const {
+    if (values == nullptr || count == 0U) return;
+    glUniform1fv(uniformLocation(name), static_cast<GLsizei>(count), values);
+}
+
+void Shader::setIntArray(const char* name, const int* values, std::size_t count) const {
+    if (values == nullptr || count == 0U) return;
+    glUniform1iv(uniformLocation(name), static_cast<GLsizei>(count), values);
+}
+
 void Shader::setMat4(const char* name, const glm::mat4& value) const {
     glUniformMatrix4fv(uniformLocation(name), 1, GL_FALSE, glm::value_ptr(value));
 }

@@ -1,0 +1,29 @@
+{
+  "format": "MyRendererRenderJob",
+  "schemaVersion": 2,
+  "scene": "../scenes/01_multi_model_hierarchy.myscene",
+  "renderer": "cpu-path-traced",
+  "camera": "scene",
+  "resolution": [64, 64],
+  "frames": {"start": 0, "end": 23, "fps": 24},
+  "sampling": {"spp": 4, "maxDepth": 4, "seed": 20260919},
+  "aovs": ["beauty", "depth"],
+  "output": {
+    "path": "../../build-ci-msvc/render-jobs/03_cpu_turntable_module/frame_{frame:04}",
+    "formats": ["png"],
+    "resume": true
+  },
+  "module": {
+    "id": "myrenderer.core.turntable",
+    "seed": 20260919,
+    "parameters": {
+      "enabled": true,
+      "degreesPerFrame": 15.0,
+      "axis": "Y",
+      "carouselRadius": 0.0,
+      "phaseDegrees": 0.0,
+      "tintStrength": 0.0
+    }
+  },  "simulationCache": "../../build-ci-msvc/render-jobs/03_cpu_turntable_module/simulation-cache.json",
+  "failurePolicy": "stop"
+}

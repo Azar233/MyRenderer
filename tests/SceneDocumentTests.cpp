@@ -38,6 +38,7 @@ int main() {
         source.renderer.ssaoEnabled = true;
         source.renderer.bloomIntensity = 0.37f;
         source.renderer.shadingMode = ShadingMode::Stylized;
+        source.renderer.stylizedPreset = StylizedPreset::NightAurora;
         source.renderer.stylizedBandCount = 4;
         source.renderer.stylizedBandSoftness = 0.07f;
         source.renderer.stylizedSpecularSize = 0.24f;
@@ -52,6 +53,17 @@ int main() {
         source.renderer.stylizedOutlineDepthThreshold = 0.04f;
         source.renderer.stylizedOutlineNormalThreshold = 0.31f;
         source.renderer.stylizedOutlineColor = glm::vec3(0.05f, 0.08f, 0.12f);
+        source.renderer.stylizedDitherEnabled = true;
+        source.renderer.stylizedDitherStrength = 0.62f;
+        source.renderer.stylizedHeightFogEnabled = true;
+        source.renderer.stylizedHeightFogDensity = 0.21f;
+        source.renderer.stylizedHeightFogBaseHeight = -0.65f;
+        source.renderer.stylizedHeightFogFalloff = 1.4f;
+        source.renderer.stylizedHeightFogColor = glm::vec3(0.18f, 0.28f, 0.46f);
+        source.renderer.stylizedColorGradingEnabled = true;
+        source.renderer.stylizedColorGradingLut = StylizedColorGradingLut::Painterly;
+        source.renderer.stylizedColorGradingStrength = 0.73f;
+        source.renderer.stylizedDebugView = StylizedDebugView::Dither;
         source.renderer.localLights.push_back(LocalLight{
             glm::vec3(2.0f, 3.0f, 4.0f),
             6.0f,
@@ -104,6 +116,7 @@ int main() {
         require(firstLoad.renderer.renderPath == RenderPath::Deferred && firstLoad.renderer.ssaoEnabled,
             "renderer mode survives first load");
         require(firstLoad.renderer.shadingMode == ShadingMode::Stylized
+                && firstLoad.renderer.stylizedPreset == StylizedPreset::NightAurora
                 && firstLoad.renderer.stylizedBandCount == 4
                 && close(firstLoad.renderer.stylizedBandSoftness, 0.07f)
                 && close(firstLoad.renderer.stylizedSpecularSize, 0.24f)
@@ -117,7 +130,19 @@ int main() {
                 && close(firstLoad.renderer.stylizedOutlineWidth, 2.5f)
                 && close(firstLoad.renderer.stylizedOutlineDepthThreshold, 0.04f)
                 && close(firstLoad.renderer.stylizedOutlineNormalThreshold, 0.31f)
-                && close(firstLoad.renderer.stylizedOutlineColor.z, 0.12f),
+                && close(firstLoad.renderer.stylizedOutlineColor.z, 0.12f)
+                && firstLoad.renderer.stylizedDitherEnabled
+                && close(firstLoad.renderer.stylizedDitherStrength, 0.62f)
+                && firstLoad.renderer.stylizedHeightFogEnabled
+                && close(firstLoad.renderer.stylizedHeightFogDensity, 0.21f)
+                && close(firstLoad.renderer.stylizedHeightFogBaseHeight, -0.65f)
+                && close(firstLoad.renderer.stylizedHeightFogFalloff, 1.4f)
+                && close(firstLoad.renderer.stylizedHeightFogColor.z, 0.46f)
+                && firstLoad.renderer.stylizedColorGradingEnabled
+                && firstLoad.renderer.stylizedColorGradingLut
+                    == StylizedColorGradingLut::Painterly
+                && close(firstLoad.renderer.stylizedColorGradingStrength, 0.73f)
+                && firstLoad.renderer.stylizedDebugView == StylizedDebugView::Dither,
             "stylized renderer settings survive first load");
         require(firstLoad.renderer.localLights.size() == 1U
             && firstLoad.renderer.localLights.front().type == LocalLightType::Spot,
@@ -133,12 +158,24 @@ int main() {
             "relative model path is repeatable");
         require(close(secondLoad.renderer.bloomIntensity, 0.37f), "renderer settings survive repeated load");
         require(secondLoad.renderer.shadingMode == ShadingMode::Stylized
+                && secondLoad.renderer.stylizedPreset == StylizedPreset::NightAurora
                 && secondLoad.renderer.stylizedBandCount == 4
                 && close(secondLoad.renderer.stylizedSpecularSize, 0.24f)
                 && close(secondLoad.renderer.stylizedRimIntensity, 1.2f)
                 && close(secondLoad.renderer.stylizedShadowTint.z, 0.33f)
                 && !secondLoad.renderer.stylizedOutlineEnabled
-                && close(secondLoad.renderer.stylizedOutlineWidth, 2.5f),
+                && close(secondLoad.renderer.stylizedOutlineWidth, 2.5f)
+                && secondLoad.renderer.stylizedDitherEnabled
+                && close(secondLoad.renderer.stylizedDitherStrength, 0.62f)
+                && secondLoad.renderer.stylizedHeightFogEnabled
+                && close(secondLoad.renderer.stylizedHeightFogDensity, 0.21f)
+                && close(secondLoad.renderer.stylizedHeightFogBaseHeight, -0.65f)
+                && close(secondLoad.renderer.stylizedHeightFogFalloff, 1.4f)
+                && secondLoad.renderer.stylizedColorGradingEnabled
+                && secondLoad.renderer.stylizedColorGradingLut
+                    == StylizedColorGradingLut::Painterly
+                && close(secondLoad.renderer.stylizedColorGradingStrength, 0.73f)
+                && secondLoad.renderer.stylizedDebugView == StylizedDebugView::Dither,
             "stylized renderer settings survive repeated load");
         require(close(secondLoad.playback.animationTimeSeconds, 1.25f), "playback state survives repeated load");
         require(resolveSceneResource(secondLoad.entities[0].modelResource, scenePath)

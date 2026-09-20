@@ -47,9 +47,10 @@ float materialBsdfPdf(
     const EvaluatedPbrMaterial& material,
     const glm::vec3& normal,
     const glm::vec3& outgoing,
-    const glm::vec3& incoming
+    const glm::vec3& incoming,
+    GgxSamplingStrategy strategy
 ) {
-    return pbrBsdfPdf(material.surface, normal, outgoing, incoming)
+    return pbrBsdfPdf(material.surface, normal, outgoing, incoming, strategy)
         * materialOpaqueProbability(material);
 }
 
@@ -59,7 +60,8 @@ MaterialBsdfSample sampleMaterialBsdf(
     const glm::vec3& outgoing,
     bool frontFace,
     float componentSample,
-    const glm::vec2& directionSample
+    const glm::vec2& directionSample,
+    GgxSamplingStrategy strategy
 ) {
     MaterialBsdfSample result;
     if (glm::dot(normal, outgoing) <= 0.0f) return result;
@@ -107,7 +109,8 @@ MaterialBsdfSample sampleMaterialBsdf(
         normal,
         outgoing,
         std::clamp(remappedComponent, 0.0f, 0.99999994f),
-        directionSample
+        directionSample,
+        strategy
     );
     result.direction = opaque.direction;
     result.weight = opaque.weight;

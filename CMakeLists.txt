@@ -12,6 +12,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # CMake 4.x compatible without weakening this project's own minimum version.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
 
+# Build stamp reported by every module manifest. It is fixed for one configure, so
+# the GUI and the batch CLI built together always agree, while a reconfigure cannot
+# silently reuse a simulation cache produced by an older binary.
+string(TIMESTAMP MYRENDERER_BUILD_STAMP "%Y%m%d%H%M%S" UTC)
+set(MYRENDERER_BUILD_ID "${PROJECT_VERSION}+${MYRENDERER_BUILD_STAMP}")
+
 include(FetchContent)
 
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -106,6 +112,8 @@ target_compile_definitions(imgui_backend PRIVATE
 target_link_libraries(imgui_backend PUBLIC glfw glad_gl_core_33)
 
 add_library(MyRendererPathTracing STATIC
+    src/optics/Atmosphere.cpp
+    src/pathtracer/AovDenoiser.cpp
     src/pathtracer/Bvh.cpp
     src/pathtracer/InstancedBvh.cpp
     src/pathtracer/RayGeometry.cpp
@@ -122,6 +130,9 @@ add_library(MyRendererPathTracing STATIC
     src/pathtracer/ReferenceComparison.cpp
 )
 target_include_directories(MyRendererPathTracing PUBLIC src)
+target_compile_definitions(MyRendererPathTracing PRIVATE
+    MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
 find_package(Threads REQUIRED)
 target_link_libraries(MyRendererPathTracing PUBLIC glm::glm Threads::Threads PRIVATE tinyexr zlibstatic)
 target_include_directories(MyRendererPathTracing PRIVATE
@@ -136,6 +147,66 @@ add_executable(MyRendererInstancingBenchmark tools/InstancingBenchmark.cpp)
 target_link_libraries(MyRendererInstancingBenchmark PRIVATE MyRendererPathTracing)
 add_executable(MyRendererAdaptiveSamplingBenchmark tools/AdaptiveSamplingBenchmark.cpp)
 target_link_libraries(MyRendererAdaptiveSamplingBenchmark PRIVATE MyRendererPathTracing)
+add_executable(MyRendererDenoisingExperiment tools/DenoisingExperiment.cpp)
+target_link_libraries(MyRendererDenoisingExperiment PRIVATE MyRendererPathTracing)
+
+add_library(MyRendererBatchRuntime STATIC
+    src/runtime/BatchRuntime.cpp
+    src/runtime/RenderQueue.cpp
+    src/runtime/RenderJob.cpp
+    src/asset/BuiltinModels.cpp
+    src/io/AssimpImporter.cpp
+    src/io/GltfMaterialExtensions.cpp
+    src/io/ObjLoader.cpp
+    src/pathtracer/SceneLighting.cpp
+    src/render/Camera.cpp
+    src/scene/Scene.cpp
+    src/scene/SceneDocument.cpp
+)
+target_include_directories(MyRendererBatchRuntime PRIVATE
+    src
+    ${assimp_SOURCE_DIR}/contrib/rapidjson/include
+)
+target_compile_definitions(MyRendererBatchRuntime PRIVATE
+    MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+target_link_libraries(MyRendererBatchRuntime PUBLIC MyRendererPathTracing PRIVATE
+    glm::glm assimp::assimp tinyobjloader glad_gl_core_33
+)
+if(MSVC)
+    target_compile_options(MyRendererBatchRuntime PRIVATE /W4 /permissive- /utf-8)
+else()
+    target_compile_options(MyRendererBatchRuntime PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(MyRendererBatch tools/MyRendererBatch.cpp)
+target_link_libraries(MyRendererBatch PRIVATE MyRendererBatchRuntime MyRendererModules)
+
+# Statically linked module set (P1-0C). The parameter / registry / runtime-scene
+# framework lives in this target together with the concrete modules, so adding a
+# module does not touch the editor or the batch CLI. `Scene` symbols are provided by
+# the consumer, exactly like the other shared sources in this project.
+add_library(MyRendererModules STATIC
+    src/module/BuiltinModules.cpp
+    src/module/ModuleRegistry.cpp
+    src/module/ModuleRuntime.cpp
+    src/module/ParameterRegistry.cpp
+    src/module/RuntimeScene.cpp
+    src/module/SimulationCache.cpp
+)
+target_include_directories(MyRendererModules PUBLIC src)
+target_include_directories(MyRendererModules PRIVATE
+    ${assimp_SOURCE_DIR}/contrib/rapidjson/include
+)
+target_compile_definitions(MyRendererModules PRIVATE
+    MYRENDERER_BUILD_ID="${MYRENDERER_BUILD_ID}"
+)
+target_link_libraries(MyRendererModules PUBLIC glm::glm)
+if(MSVC)
+    target_compile_options(MyRendererModules PRIVATE /W4 /permissive- /utf-8)
+else()
+    target_compile_options(MyRendererModules PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 add_custom_target(path-tracing-instancing-benchmark
     COMMAND MyRendererInstancingBenchmark
     DEPENDS MyRendererInstancingBenchmark
@@ -145,6 +216,12 @@ add_custom_target(path-tracing-adaptive-benchmark
     COMMAND MyRendererAdaptiveSamplingBenchmark
     DEPENDS MyRendererAdaptiveSamplingBenchmark
     COMMENT "Measuring variance-guided adaptive sampling against uniform SPP"
+)
+add_custom_target(path-tracing-denoising-experiment
+    COMMAND MyRendererDenoisingExperiment
+            ${CMAKE_CURRENT_BINARY_DIR}/path-tracing-denoising 64 2048
+    DEPENDS MyRendererDenoisingExperiment
+    COMMENT "Capturing P0-D low-SPP AOV denoising evidence and metrics"
 )
 add_custom_target(path-tracing-acceptance
     COMMAND MyRendererReferenceRender ${CMAKE_CURRENT_BINARY_DIR}/path-tracing-acceptance/volume-glass
@@ -161,14 +238,19 @@ add_executable(MyRenderer
     src/app/AppIcon.cpp
     src/app/Application.cpp
     src/app/ApplicationScene.cpp
+    src/app/EditorSession.cpp
+    src/app/WorkspaceAssets.cpp
+    src/asset/BuiltinModels.cpp
     src/app/FileDialog.cpp
     src/io/AssimpImporter.cpp
     src/io/GltfMaterialExtensions.cpp
     src/io/ObjLoader.cpp
+    src/optics/Atmosphere.cpp
     src/optics/PrismOptics.cpp
     src/optics/PrismDemo.cpp
     src/optics/SpectralBeamMesh.cpp
     src/pathtracer/SceneSnapshotCapture.cpp
+    src/pathtracer/SceneLighting.cpp
     src/render/Camera.cpp
     src/render/CausticsMap.cpp
     src/render/DebugGrid.cpp
@@ -185,6 +267,7 @@ add_executable(MyRenderer
     src/render/SceneDrawList.cpp
     src/render/Shader.cpp
     src/render/ShadowMap.cpp
+    src/render/ShadowCascade.cpp
     src/render/SsaoRenderer.cpp
     src/render/SpectralBeamRenderer.cpp
     src/render/Texture2D.cpp
@@ -226,6 +309,8 @@ target_link_libraries(MyRenderer PRIVATE
     tinyexr
     zlibstatic
     MyRendererPathTracing
+    MyRendererBatchRuntime
+    MyRendererModules
 )
 
 add_custom_target(path-tracing-raster-comparison
@@ -256,6 +341,112 @@ add_custom_command(TARGET MyRenderer POST_BUILD
 )
 
 if(BUILD_TESTING)
+    add_executable(MyRendererRenderJobTests tests/RenderJobTests.cpp)
+    target_link_libraries(MyRendererRenderJobTests PRIVATE MyRendererBatchRuntime MyRendererModules)
+    target_compile_definitions(MyRendererRenderJobTests PRIVATE
+        MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(MSVC)
+        target_compile_options(MyRendererRenderJobTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererRenderJobTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME render-job-runtime COMMAND MyRendererRenderJobTests)
+
+    add_test(
+        NAME batch-output-override
+        COMMAND ${CMAKE_COMMAND}
+                -DBATCH=$<TARGET_FILE:MyRendererBatch>
+                -DJOB=${CMAKE_CURRENT_SOURCE_DIR}/assets/renderjobs/02_cpu_openexr.renderjob
+                -DMULTI_JOB=${CMAKE_CURRENT_SOURCE_DIR}/assets/renderjobs/01_cpu_reference.renderjob
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/batch-output-override-test
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/BatchOutputOverrideTest.cmake
+    )
+
+    add_executable(MyRendererRenderQueueTests tests/RenderQueueTests.cpp)
+    target_link_libraries(MyRendererRenderQueueTests PRIVATE MyRendererBatchRuntime MyRendererModules)
+    target_compile_definitions(MyRendererRenderQueueTests PRIVATE
+        MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    if(MSVC)
+        target_compile_options(MyRendererRenderQueueTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererRenderQueueTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME render-queue-runtime COMMAND MyRendererRenderQueueTests)
+
+    add_executable(MyRendererEditorSessionTests
+        tests/EditorSessionTests.cpp
+        src/app/EditorSession.cpp
+    )
+    target_include_directories(MyRendererEditorSessionTests PRIVATE src)
+    if(MSVC)
+        target_compile_options(MyRendererEditorSessionTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererEditorSessionTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME editor-session COMMAND MyRendererEditorSessionTests)
+
+    # Cascade fitting is pure matrix math, so it is verified without an OpenGL context: the split
+    # scheme, the sub-frustum corners, the box containment and the texel-grid stability are the
+    # parts of a CSM that go wrong silently.
+    add_executable(MyRendererShadowCascadeTests
+        tests/ShadowCascadeTests.cpp
+        src/render/ShadowCascade.cpp
+    )
+    target_link_libraries(MyRendererShadowCascadeTests PRIVATE glm::glm)
+    target_include_directories(MyRendererShadowCascadeTests PRIVATE src)
+    if(MSVC)
+        target_compile_options(MyRendererShadowCascadeTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererShadowCascadeTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME shadow-cascade-fitting COMMAND MyRendererShadowCascadeTests)
+
+    add_executable(MyRendererAtmosphereTests tests/AtmosphereTests.cpp)
+    target_link_libraries(MyRendererAtmosphereTests PRIVATE MyRendererPathTracing)
+    target_include_directories(MyRendererAtmosphereTests PRIVATE src)
+    if(MSVC)
+        target_compile_options(MyRendererAtmosphereTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererAtmosphereTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME atmosphere-model COMMAND MyRendererAtmosphereTests)
+
+    add_executable(MyRendererTimelineTests tests/TimelineTests.cpp)
+    target_include_directories(MyRendererTimelineTests PRIVATE src)
+    if(MSVC)
+        target_compile_options(MyRendererTimelineTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererTimelineTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME runtime-timeline COMMAND MyRendererTimelineTests)
+
+    add_executable(MyRendererModuleTests
+        tests/ModuleRuntimeTests.cpp
+        src/scene/Scene.cpp
+    )
+    target_link_libraries(MyRendererModuleTests PRIVATE MyRendererModules)
+    target_include_directories(MyRendererModuleTests PRIVATE src)
+    if(MSVC)
+        target_compile_options(MyRendererModuleTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererModuleTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME module-runtime COMMAND MyRendererModuleTests)
+
+    add_executable(MyRendererWorkspaceAssetsTests
+        tests/WorkspaceAssetsTests.cpp
+        src/app/WorkspaceAssets.cpp
+    )
+    target_include_directories(MyRendererWorkspaceAssetsTests PRIVATE src)
+    if(MSVC)
+        target_compile_options(MyRendererWorkspaceAssetsTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererWorkspaceAssetsTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME workspace-assets COMMAND MyRendererWorkspaceAssetsTests)
+
     add_executable(MyRendererAssetTests
         tests/AssetImportTests.cpp
         src/io/AssimpImporter.cpp
@@ -339,6 +530,15 @@ if(BUILD_TESTING)
     target_include_directories(MyRendererProgressiveTests PRIVATE ${assimp_SOURCE_DIR}/contrib/stb)
     add_test(NAME path-tracing-progressive COMMAND MyRendererProgressiveTests)
     set_tests_properties(path-tracing-progressive PROPERTIES TIMEOUT 30)
+    add_executable(MyRendererCpuPreviewTests tests/CpuProgressivePreviewTests.cpp)
+    target_link_libraries(MyRendererCpuPreviewTests PRIVATE MyRendererPathTracing)
+    target_include_directories(MyRendererCpuPreviewTests PRIVATE ${assimp_SOURCE_DIR}/contrib/stb)
+    add_test(NAME cpu-progressive-preview COMMAND MyRendererCpuPreviewTests)
+    set_tests_properties(cpu-progressive-preview PROPERTIES TIMEOUT 30)
+    add_executable(MyRendererDenoisingTests tests/DenoisingTests.cpp)
+    target_link_libraries(MyRendererDenoisingTests PRIVATE MyRendererPathTracing)
+    add_test(NAME path-tracing-denoising COMMAND MyRendererDenoisingTests)
+    set_tests_properties(path-tracing-denoising PROPERTIES TIMEOUT 30)
     add_custom_target(path-tracing-regression
         COMMAND MyRendererProgressiveTests
             ${CMAKE_CURRENT_SOURCE_DIR}/docs/reference-images/sr-p1g-volume-glass
@@ -366,7 +566,7 @@ if(BUILD_TESTING)
 
     add_executable(MyRendererPrismOpticsTests
         tests/PrismOpticsTests.cpp
-        src/optics/PrismOptics.cpp
+    src/optics/PrismOptics.cpp
         src/optics/PrismDemo.cpp
         src/optics/SpectralBeamMesh.cpp
     )
@@ -391,6 +591,19 @@ if(BUILD_TESTING)
         target_compile_options(MyRendererImageComparison PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 
+    add_custom_target(module-rendering-acceptance
+        COMMAND ${CMAKE_COMMAND}
+                -DBATCH=$<TARGET_FILE:MyRendererBatch>
+                -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/module-rendering-acceptance
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/ModuleRenderingAcceptance.cmake
+        DEPENDS MyRendererBatch MyRendererImageComparison MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Accepting module simulate/bake, cache reuse, stale rejection, and reproducible sequences"
+    )
+
     add_custom_target(stylized-acceptance
         COMMAND ${CMAKE_COMMAND}
                 -DRENDERER=$<TARGET_FILE:MyRenderer>
@@ -400,7 +613,18 @@ if(BUILD_TESTING)
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/StylizedAcceptance.cmake
         DEPENDS MyRenderer MyRendererImageComparison
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Capturing SR-P2A/B PBR/Toon, outline, resolution, and transmission-boundary comparisons"
+        COMMENT "Capturing SR-P2A-C effects, debug views, presets, render paths, resolutions, TAA, and transparent boundaries"
+    )
+
+    add_custom_target(stylized-benchmark
+        COMMAND ${CMAKE_COMMAND}
+                -DRENDERER=$<TARGET_FILE:MyRenderer>
+                -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/stylized-benchmarks
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/StylizedBenchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Measuring SR-P2C Low and High stylized GPU tiers"
     )
 
     add_custom_target(prism5-visual-regression
@@ -690,6 +914,15 @@ endif()
 add_custom_target(gpu-smoke
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_CPU_PREVIEW=1
+            MYRENDERER_CPU_PREVIEW_SCALE=1
+            MYRENDERER_CPU_PREVIEW_SPP=1
+            MYRENDERER_RENDER_WIDTH=160
+            MYRENDERER_RENDER_HEIGHT=120
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/cube.obj
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
             MYRENDERER_ANIMATION_DEMO=1
             MYRENDERER_ANIMATION=1
             MYRENDERER_ANIMATION_TIME=1.0
@@ -734,6 +967,64 @@ add_custom_target(gpu-smoke
             MYRENDERER_GBUFFER_DEBUG=0
             $<TARGET_FILE:MyRenderer>
             ${CMAKE_CURRENT_SOURCE_DIR}/assets/models/glass_material_test.gltf
+    # The analytic sky lights the scene itself now, so its per-channel key light has to survive a
+    # real context in both shading paths rather than only in the model tests. The fixture enables
+    # aerial perspective, so these also compile the compositor's segment integration.
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_SUN_ELEVATION=8
+            MYRENDERER_SUN_AZIMUTH=120
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/18_atmosphere_sky.myscene
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_RENDER_PATH=1
+            MYRENDERER_GBUFFER_DEBUG=0
+            MYRENDERER_SUN_ELEVATION=8
+            MYRENDERER_SUN_AZIMUTH=120
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/18_atmosphere_sky.myscene
+    # The On/Off and scale-height pairs are what the slice is accepted against, and each is a
+    # distinct uniform path through the compositor.
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_AERIAL_PERSPECTIVE=0
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/18_atmosphere_sky.myscene
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_AERIAL_PERSPECTIVE=1
+            MYRENDERER_AERIAL_STRENGTH=3
+            MYRENDERER_AERIAL_SCALE_HEIGHT=2
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/18_atmosphere_sky.myscene
+    # Cascaded shadows: one, three and four cascades are three different uniform paths through the
+    # cascade array, and the open coastal fixture is where the split distances actually matter.
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_SHADOW_CASCADES=1
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/19_coastal_cascades.myscene
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_SHADOW_CASCADES=3
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/19_coastal_cascades.myscene
+    COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_MSAA=4
+            MYRENDERER_RENDER_PATH=1
+            MYRENDERER_GBUFFER_DEBUG=0
+            MYRENDERER_SHADOW_CASCADES=4
+            MYRENDERER_SHADOW_SPLIT_LAMBDA=0.5
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/19_coastal_cascades.myscene
     COMMAND ${CMAKE_COMMAND} -E env
             MYRENDERER_SMOKE_TEST=1
             MYRENDERER_MSAA=4
@@ -769,7 +1060,7 @@ add_custom_target(gpu-smoke
     COMMENT "Running MyRenderer with a real OpenGL context"
 )
 
-install(TARGETS MyRenderer RUNTIME DESTINATION . COMPONENT Runtime)
+install(TARGETS MyRenderer MyRendererBatch RUNTIME DESTINATION . COMPONENT Runtime)
 install(DIRECTORY shaders/ DESTINATION shaders COMPONENT Runtime)
 install(
     DIRECTORY assets/

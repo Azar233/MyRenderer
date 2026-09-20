@@ -22,8 +22,28 @@ glm::mat4 Camera::viewMatrix() const {
     return glm::lookAt(position(), target_, glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
+glm::vec3 Camera::forwardDirection() const {
+    return glm::normalize(target_ - position());
+}
+
+glm::vec3 Camera::rightDirection() const {
+    const glm::vec3 forward = forwardDirection();
+    // Guard the degenerate case where the camera looks straight down: `cross(forward, worldUp)` would
+    // collapse and the basis would be unusable.
+    if (std::abs(glm::dot(forward, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.9999f) {
+        return glm::vec3(1.0f, 0.0f, 0.0f);
+    }
+    return glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
+}
+
+glm::vec3 Camera::upDirection() const {
+    return glm::normalize(glm::cross(rightDirection(), forwardDirection()));
+}
+
 glm::mat4 Camera::projectionMatrix(float aspectRatio) const {
-    return glm::perspective(glm::radians(fieldOfViewDegrees_), std::max(aspectRatio, 0.01f), 0.05f, 100.0f);
+    return glm::perspective(
+        glm::radians(fieldOfViewDegrees_), std::max(aspectRatio, 0.01f), nearPlane_, farPlane_
+    );
 }
 
 void Camera::orbit(float yawDelta, float pitchDelta) {

@@ -572,3 +572,14 @@ JSON 的 MAE/RMSE/PSNR/Changed Fraction 始终来自未滤波像素。这里不�
 
 至此 SR-P1 的阶段验收闭环完成。后续算法增强（粗糙透射 VNDF、嵌套介质、透明阴影、Firefly 鲁棒估计）
 保留为独立增量，不阻塞下一阶段 SR-P2 Stylized / NPR。
+
+## P0-C：编辑器 Progressive Preview（2026-09-17）
+
+现有 `SceneSnapshot`、`RenderTask`、Tile 线程池、Beauty/AOV 和导出路径现已直接接入编辑器 Viewport。
+Raster / CPU Path Traced 切换、任务代次、取消/暂停、后台 RGBA staging 发布、主线程 OpenGL 上传、
+1/4→1/2→Full 自动升档、统计 Overlay 与 GUI/CLI 字节一致性测试见
+[`cpu-progressive-preview.md`](cpu-progressive-preview.md)。该接入没有改写 SR-P1 固定图或 Raster 回归基线。
+
+## P0-D：采样与降噪实验（2026-09-17）
+
+Direct/Indirect 分离的 AOV A-Trous、Temporal Reprojection/Disocclusion Rejection、Power-weighted Light Alias Table、GGX VNDF、可选有偏 Firefly Clamp，以及三个固定场景的 1/2/4/8/16 SPP 对 2048 SPP 定量与截图证据，见 [`p0-d-sampling-denoising.md`](p0-d-sampling-denoising.md)。旧 CLI 默认采样流与固定参考图保持不变。

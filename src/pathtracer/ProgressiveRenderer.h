@@ -1,8 +1,11 @@
 #pragma once
 #include <atomic>
+#include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <thread>
+#include "pathtracer/AovDenoiser.h"
 #include "pathtracer/Bvh.h"
 #include "pathtracer/InstancedBvh.h"
 #include "pathtracer/LightSampling.h"
@@ -20,6 +23,10 @@ struct RenderSettings {
     // Zero disables Russian Roulette. Otherwise survival tests start after this many reflections.
     std::uint32_t russianRouletteDepth{3};
     bool nextEventEstimation{true};
+    // Defaults preserve the P0-C regression stream; the editor enables the
+    // lower-variance P0-D strategies explicitly.
+    LightSelectionStrategy lightSelectionStrategy{LightSelectionStrategy::Uniform};
+    GgxSamplingStrategy ggxSamplingStrategy{GgxSamplingStrategy::Distribution};
     // Zero selects available hardware concurrency, capped by the tile count.
     std::uint32_t workerCount{0U};
     std::uint32_t tileSize{16U};
@@ -129,9 +136,32 @@ class ProgressiveRenderer {
     RenderImage image_;
 };
 enum class RenderStatus { Idle, Running, Completed, Cancelled, Failed };
+enum class RenderOutput {
+    Beauty,
+    Albedo,
+    Normal,
+    Depth,
+    Direct,
+    Indirect,
+    SampleCount,
+    Variance
+};
+enum class RenderFileFormat {
+    Png,
+    RadianceHdr,
+    OpenExr
+};
+struct StagingImage {
+    std::uint32_t width{0}, height{0}, completedSamples{0};
+    // Display-ready sRGB RGBA8, bottom row first for direct OpenGL upload.
+    std::vector<std::uint8_t> rgba;
+};
 struct RenderProgress {
+    std::uint64_t taskId{0U};
     RenderStatus status{RenderStatus::Idle};
     RenderImage image;
+    DenoisedImage denoised;
+    StagingImage staging;
     std::string error;
 };
 // One worker. Lifecycle calls are owner-thread operations; progress() is thread safe.
@@ -139,19 +169,55 @@ struct RenderProgress {
 class RenderTask {
   public:
     ~RenderTask();
-    void start(SceneSnapshot snapshot, RenderSettings settings);
+    std::uint64_t start(
+        SceneSnapshot snapshot,
+        RenderSettings settings,
+        RenderOutput output = RenderOutput::Beauty,
+        DenoiseSettings denoise = {}
+    );
     void cancel();
     void wait();
+    void setPaused(bool paused);
+    bool paused() const { return paused_.load(); }
     RenderProgress progress() const;
+    // Cheap immutable publication for frame-loop polling. The legacy progress()
+    // copy remains available for CLI/tests that need value semantics.
+    std::shared_ptr<const RenderProgress> progressSnapshot() const;
 
   private:
     std::atomic<bool> cancel_{false};
+    std::atomic<bool> paused_{false};
+    std::condition_variable pauseCondition_;
+    mutable std::mutex pauseMutex_;
     mutable std::mutex mutex_;
-    RenderProgress progress_;
+    std::shared_ptr<const RenderProgress> progress_{
+        std::make_shared<const RenderProgress>()
+    };
     std::thread worker_;
+    std::uint64_t nextTaskId_{1U};
 };
+std::vector<std::uint8_t> makeDisplayRgba8BottomUp(
+    const RenderImage& image,
+    RenderOutput output
+);
+std::vector<std::uint8_t> makeDisplayRgba8BottomUp(
+    const DenoisedImage& image,
+    RenderOutput output
+);
 void writeReferenceImage(const RenderImage &, const std::filesystem::path &stem);
 void writeReferenceAovs(const RenderImage &, const std::filesystem::path &stem);
+void writeRenderOutput(const RenderImage&, RenderOutput, const std::filesystem::path& stem);
+void writeRenderOutput(const RenderImage&, RenderOutput, const std::filesystem::path& stem,
+                       const std::vector<RenderFileFormat>& formats);
+void writeDenoisedImage(const DenoisedImage&, const std::filesystem::path& stem);
+void writeDenoisingTriptych(
+    const std::vector<glm::vec3>& raw,
+    const std::vector<glm::vec3>& denoised,
+    const std::vector<glm::vec3>& reference,
+    std::uint32_t width,
+    std::uint32_t height,
+    const std::filesystem::path& path
+);
 SceneSnapshot makeDiffuseAcceptanceScene();
 SceneSnapshot makePbrAcceptanceScene();
 SceneSnapshot makeInstancingStressScene(std::uint32_t gridSize = 20U);

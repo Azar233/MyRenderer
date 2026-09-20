@@ -13,6 +13,7 @@ function(capture_and_compare name)
             MYRENDERER_RENDER_WIDTH=1920
             MYRENDERER_RENDER_HEIGHT=1080
             MYRENDERER_SCREENSHOT=${output}
+            MYRENDERER_HIDE_SELECTION_OUTLINE=1
             ${ARGN}
             "${RENDERER}"
             "${SOURCE_DIR}/assets/models/glass_volume_sphere.gltf"

@@ -11,6 +11,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include "optics/Atmosphere.h"
 #include "optics/PrismOptics.h"
 #include "render/OpenGlStateCache.h"
 #include "render/RenderPassSequence.h"
@@ -63,6 +64,29 @@ enum class ShadingMode {
     Stylized = 1
 };
 
+enum class StylizedDebugView {
+    Final = 0,
+    LightingBands = 1,
+    Rim = 2,
+    Outline = 3,
+    Dither = 4,
+    Fog = 5,
+    ColorGrading = 6
+};
+
+enum class StylizedColorGradingLut {
+    CleanToon = 0,
+    Painterly = 1,
+    NightAurora = 2
+};
+
+enum class StylizedPreset {
+    Custom = 0,
+    CleanToon = 1,
+    Painterly = 2,
+    NightAurora = 3
+};
+
 enum class GBufferDebugView {
     Final = 0,
     Albedo = 1,
@@ -105,6 +129,7 @@ struct RendererSettings {
     int msaaSamples{4};
     RenderPath renderPath{RenderPath::Forward};
     ShadingMode shadingMode{ShadingMode::PhysicallyBased};
+    StylizedPreset stylizedPreset{StylizedPreset::Custom};
     GBufferDebugView gBufferDebugView{GBufferDebugView::Final};
     std::vector<LocalLight> localLights;
     bool wireframe{false};
@@ -127,8 +152,30 @@ struct RendererSettings {
     float stylizedOutlineDepthThreshold{0.025f};
     float stylizedOutlineNormalThreshold{0.25f};
     glm::vec3 stylizedOutlineColor{0.025f, 0.035f, 0.055f};
+    bool stylizedDitherEnabled{false};
+    float stylizedDitherStrength{0.65f};
+    bool stylizedHeightFogEnabled{false};
+    float stylizedHeightFogDensity{0.16f};
+    float stylizedHeightFogBaseHeight{-0.75f};
+    float stylizedHeightFogFalloff{1.25f};
+    glm::vec3 stylizedHeightFogColor{0.32f, 0.42f, 0.58f};
+    bool stylizedColorGradingEnabled{false};
+    StylizedColorGradingLut stylizedColorGradingLut{StylizedColorGradingLut::CleanToon};
+    float stylizedColorGradingStrength{1.0f};
+    StylizedDebugView stylizedDebugView{StylizedDebugView::Final};
     bool iblEnabled{true};
     bool shadowsEnabled{true};
+    // Cascaded directional shadows. 1 cascade with the default split reproduces a single orthographic
+    // box, which is the compatibility fallback for scenes written before cascades existed.
+    int shadowCascadeCount{3};
+    // Blend between uniform (0) and logarithmic (1) split spacing. The practical value leans
+    // logarithmic because the near cascade is what runs out of resolution first.
+    float shadowCascadeSplitLambda{0.75f};
+    // Sun-driven analytic sky. While enabled it *is* the environment: the skybox, the
+    // irradiance and the prefiltered specular cubemaps are all rebuilt from this model, and the
+    // directional light direction and colour are derived from the same sun, so the sky and the
+    // light cannot disagree. Off by default, so existing scenes keep their HDR environment.
+    atmosphere::AtmosphereParameters atmosphere;
     bool coloredTransmissionShadowsEnabled{true};
     bool causticsEnabled{false};
     CausticsMode causticsMode{CausticsMode::LightSpace};
@@ -220,6 +267,7 @@ public:
         std::string& error
     ) const;
     int activeMsaaSamples() const;
+    void invalidateTemporalHistory() { previousViewProjectionValid_ = false; }
     bool hasGpuFrameTime() const { return hasGpuFrameTime_; }
     double gpuFrameTimeMilliseconds() const { return gpuFrameTimeMilliseconds_; }
     double latestGpuFrameMeasurementMilliseconds() const { return latestGpuFrameMeasurementMilliseconds_; }
@@ -252,6 +300,13 @@ public:
     bool shaderReloadFailed() const { return shaderReloadFailed_; }
 
 private:
+    // Rebuilds the environment cubemaps when the sun or an atmosphere parameter moved enough to
+    // matter, and restores the HDR environment when the model is switched off.
+    void updateAtmosphereEnvironment(const RendererSettings& settings);
+    bool atmosphereKeyMatches(const atmosphere::AtmosphereParameters& parameters) const;
+
+    atmosphere::AtmosphereParameters builtAtmosphere_;
+    bool atmosphereActive_{false};
     std::unique_ptr<Shader> shader_;
     std::unique_ptr<CausticsMap> causticsMap_;
     std::unique_ptr<DebugGrid> debugGrid_;

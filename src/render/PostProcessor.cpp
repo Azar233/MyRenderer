@@ -1,6 +1,9 @@
 #include "render/PostProcessor.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <vector>
 
 #include <glad/gl.h>
 
@@ -8,6 +11,78 @@
 #include "render/Shader.h"
 
 namespace {
+
+constexpr int colorGradingLutSize = 32;
+
+float saturate(float value) {
+    return std::clamp(value, 0.0f, 1.0f);
+}
+
+std::array<float, 3> gradeColor(int preset, float red, float green, float blue) {
+    float luminance = red * 0.2126f + green * 0.7152f + blue * 0.0722f;
+    if (preset == 0) {
+        constexpr float saturation = 1.08f;
+        red = luminance + (red - luminance) * saturation;
+        green = luminance + (green - luminance) * saturation;
+        blue = luminance + (blue - luminance) * saturation;
+        red = (red - 0.5f) * 1.06f + 0.5f;
+        green = (green - 0.5f) * 1.06f + 0.5f;
+        blue = (blue - 0.5f) * 1.06f + 0.5f;
+        red *= 1.015f;
+        blue *= 0.985f;
+    } else if (preset == 1) {
+        red = std::pow(saturate(red), 0.92f);
+        green = std::pow(saturate(green), 0.92f);
+        blue = std::pow(saturate(blue), 0.92f);
+        luminance = red * 0.2126f + green * 0.7152f + blue * 0.0722f;
+        constexpr float saturation = 0.88f;
+        red = luminance + (red - luminance) * saturation;
+        green = luminance + (green - luminance) * saturation;
+        blue = luminance + (blue - luminance) * saturation;
+        const float shadow = 1.0f - luminance;
+        red += 0.015f * shadow + 0.045f * luminance;
+        green += 0.035f * shadow + 0.025f * luminance;
+        blue += 0.050f * shadow;
+    } else {
+        red = std::pow(saturate(red), 1.08f) * 0.80f;
+        green = std::pow(saturate(green), 1.04f) * 0.93f;
+        blue = std::pow(saturate(blue), 0.96f) * 1.12f;
+        luminance = red * 0.2126f + green * 0.7152f + blue * 0.0722f;
+        constexpr float saturation = 1.18f;
+        red = luminance + (red - luminance) * saturation;
+        green = luminance + (green - luminance) * saturation;
+        blue = luminance + (blue - luminance) * saturation;
+        const float shadow = 1.0f - saturate(luminance);
+        red += 0.018f * shadow + 0.035f * luminance;
+        green += 0.045f * shadow + 0.020f * luminance;
+        blue += 0.110f * shadow + 0.045f * luminance;
+    }
+    return {saturate(red), saturate(green), saturate(blue)};
+}
+
+std::vector<float> makeColorGradingLut(int preset) {
+    std::vector<float> values;
+    values.reserve(
+        static_cast<std::size_t>(colorGradingLutSize)
+        * static_cast<std::size_t>(colorGradingLutSize)
+        * static_cast<std::size_t>(colorGradingLutSize) * 3U
+    );
+    const float denominator = static_cast<float>(colorGradingLutSize - 1);
+    for (int blue = 0; blue < colorGradingLutSize; ++blue) {
+        for (int green = 0; green < colorGradingLutSize; ++green) {
+            for (int red = 0; red < colorGradingLutSize; ++red) {
+                const std::array<float, 3> graded = gradeColor(
+                    preset,
+                    static_cast<float>(red) / denominator,
+                    static_cast<float>(green) / denominator,
+                    static_cast<float>(blue) / denominator
+                );
+                values.insert(values.end(), graded.begin(), graded.end());
+            }
+        }
+    }
+    return values;
+}
 
 void configureTexture(
     unsigned int texture,
@@ -45,9 +120,26 @@ PostProcessor::PostProcessor(
     glGenTextures(2, historyColorTextures_);
     glGenTextures(2, historyDepthTextures_);
     glGenTextures(2, motionTextures_);
+    glGenTextures(3, colorGradingTextures_);
+    for (int preset = 0; preset < 3; ++preset) {
+        const std::vector<float> lut = makeColorGradingLut(preset);
+        glBindTexture(GL_TEXTURE_3D, colorGradingTextures_[preset]);
+        glTexImage3D(
+            GL_TEXTURE_3D, 0, GL_RGB16F,
+            colorGradingLutSize, colorGradingLutSize, colorGradingLutSize,
+            0, GL_RGB, GL_FLOAT, lut.data()
+        );
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_3D, 0);
 }
 
 PostProcessor::~PostProcessor() {
+    glDeleteTextures(3, colorGradingTextures_);
     glDeleteTextures(2, motionTextures_);
     glDeleteTextures(2, historyDepthTextures_);
     glDeleteTextures(2, historyColorTextures_);
@@ -60,7 +152,9 @@ PostProcessor::~PostProcessor() {
 std::size_t PostProcessor::estimatedBytes() const {
     if (width_ <= 0 || height_ <= 0) return 0U;
     return static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_)
-        * (8U * 2U + (8U + 4U + 4U) * 2U);
+        * (8U * 2U + (8U + 4U + 4U) * 2U)
+        + static_cast<std::size_t>(colorGradingLutSize * colorGradingLutSize
+            * colorGradingLutSize * 3 * 2 * 3);
 }
 
 void PostProcessor::resize(int width, int height) {
@@ -198,6 +292,7 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
     compositeShader_->setInt("uMotion", 2);
     compositeShader_->setInt("uDepth", 3);
     compositeShader_->setInt("uEncodedNormal", 4);
+    compositeShader_->setInt("uColorGradingLut", 5);
     compositeShader_->setInt("uTemporalDebugView", settings.temporalDebugView);
     compositeShader_->setBool("uToneMapping", settings.toneMapping);
     compositeShader_->setBool("uBloomEnabled", settings.bloom);
@@ -220,6 +315,41 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
         std::clamp(settings.outlineNormalThreshold, 0.01f, 1.0f)
     );
     compositeShader_->setVec3("uOutlineColor", settings.outlineColor);
+    compositeShader_->setBool("uDitherEnabled", settings.dither);
+    compositeShader_->setFloat(
+        "uDitherStrength", std::clamp(settings.ditherStrength, 0.0f, 1.0f)
+    );
+    compositeShader_->setBool("uHeightFogEnabled", settings.heightFog);
+    compositeShader_->setFloat(
+        "uHeightFogDensity", std::clamp(settings.heightFogDensity, 0.0f, 2.0f)
+    );
+    compositeShader_->setFloat("uHeightFogBaseHeight", settings.heightFogBaseHeight);
+    compositeShader_->setFloat(
+        "uHeightFogFalloff", std::clamp(settings.heightFogFalloff, 0.01f, 4.0f)
+    );
+    compositeShader_->setVec3("uHeightFogColor", settings.heightFogColor);
+    compositeShader_->setBool("uAerialEnabled", settings.aerialPerspective);
+    compositeShader_->setFloat(
+        "uAerialStrength", std::clamp(settings.aerialPerspectiveStrength, 0.0f, 4.0f)
+    );
+    compositeShader_->setFloat(
+        "uAerialScaleHeight", std::max(settings.aerialPerspectiveScaleHeight, 0.01f)
+    );
+    compositeShader_->setVec3(
+        "uAerialColumnDepth",
+        glm::max(settings.aerialPerspectiveColumnDepth, glm::vec3(0.0f))
+    );
+    compositeShader_->setVec3(
+        "uAerialZenithColor", glm::max(settings.aerialPerspectiveZenithColor, glm::vec3(0.0f))
+    );
+    compositeShader_->setVec3(
+        "uAerialHorizonColor", glm::max(settings.aerialPerspectiveHorizonColor, glm::vec3(0.0f))
+    );
+    compositeShader_->setBool("uColorGradingEnabled", settings.colorGrading);
+    compositeShader_->setFloat(
+        "uColorGradingStrength", std::clamp(settings.colorGradingStrength, 0.0f, 1.0f)
+    );
+    compositeShader_->setInt("uStylizedDebugView", settings.stylizedDebugView);
     compositeShader_->setFloat(
         "uInverseWidth", 1.0f / static_cast<float>(target.width())
     );
@@ -227,6 +357,10 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
         "uInverseHeight", 1.0f / static_cast<float>(target.height())
     );
     compositeShader_->setMat4("uInverseProjection", settings.inverseProjection);
+    compositeShader_->setMat4(
+        "uInverseCurrentViewProjection", settings.inverseCurrentViewProjection
+    );
+    compositeShader_->setVec3("uCameraPosition", settings.cameraPosition);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, sceneTexture);
     glActiveTexture(GL_TEXTURE1);
@@ -237,6 +371,11 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
     glBindTexture(GL_TEXTURE_2D, settings.depthTexture);
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, settings.outlineNormalTexture);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(
+        GL_TEXTURE_3D,
+        colorGradingTextures_[std::clamp(settings.colorGradingLut, 0, 2)]
+    );
     drawFullscreen();
     target.unbind();
 }

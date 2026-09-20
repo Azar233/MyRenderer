@@ -37,6 +37,7 @@
 
 #include "app/AppIcon.h"
 #include "app/FileDialog.h"
+#include "asset/BuiltinModels.h"
 #include "io/AssimpImporter.h"
 #include "io/ModelImporter.h"
 #include "io/ObjLoader.h"
@@ -121,106 +122,40 @@ double percentile(std::vector<double> values, double fraction) {
     return values[std::min(index > 0U ? index - 1U : 0U, values.size() - 1U)];
 }
 
-ModelData makeGroundPlaneData() {
-    constexpr float halfExtent = 4.0f;
-    MeshData mesh;
-    mesh.name = "Ground receiver";
-    mesh.vertices = {
-        Vertex{glm::vec3(-halfExtent, 0.0f, -halfExtent), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 0.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)},
-        Vertex{glm::vec3( halfExtent, 0.0f, -halfExtent), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(4.0f, 0.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)},
-        Vertex{glm::vec3( halfExtent, 0.0f,  halfExtent), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(4.0f, 4.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)},
-        Vertex{glm::vec3(-halfExtent, 0.0f,  halfExtent), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(0.0f, 4.0f), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f)}
-    };
-    mesh.indices = {0U, 2U, 1U, 0U, 3U, 2U};
-    mesh.submeshes.push_back(SubmeshData{"Ground receiver", 0U, 6U, 0});
-    mesh.boundsMin = glm::vec3(-halfExtent, 0.0f, -halfExtent);
-    mesh.boundsMax = glm::vec3(halfExtent, 0.0f, halfExtent);
-
-    MaterialData material;
-    material.name = "Ground matte";
-    material.roughnessFactor = 0.82f;
-    material.metallicFactor = 0.0f;
-
-    ModelData model;
-    model.name = "Procedural ground receiver";
-    model.meshes.push_back(std::move(mesh));
-    model.materials.push_back(std::move(material));
-    model.rootNode.name = "Ground root";
-    model.rootNode.meshIndices.push_back(0U);
-    model.boundsMin = glm::vec3(-halfExtent, 0.0f, -halfExtent);
-    model.boundsMax = glm::vec3(halfExtent, 0.0f, halfExtent);
-    return model;
-}
-
-ModelData makeGlassCheckerboardData() {
-    constexpr int columns = 10;
-    constexpr int rows = 7;
-    constexpr float cellSize = 0.34f;
-    MeshData mesh;
-    mesh.name = "Glass-2C checkerboard backdrop";
-    std::vector<std::uint32_t> darkIndices;
-    std::vector<std::uint32_t> lightIndices;
-    for (int row = 0; row < rows; ++row) {
-        for (int column = 0; column < columns; ++column) {
-            const float left = (static_cast<float>(column) - columns * 0.5f) * cellSize;
-            const float right = left + cellSize;
-            const float bottom = (static_cast<float>(row) - rows * 0.5f) * cellSize;
-            const float top = bottom + cellSize;
-            const std::uint32_t first = static_cast<std::uint32_t>(mesh.vertices.size());
-            const glm::vec3 normal(0.0f, 0.0f, 1.0f);
-            const glm::vec4 tangent(1.0f, 0.0f, 0.0f, 1.0f);
-            mesh.vertices.push_back(Vertex{glm::vec3(left, bottom, -1.05f), normal, glm::vec2(0.0f), tangent});
-            mesh.vertices.push_back(Vertex{glm::vec3(right, bottom, -1.05f), normal, glm::vec2(1.0f, 0.0f), tangent});
-            mesh.vertices.push_back(Vertex{glm::vec3(right, top, -1.05f), normal, glm::vec2(1.0f), tangent});
-            mesh.vertices.push_back(Vertex{glm::vec3(left, top, -1.05f), normal, glm::vec2(0.0f, 1.0f), tangent});
-            std::vector<std::uint32_t>& target = ((row + column) % 2 == 0)
-                ? lightIndices
-                : darkIndices;
-            target.insert(target.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
-        }
+std::filesystem::path renderQueueStatePath() {
+    if (const char* overridePath = std::getenv("MYRENDERER_RENDER_QUEUE_STATE")) {
+        return std::filesystem::absolute(overridePath).lexically_normal();
     }
-    mesh.indices = darkIndices;
-    mesh.indices.insert(mesh.indices.end(), lightIndices.begin(), lightIndices.end());
-    mesh.submeshes.push_back(SubmeshData{
-        "Dark checks",
-        0U,
-        static_cast<std::uint32_t>(darkIndices.size()),
-        0
-    });
-    mesh.submeshes.push_back(SubmeshData{
-        "Light checks",
-        static_cast<std::uint32_t>(darkIndices.size()),
-        static_cast<std::uint32_t>(lightIndices.size()),
-        1
-    });
-    mesh.boundsMin = glm::vec3(-columns * cellSize * 0.5f, -rows * cellSize * 0.5f, -1.05f);
-    mesh.boundsMax = glm::vec3(columns * cellSize * 0.5f, rows * cellSize * 0.5f, -1.05f);
-
-    MaterialData dark;
-    dark.name = "Checker charcoal";
-    dark.baseColorFactor = glm::vec4(0.035f, 0.045f, 0.055f, 1.0f);
-    dark.roughnessFactor = 0.78f;
-    MaterialData light;
-    light.name = "Checker ivory";
-    light.baseColorFactor = glm::vec4(0.82f, 0.78f, 0.66f, 1.0f);
-    light.roughnessFactor = 0.72f;
-
-    ModelData model;
-    model.name = "Procedural Glass-2C checkerboard";
-    model.meshes.push_back(std::move(mesh));
-    model.materials.push_back(std::move(dark));
-    model.materials.push_back(std::move(light));
-    model.rootNode.name = "Checkerboard root";
-    model.rootNode.meshIndices.push_back(0U);
-    model.boundsMin = model.meshes.front().boundsMin;
-    model.boundsMax = model.meshes.front().boundsMax;
-    return model;
+#ifdef _WIN32
+    if (const char* localAppData = std::getenv("LOCALAPPDATA")) {
+        return std::filesystem::path(localAppData) / "MyRenderer" / "render-queue.json";
+    }
+#endif
+    return std::filesystem::temp_directory_path() / "MyRenderer" / "render-queue.json";
 }
 
 } // namespace
 
 Application::Application()
     : sourceRoot_(findRuntimeRoot()) {
+    std::filesystem::path sampleJob = sourceRoot_ / "assets" / "renderjobs"
+        / "01_cpu_reference.renderjob";
+    const std::filesystem::path sourceSample = std::filesystem::path(MYRENDERER_SOURCE_DIR)
+        / "assets" / "renderjobs" / "01_cpu_reference.renderjob";
+    if (std::filesystem::is_regular_file(sourceSample)) sampleJob = sourceSample;
+    const std::string sampleJobText = sampleJob.string();
+    std::snprintf(renderJobPathBuffer_.data(), renderJobPathBuffer_.size(), "%s", sampleJobText.c_str());
+    renderQueue_ = std::make_unique<RenderQueue>(renderQueueStatePath());
+    renderQueue_->setModuleRegistry(&moduleRegistry_);
+    std::string restoreError;
+    if (!renderQueue_->restore(restoreError)) {
+        renderQueueMessage_ = "Render Queue restore failed: " + restoreError;
+    } else if (!renderQueue_->restoreDiagnostic().empty()) {
+        renderQueueMessage_ = renderQueue_->restoreDiagnostic();
+        if (!renderQueue_->entries().empty()) {
+            renderQueueMessage_ += " State: " + renderQueue_->persistencePath().string();
+        }
+    }
 }
 
 Application::~Application() {
@@ -264,6 +199,24 @@ int Application::run(const std::filesystem::path& initialModel) {
         renderHeightOverride_ = 1080;
     } else if (prismReelMode_) {
         renderHeightOverride_ = 720;
+    }
+    if (const char* value = std::getenv("MYRENDERER_CPU_PREVIEW")) {
+        viewportRenderMode_ = std::atoi(value) != 0 ? 1 : 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_CPU_PREVIEW_SCALE")) {
+        cpuPreviewScaleMode_ = std::clamp(std::atoi(value), 0, 3);
+    }
+    if (const char* value = std::getenv("MYRENDERER_CPU_PREVIEW_SPP")) {
+        cpuPreviewSamplesPerPixel_ = std::clamp(std::atoi(value), 1, 4096);
+    }
+    if (const char* value = std::getenv("MYRENDERER_CPU_PREVIEW_DEPTH")) {
+        cpuPreviewMaxDepth_ = std::clamp(std::atoi(value), 1, 32);
+    }
+    if (const char* value = std::getenv("MYRENDERER_CPU_PREVIEW_SEED")) {
+        cpuPreviewSeed_ = std::max(std::atoi(value), 0);
+    }
+    if (const char* value = std::getenv("MYRENDERER_CPU_PREVIEW_AOV")) {
+        cpuPreviewOutput_ = std::clamp(std::atoi(value), 0, 7);
     }
     initializeWindow();
     initializeGui();
@@ -458,6 +411,53 @@ int Application::run(const std::filesystem::path& initialModel) {
         statusMessage_ = "No supported model was found in assets/models";
     }
 
+    // Scene loading replaces RendererSettings, so automation overrides that describe
+    // scene lighting must be applied after the authored scene is in place.
+    if (const char* value = std::getenv("MYRENDERER_ATMOSPHERE")) {
+        rendererSettings_.atmosphere.enabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_SUN_ELEVATION")) {
+        rendererSettings_.atmosphere.sunElevationDegrees = std::clamp(
+            std::strtof(value, nullptr), -10.0f, 90.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_SUN_AZIMUTH")) {
+        rendererSettings_.atmosphere.sunAzimuthDegrees = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 360.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_SKY_TURBIDITY")) {
+        rendererSettings_.atmosphere.turbidity = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 10.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_SKY_INTENSITY")) {
+        rendererSettings_.atmosphere.skyIntensity = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 20.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_ENVIRONMENT_INTENSITY")) {
+        rendererSettings_.environmentIntensity = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 4.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_AERIAL_PERSPECTIVE")) {
+        rendererSettings_.atmosphere.aerialPerspectiveEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_AERIAL_STRENGTH")) {
+        rendererSettings_.atmosphere.aerialPerspectiveStrength = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 4.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_AERIAL_SCALE_HEIGHT")) {
+        rendererSettings_.atmosphere.aerialPerspectiveScaleHeight = std::clamp(
+            std::strtof(value, nullptr), 0.01f, 20000.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_SHADOW_CASCADES")) {
+        rendererSettings_.shadowCascadeCount = std::clamp(std::atoi(value), 1, 4);
+    }
+
     // Apply automation overrides after scene loading so a fixed .myscene can
     // be captured in both PBR and Stylized modes without duplicating assets or
     // camera data.
@@ -465,6 +465,11 @@ int Application::run(const std::filesystem::path& initialModel) {
         rendererSettings_.shadingMode = std::atoi(value) == 0
             ? ShadingMode::PhysicallyBased
             : ShadingMode::Stylized;
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_PRESET")) {
+        applyStylizedPreset(static_cast<StylizedPreset>(
+            std::clamp(std::atoi(value), 0, 3)
+        ));
     }
     if (const char* value = std::getenv("MYRENDERER_STYLIZED_BANDS")) {
         rendererSettings_.stylizedBandCount = std::clamp(std::atoi(value), 2, 8);
@@ -477,13 +482,63 @@ int Application::run(const std::filesystem::path& initialModel) {
             std::strtof(value, nullptr), 0.5f, 6.0f
         );
     }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_DITHER")) {
+        rendererSettings_.stylizedDitherEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_DITHER_STRENGTH")) {
+        rendererSettings_.stylizedDitherStrength = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 1.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_FOG")) {
+        rendererSettings_.stylizedHeightFogEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_FOG_DENSITY")) {
+        rendererSettings_.stylizedHeightFogDensity = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 2.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_FOG_BASE_HEIGHT")) {
+        rendererSettings_.stylizedHeightFogBaseHeight = std::clamp(
+            std::strtof(value, nullptr), -10.0f, 10.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_FOG_FALLOFF")) {
+        rendererSettings_.stylizedHeightFogFalloff = std::clamp(
+            std::strtof(value, nullptr), 0.01f, 4.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_COLOR_GRADING")) {
+        rendererSettings_.stylizedColorGradingEnabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_LUT")) {
+        rendererSettings_.stylizedColorGradingLut = static_cast<StylizedColorGradingLut>(
+            std::clamp(std::atoi(value), 0, 2)
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_LUT_STRENGTH")) {
+        rendererSettings_.stylizedColorGradingStrength = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 1.0f
+        );
+    }
+    if (const char* value = std::getenv("MYRENDERER_STYLIZED_DEBUG")) {
+        rendererSettings_.stylizedDebugView = static_cast<StylizedDebugView>(
+            std::clamp(std::atoi(value), 0, 6)
+        );
+    }
     if (const char* value = std::getenv("MYRENDERER_RENDER_PATH")) {
         rendererSettings_.renderPath = std::atoi(value) == 0
             ? RenderPath::Forward
             : RenderPath::Deferred;
     }
+    if (const char* value = std::getenv("MYRENDERER_MSAA")) {
+        rendererSettings_.msaaSamples = std::atoi(value) <= 1 ? 1 : 4;
+    }
+    if (const char* value = std::getenv("MYRENDERER_TAA")) {
+        rendererSettings_.temporalAaEnabled = std::atoi(value) != 0;
+    }
     if (const char* value = std::getenv("MYRENDERER_HIDE_SELECTION_OUTLINE")) {
-        if (std::atoi(value) != 0) selectedSceneEntity_ = invalidSceneEntityId;
+        hideSelectionOutlineForAutomation_ = std::atoi(value) != 0;
     }
 
     if (const char* value = std::getenv("MYRENDERER_REFERENCE_COMPARE_DIR")) {
@@ -534,7 +589,16 @@ int Application::run(const std::filesystem::path& initialModel) {
             pendingEditorScreenshotWarmupFrames_ = std::clamp(std::atoi(value), 1, 240);
         }
         if (const char* tab = std::getenv("MYRENDERER_EDITOR_SCREENSHOT_TAB")) {
+            focusObjectTab_ = std::strcmp(tab, "object") == 0;
             focusRendererTab_ = std::strcmp(tab, "renderer") == 0;
+            focusAssetsTab_ = std::strcmp(tab, "assets") == 0;
+            focusRenderQueueTab_ = std::strcmp(tab, "render-queue") == 0;
+            focusModulesTab_ = std::strcmp(tab, "modules") == 0;
+            focusModuleTab_ = std::strcmp(tab, "module") == 0;
+            focusLogTab_ = std::strcmp(tab, "log") == 0;
+        }
+        if (const char* scroll = std::getenv("MYRENDERER_EDITOR_SCREENSHOT_SCROLL")) {
+            pendingEditorScreenshotScroll_ = std::max(std::strtof(scroll, nullptr), 0.0f);
         }
     }
     const char* recoveryModelValue = std::getenv("MYRENDERER_RECOVERY_TEST");
@@ -543,11 +607,16 @@ int Application::run(const std::filesystem::path& initialModel) {
         : std::filesystem::path(recoveryModelValue);
     bool recoveryScheduled = recoveryModel.empty();
 
+    const bool cpuPreviewSmoke = std::getenv("MYRENDERER_SMOKE_TEST") != nullptr
+        && viewportRenderMode_ == 1;
     int smokeTestFrames = std::getenv("MYRENDERER_SMOKE_TEST") == nullptr ? -1 : 5;
+    const auto cpuPreviewSmokeDeadline = std::chrono::steady_clock::now()
+        + std::chrono::seconds(30);
     if (const char* extra = std::getenv("MYRENDERER_APPEND_TEST")) {
         droppedModelPaths_.push_back(std::filesystem::u8path(extra));
     }
     previousFrameTime_ = glfwGetTime();
+    applyModuleEnvironmentOverrides();
     while (!glfwWindowShouldClose(window_)) {
         const double cpuFrameStart = glfwGetTime();
         glfwPollEvents();
@@ -557,6 +626,7 @@ int Application::run(const std::filesystem::path& initialModel) {
             loadModel(dropped, true);
         }
         updateModelLoad();
+        updateRenderQueue();
         if (!recoveryScheduled && model_ != nullptr && !pendingModelImport_.has_value()) {
             recoveryScheduled = loadModel(recoveryModel);
         }
@@ -599,11 +669,14 @@ int Application::run(const std::filesystem::path& initialModel) {
         ImGui::NewFrame();
 
         drawMainMenu();
+        drawWorkspaceToolbar();
+        processEditorCommands();
         drawEditorLayout();
         if (hierarchyPanelOpen_) drawScenePanel();
         if (assetsPanelOpen_) drawAssetsPanel();
         drawViewportPanel();
         if (inspectorPanelOpen_) drawInspectorPanel();
+        processEditorCommands();
         drawAboutPopup();
         if (showImGuiDemo_) {
             ImGui::ShowDemoWindow(&showImGuiDemo_);
@@ -688,8 +761,16 @@ int Application::run(const std::filesystem::path& initialModel) {
                 glfwSetWindowShouldClose(window_, GLFW_TRUE);
             }
         }
-        if (smokeTestFrames > 0 && !pendingModelImport_.has_value() && droppedModelPaths_.empty() && --smokeTestFrames == 0) {
-            glfwSetWindowShouldClose(window_, GLFW_TRUE);
+        if (smokeTestFrames > 0 && !pendingModelImport_.has_value()
+            && droppedModelPaths_.empty()) {
+            if (cpuPreviewSmoke && cpuPreviewUploadedSamples_ == 0U) {
+                if (std::chrono::steady_clock::now() >= cpuPreviewSmokeDeadline) {
+                    std::cerr << "CPU preview smoke timed out before an OpenGL upload\n";
+                    glfwSetWindowShouldClose(window_, GLFW_TRUE);
+                }
+            } else if (--smokeTestFrames == 0) {
+                glfwSetWindowShouldClose(window_, GLFW_TRUE);
+            }
         }
     }
 
@@ -708,9 +789,42 @@ int Application::run(const std::filesystem::path& initialModel) {
     const bool interactionsPassed = !std::getenv("MYRENDERER_EDITOR_INTERACTION_TEST") || editorInteractionRegression();
     const bool referenceComparisonPassed = !referenceComparisonMode_
         || (referenceComparisonComplete_ && !referenceComparisonFailed_);
+    const bool cpuPreviewSmokePassed = !cpuPreviewSmoke || cpuPreviewUploadedSamples_ > 0U;
     shutdown();
-    return recoveryPassed && appendPassed && interactionsPassed && referenceComparisonPassed ? 0 : 2;
+    return recoveryPassed && appendPassed && interactionsPassed
+        && referenceComparisonPassed && cpuPreviewSmokePassed ? 0 : 2;
 }
+
+namespace {
+void hashBytes(std::uint64_t& hash, const void* data, std::size_t size) {
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (std::size_t index = 0U; index < size; ++index) {
+        hash ^= bytes[index];
+        hash *= 1099511628211ULL;
+    }
+}
+
+template <typename T>
+void hashValue(std::uint64_t& hash, const T& value) {
+    hashBytes(hash, &value, sizeof(value));
+}
+
+void hashString(std::uint64_t& hash, const std::string& value) {
+    hashBytes(hash, value.data(), value.size());
+    const unsigned char terminator = 0U;
+    hashBytes(hash, &terminator, 1U);
+}
+
+const char* activityName(EditorActivity activity) {
+    switch (activity) {
+        case EditorActivity::Edit: return "Edit";
+        case EditorActivity::Preview: return "Preview";
+        case EditorActivity::Bake: return "Bake";
+        case EditorActivity::Render: return "Render";
+    }
+    return "Unknown";
+}
+} // namespace
 
 void Application::initializeWindow() {
     initializeMyRendererApplicationIdentity();
@@ -735,7 +849,16 @@ void Application::initializeWindow() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
 
-    window_ = glfwCreateWindow(1440, 900, "MyRenderer - OpenGL Rasterizer", nullptr, nullptr);
+    int initialWindowWidth = 1440;
+    int initialWindowHeight = 900;
+    if (const char* width = std::getenv("MYRENDERER_EDITOR_WINDOW_WIDTH")) {
+        initialWindowWidth = std::clamp(std::atoi(width), 1100, 7680);
+    }
+    if (const char* height = std::getenv("MYRENDERER_EDITOR_WINDOW_HEIGHT")) {
+        initialWindowHeight = std::clamp(std::atoi(height), 680, 4320);
+    }
+    window_ = glfwCreateWindow(initialWindowWidth, initialWindowHeight,
+                               "MyRenderer - OpenGL Rasterizer", nullptr, nullptr);
     if (window_ == nullptr) {
         glfwTerminate();
         throw std::runtime_error("Failed to create an OpenGL 3.3 window");
@@ -767,6 +890,14 @@ void Application::initializeWindow() {
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
+}
+
+void Application::applyVsync(bool enabled) {
+    vsync_ = enabled;
+    if (window_ != nullptr) {
+        glfwMakeContextCurrent(window_);
+        glfwSwapInterval(vsync_ ? 1 : 0);
+    }
 }
 
 void Application::initializeGui() {
@@ -885,6 +1016,11 @@ void Application::shutdown() {
     }
     shutdownComplete_ = true;
 
+    if (renderQueue_ != nullptr) {
+        renderQueue_->shutdown();
+        renderQueue_.reset();
+    }
+
     if (pendingModelImport_.has_value()) {
         pendingModelImport_->future.wait();
         try {
@@ -896,6 +1032,13 @@ void Application::shutdown() {
 
     if (window_ != nullptr) {
         glfwMakeContextCurrent(window_);
+        cpuPreviewTask_.cancel();
+        cpuPreviewTask_.wait();
+        cpuPreviewProgress_.reset();
+        if (cpuPreviewTexture_ != 0U) {
+            glDeleteTextures(1, &cpuPreviewTexture_);
+            cpuPreviewTexture_ = 0U;
+        }
         scene_.clear();
         importedModels_.clear();
         pickingShader_.reset();
@@ -1021,9 +1164,9 @@ void Application::drawMainMenu() {
         ImGui::MenuItem(EditorUi::label("Auto rotate"), nullptr, &autoRotate_);
         ImGui::Separator();
         if (ImGui::BeginMenu(EditorUi::label("Panels"))) {
-            ImGui::MenuItem(EditorUi::label("Hierarchy###Hierarchy"), nullptr, &hierarchyPanelOpen_);
+            ImGui::MenuItem(EditorUi::label("Scene Explorer###Hierarchy"), nullptr, &hierarchyPanelOpen_);
             ImGui::MenuItem(EditorUi::label("Inspector###Inspector"), nullptr, &inspectorPanelOpen_);
-            ImGui::MenuItem(EditorUi::label("Content Browser###Assets"), nullptr, &assetsPanelOpen_);
+            ImGui::MenuItem(EditorUi::label("Workspace###Workspace"), nullptr, &assetsPanelOpen_);
             ImGui::EndMenu();
         }
         ImGui::EndMenu();
@@ -1064,35 +1207,104 @@ void Application::drawInspectorPanel() {
         focusObjectTab_ = false;
         if (ImGui::BeginTabItem(EditorUi::label("Object"), nullptr, showObject ? ImGuiTabItemFlags_SetSelected : 0)) {
             SceneEntity* selectedEntity = scene_.find(selectedSceneEntity_);
+            if (selectedEntity) {
+                ImGui::TextUnformatted(selectedEntity->name.c_str());
+                ImGui::TextDisabled("Render entity #%llu",
+                    static_cast<unsigned long long>(selectedEntity->id));
+            }
             if (EditorUi::section("Transform", true)) {
                 if (!selectedEntity) {
                     ImGui::TextWrapped("%s", EditorUi::chinese ? "左键点击场景中的模型或在层级中选择对象。" : "Left-click a model in the viewport or select an object in the hierarchy.");
                 } else {
-                    ImGui::TextUnformatted(selectedEntity->name.c_str());
-                    bool edited = EditorUi::DragFloat3(EditorUi::label("Position"), &selectedEntity->transform.translation.x, 0.01f);
-                    edited |= EditorUi::DragFloat3(EditorUi::label("Rotation"), &selectedEntity->transform.rotationDegrees.x, 0.25f);
-                    edited |= EditorUi::DragFloat3(EditorUi::label("Scale"), &selectedEntity->transform.scale.x, 0.01f, 0.01f, 100.0f);
-                    edited |= EditorUi::ColorEdit3(EditorUi::label("Entity tint"), &selectedEntity->tint.x);
+                    SceneTransform editedTransform = selectedEntity->transform;
+                    bool edited = EditorUi::DragFloat3(EditorUi::label("Position"), &editedTransform.translation.x, 0.01f);
+                    edited |= EditorUi::DragFloat3(EditorUi::label("Rotation"), &editedTransform.rotationDegrees.x, 0.25f);
+                    edited |= EditorUi::DragFloat3(EditorUi::label("Scale"), &editedTransform.scale.x, 0.01f, 0.01f, 100.0f);
                     if (ImGui::Button(EditorUi::label("Reset transform"), ImVec2(-1.0f, 0.0f))) {
-                        const auto asset = selectedEntity->transform.assetTransform;
-                        selectedEntity->transform = SceneTransform{};
-                        selectedEntity->transform.assetTransform = asset;
+                        editedTransform.translation = glm::vec3(0.0f);
+                        editedTransform.rotationDegrees = glm::vec3(0.0f);
+                        editedTransform.scale = glm::vec3(1.0f);
                         edited = true;
                     }
                     if (edited) {
-                        editedEntities_.insert(selectedEntity->id);
-                        selectedEntity->motionHistoryValid = false;
+                        EditorCommand command{EditorCommandType::SetEntityTransform, selectedEntity->id};
+                        command.transform.translation = {
+                            editedTransform.translation.x,
+                            editedTransform.translation.y,
+                            editedTransform.translation.z
+                        };
+                        command.transform.rotationDegrees = {
+                            editedTransform.rotationDegrees.x,
+                            editedTransform.rotationDegrees.y,
+                            editedTransform.rotationDegrees.z
+                        };
+                        command.transform.scale = {
+                            editedTransform.scale.x,
+                            editedTransform.scale.y,
+                            editedTransform.scale.z
+                        };
+                        editorSession_.request(std::move(command));
                     }
                 }
             }
-            if (selectedEntity && EditorUi::section("Asset statistics")) {
+
+            if (selectedEntity && EditorUi::section("Material", true)) {
+                glm::vec3 editedTint = selectedEntity->tint;
+                if (EditorUi::ColorEdit3(EditorUi::label("Entity tint"), &editedTint.x)) {
+                    EditorCommand command{EditorCommandType::SetEntityTint, selectedEntity->id};
+                    command.color = {editedTint.x, editedTint.y, editedTint.z};
+                    editorSession_.request(std::move(command));
+                }
                 const GpuModel* asset = selectedEntity->model;
                 if (asset) {
                     ImGui::Text("Meshes: %zu | Triangles: %zu", asset->meshCount(), asset->triangleCount());
                     ImGui::Text("Materials: %zu | Textures: %zu", asset->materialCount(), asset->textureCount());
                 }
-                if (ImGui::Button(EditorUi::label("Delete"), ImVec2(-1.0f, 0.0f))) deleteSelectedEntity();
+                if (!selectedEntity->modelResource.empty()) {
+                    ImGui::TextDisabled("%s", selectedEntity->modelResource.c_str());
+                }
             }
+
+            if (selectedEntity && EditorUi::section("Lighting", true)) {
+                bool visible = selectedEntity->visible;
+                if (EditorUi::Checkbox(EditorUi::label("Visibility"), &visible)) {
+                    editorSession_.request(EditorCommand{
+                        EditorCommandType::SetEntityVisibility,
+                        selectedEntity->id,
+                        0U,
+                        visible
+                    });
+                }
+                bool castsShadow = selectedEntity->castsShadow;
+                if (EditorUi::Checkbox(EditorUi::label("Casts shadow"), &castsShadow)) {
+                    editorSession_.request(EditorCommand{
+                        EditorCommandType::SetEntityCastsShadow,
+                        selectedEntity->id,
+                        0U,
+                        castsShadow
+                    });
+                }
+            }
+
+            if (selectedEntity && EditorUi::section("Object actions")) {
+                if (ImGui::Button(EditorUi::label("Delete"), ImVec2(-1.0f, 0.0f))) {
+                    editorSession_.request(EditorCommand{
+                        EditorCommandType::DeleteEntity,
+                        selectedEntity->id
+                    });
+                }
+            }
+            ImGui::EndTabItem();
+        }
+
+        const bool showModule = focusModuleTab_;
+        focusModuleTab_ = false;
+        if (ImGui::BeginTabItem(
+                EditorUi::label("Module"),
+                nullptr,
+                showModule ? ImGuiTabItemFlags_SetSelected : 0
+            )) {
+            drawModulePanel();
             ImGui::EndTabItem();
         }
 
@@ -1189,6 +1401,16 @@ void Application::drawInspectorPanel() {
                     rendererSettings_.shadingMode = static_cast<ShadingMode>(shadingMode);
                 }
                 if (rendererSettings_.shadingMode == ShadingMode::Stylized) {
+                    int stylizedPreset = static_cast<int>(rendererSettings_.stylizedPreset);
+                    const char* stylizedPresetNames[] = {
+                        "Custom", "Clean Toon", "Painterly", "Night Aurora"
+                    };
+                    if (EditorUi::Combo(
+                            "Stylized preset", &stylizedPreset,
+                            stylizedPresetNames, 4
+                        )) {
+                        applyStylizedPreset(static_cast<StylizedPreset>(stylizedPreset));
+                    }
                     EditorUi::SliderInt(
                         "Lighting bands", &rendererSettings_.stylizedBandCount, 2, 8
                     );
@@ -1244,6 +1466,69 @@ void Application::drawInspectorPanel() {
                         EditorUi::ColorEdit3(
                             "Outline color", &rendererSettings_.stylizedOutlineColor.x
                         );
+                    }
+                    EditorUi::Checkbox(
+                        "Ordered dither", &rendererSettings_.stylizedDitherEnabled
+                    );
+                    if (rendererSettings_.stylizedDitherEnabled) {
+                        EditorUi::SliderFloat(
+                            "Dither strength", &rendererSettings_.stylizedDitherStrength,
+                            0.0f, 1.0f, "%.2f"
+                        );
+                    }
+                    EditorUi::Checkbox(
+                        "Height fog", &rendererSettings_.stylizedHeightFogEnabled
+                    );
+                    if (rendererSettings_.stylizedHeightFogEnabled) {
+                        EditorUi::SliderFloat(
+                            "Fog density", &rendererSettings_.stylizedHeightFogDensity,
+                            0.0f, 2.0f, "%.2f"
+                        );
+                        EditorUi::SliderFloat(
+                            "Fog base height", &rendererSettings_.stylizedHeightFogBaseHeight,
+                            -10.0f, 10.0f, "%.2f"
+                        );
+                        EditorUi::SliderFloat(
+                            "Fog height falloff", &rendererSettings_.stylizedHeightFogFalloff,
+                            0.01f, 4.0f, "%.2f"
+                        );
+                        EditorUi::ColorEdit3(
+                            "Fog color", &rendererSettings_.stylizedHeightFogColor.x
+                        );
+                    }
+                    EditorUi::Checkbox(
+                        "Color grading LUT",
+                        &rendererSettings_.stylizedColorGradingEnabled
+                    );
+                    if (rendererSettings_.stylizedColorGradingEnabled) {
+                        int lut = static_cast<int>(
+                            rendererSettings_.stylizedColorGradingLut
+                        );
+                        const char* lutNames[] = {
+                            "Clean Toon", "Painterly", "Night Aurora"
+                        };
+                        if (EditorUi::Combo("Color LUT", &lut, lutNames, 3)) {
+                            rendererSettings_.stylizedColorGradingLut =
+                                static_cast<StylizedColorGradingLut>(lut);
+                        }
+                        EditorUi::SliderFloat(
+                            "LUT strength",
+                            &rendererSettings_.stylizedColorGradingStrength,
+                            0.0f, 1.0f, "%.2f"
+                        );
+                    }
+                    int stylizedDebug = static_cast<int>(
+                        rendererSettings_.stylizedDebugView
+                    );
+                    const char* stylizedDebugViews[] = {
+                        "Final output", "Lighting bands", "Rim factor",
+                        "Outline edges", "Dither pattern", "Fog factor", "LUT delta"
+                    };
+                    if (EditorUi::Combo(
+                            "Stylized debug", &stylizedDebug, stylizedDebugViews, 7
+                        )) {
+                        rendererSettings_.stylizedDebugView =
+                            static_cast<StylizedDebugView>(stylizedDebug);
                     }
                 }
                 int renderPath = static_cast<int>(rendererSettings_.renderPath);
@@ -1819,6 +2104,319 @@ void Application::drawInspectorPanel() {
     ImGui::End();
 }
 
+std::uint64_t Application::cpuPreviewInputSignature(int width, int height) const {
+    std::uint64_t hash = 1469598103934665603ULL;
+    hashValue(hash, sceneGeneration_);
+    hashValue(hash, width);
+    hashValue(hash, height);
+    hashValue(hash, cpuPreviewScaleMode_);
+    hashValue(hash, cpuPreviewOutput_);
+    hashValue(hash, cpuPreviewSamplesPerPixel_);
+    hashValue(hash, cpuPreviewMaxDepth_);
+    hashValue(hash, cpuPreviewSeed_);
+    hashValue(hash, cpuPreviewDenoise_);
+    hashValue(hash, cpuPreviewTemporalDenoise_);
+    hashValue(hash, cpuPreviewFireflyClamp_);
+    hashValue(hash, cpuPreviewAtrousIterations_);
+    hashValue(hash, cpuPreviewPowerWeightedLights_);
+    hashValue(hash, cpuPreviewGgxVndf_);
+
+    const CameraOrbitState camera = camera_.orbitState();
+    hashValue(hash, camera.target.x);
+    hashValue(hash, camera.target.y);
+    hashValue(hash, camera.target.z);
+    hashValue(hash, camera.yawDegrees);
+    hashValue(hash, camera.pitchDegrees);
+    hashValue(hash, camera.distance);
+    hashValue(hash, camera.fieldOfViewDegrees);
+
+    for (const SceneEntity& entity : scene_.entities()) {
+        hashValue(hash, entity.id);
+        hashValue(hash, entity.parent);
+        const std::uintptr_t model = reinterpret_cast<std::uintptr_t>(entity.model);
+        hashValue(hash, model);
+        hashString(hash, entity.modelResource);
+        for (int column = 0; column < 4; ++column) {
+            for (int row = 0; row < 4; ++row) {
+                hashValue(hash, entity.worldTransform[column][row]);
+            }
+        }
+        hashValue(hash, entity.tint.x);
+        hashValue(hash, entity.tint.y);
+        hashValue(hash, entity.tint.z);
+        hashValue(hash, entity.visible);
+        hashValue(hash, entity.enabledByPreset);
+        hashValue(hash, entity.castsShadow);
+    }
+
+    hashString(hash, activeModuleId_);
+    hashValue(hash, moduleInputRevision_);
+    hashValue(hash, moduleSeed_);
+    hashValue(hash, moduleRuntime_.report().contentHash);
+
+    hashValue(hash, rendererSettings_.lightDirection.x);
+    hashValue(hash, rendererSettings_.lightDirection.y);
+    hashValue(hash, rendererSettings_.lightDirection.z);
+    hashValue(hash, rendererSettings_.diffuseStrength);
+    hashValue(hash, rendererSettings_.backgroundColor.x);
+    hashValue(hash, rendererSettings_.backgroundColor.y);
+    hashValue(hash, rendererSettings_.backgroundColor.z);
+    hashValue(hash, rendererSettings_.environmentIntensity);
+    hashValue(hash, rendererSettings_.iblEnabled);
+    hashValue(hash, rendererSettings_.skyboxEnabled);
+    for (const LocalLight& light : rendererSettings_.localLights) {
+        hashValue(hash, light.type);
+        hashValue(hash, light.position.x);
+        hashValue(hash, light.position.y);
+        hashValue(hash, light.position.z);
+        hashValue(hash, light.direction.x);
+        hashValue(hash, light.direction.y);
+        hashValue(hash, light.direction.z);
+        hashValue(hash, light.color.x);
+        hashValue(hash, light.color.y);
+        hashValue(hash, light.color.z);
+        hashValue(hash, light.intensity);
+        hashValue(hash, light.radius);
+        hashValue(hash, light.outerConeCosine);
+    }
+    return hash;
+}
+
+void Application::updateCpuPreview(int width, int height) {
+    const auto now = std::chrono::steady_clock::now();
+    const std::uint64_t observed = cpuPreviewInputSignature(width, height);
+    if (observed != cpuPreviewObservedSignature_) {
+        cpuPreviewObservedSignature_ = observed;
+        cpuPreviewLastInputChange_ = now;
+        cpuPreviewTaskSignature_ = 0U;
+        cpuPreviewTaskId_ = 0U;
+        cpuPreviewTask_.cancel();
+    }
+
+    if (cpuPreviewRestartRequested_) {
+        cpuPreviewRestartRequested_ = false;
+        cpuPreviewTaskSignature_ = 0U;
+        cpuPreviewTaskId_ = 0U;
+        cpuPreviewTask_.cancel();
+        cpuPreviewLastInputChange_ = now - std::chrono::milliseconds(100);
+    }
+    if (cpuPreviewPaused_) return;
+
+    const auto idle = now - cpuPreviewLastInputChange_;
+    if (idle < std::chrono::milliseconds(75)) return;
+
+    int divisor = 1;
+    if (cpuPreviewScaleMode_ == 0) {
+        divisor = idle < std::chrono::milliseconds(450)
+            ? 4
+            : (idle < std::chrono::milliseconds(1200) ? 2 : 1);
+    } else if (cpuPreviewScaleMode_ == 1) {
+        divisor = 4;
+    } else if (cpuPreviewScaleMode_ == 2) {
+        divisor = 2;
+    }
+    const int previewWidth = std::max(width / divisor, 1);
+    const int previewHeight = std::max(height / divisor, 1);
+    std::uint64_t taskSignature = observed;
+    hashValue(taskSignature, previewWidth);
+    hashValue(taskSignature, previewHeight);
+    if (taskSignature == cpuPreviewTaskSignature_ && cpuPreviewTaskId_ != 0U) {
+        uploadCpuPreviewTexture();
+        return;
+    }
+
+    pathtracer::RenderSettings settings;
+    settings.width = static_cast<std::uint32_t>(previewWidth);
+    settings.height = static_cast<std::uint32_t>(previewHeight);
+    settings.samplesPerPixel = static_cast<std::uint32_t>(cpuPreviewSamplesPerPixel_);
+    settings.maxDepth = static_cast<std::uint32_t>(cpuPreviewMaxDepth_);
+    settings.seed = static_cast<std::uint32_t>(cpuPreviewSeed_);
+    settings.progressPublishMilliseconds = 100U;
+    settings.lightSelectionStrategy = cpuPreviewPowerWeightedLights_
+        ? pathtracer::LightSelectionStrategy::PowerWeighted
+        : pathtracer::LightSelectionStrategy::Uniform;
+    settings.ggxSamplingStrategy = cpuPreviewGgxVndf_
+        ? pathtracer::GgxSamplingStrategy::VisibleNormals
+        : pathtracer::GgxSamplingStrategy::Distribution;
+    pathtracer::DenoiseSettings denoise;
+    denoise.enabled = cpuPreviewDenoise_;
+    denoise.temporalEnabled = cpuPreviewDenoise_ && cpuPreviewTemporalDenoise_;
+    denoise.atrousIterations = static_cast<std::uint32_t>(cpuPreviewAtrousIterations_);
+    denoise.fireflyClampEnabled = cpuPreviewFireflyClamp_;
+    try {
+        pathtracer::SceneSnapshot snapshot = pathtracer::captureSceneSnapshot(
+            viewportScene(), camera_, static_cast<float>(width) / static_cast<float>(height),
+            rendererSettings_
+        );
+        cpuPreviewTaskId_ = cpuPreviewTask_.start(
+            std::move(snapshot), settings,
+            static_cast<pathtracer::RenderOutput>(cpuPreviewOutput_), denoise
+        );
+        cpuPreviewTaskSignature_ = taskSignature;
+        cpuPreviewUploadedTaskId_ = 0U;
+        cpuPreviewUploadedSamples_ = 0U;
+        cpuPreviewProgress_ = cpuPreviewTask_.progressSnapshot();
+    } catch (const std::exception& error) {
+        cpuPreviewTaskId_ = 0U;
+        cpuPreviewTaskSignature_ = 0U;
+        statusMessage_ = std::string("CPU preview failed: ") + error.what();
+    }
+    uploadCpuPreviewTexture();
+}
+
+void Application::uploadCpuPreviewTexture() {
+    const auto publication = cpuPreviewTask_.progressSnapshot();
+    if (!publication || publication->taskId != cpuPreviewTaskId_) return;
+    cpuPreviewProgress_ = publication;
+    const pathtracer::StagingImage& staging = publication->staging;
+    if (staging.rgba.empty()
+        || (cpuPreviewUploadedTaskId_ == publication->taskId
+            && cpuPreviewUploadedSamples_ == staging.completedSamples)) {
+        return;
+    }
+
+    GLint activeTexture = 0;
+    GLint previousBinding = 0;
+    GLint unpackAlignment = 0;
+    GLint unpackBuffer = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousBinding);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpackAlignment);
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpackBuffer);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0U);
+    if (cpuPreviewTexture_ == 0U) {
+        glGenTextures(1, &cpuPreviewTexture_);
+        glBindTexture(GL_TEXTURE_2D, cpuPreviewTexture_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, cpuPreviewTexture_);
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (cpuPreviewTextureWidth_ != static_cast<int>(staging.width)
+        || cpuPreviewTextureHeight_ != static_cast<int>(staging.height)) {
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_RGBA8,
+            static_cast<GLsizei>(staging.width), static_cast<GLsizei>(staging.height),
+            0, GL_RGBA, GL_UNSIGNED_BYTE, staging.rgba.data()
+        );
+        cpuPreviewTextureWidth_ = static_cast<int>(staging.width);
+        cpuPreviewTextureHeight_ = static_cast<int>(staging.height);
+    } else {
+        glTexSubImage2D(
+            GL_TEXTURE_2D, 0, 0, 0,
+            static_cast<GLsizei>(staging.width), static_cast<GLsizei>(staging.height),
+            GL_RGBA, GL_UNSIGNED_BYTE, staging.rgba.data()
+        );
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, unpackAlignment);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(unpackBuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousBinding));
+    glActiveTexture(static_cast<GLenum>(activeTexture));
+    cpuPreviewUploadedTaskId_ = publication->taskId;
+    cpuPreviewUploadedSamples_ = staging.completedSamples;
+}
+
+void Application::exportCpuPreview() {
+    const auto publication = cpuPreviewTask_.progressSnapshot();
+    if (!publication || publication->taskId != cpuPreviewTaskId_
+        || publication->image.completedSamples == 0U) {
+        statusMessage_ = "CPU preview has no published samples to export.";
+        return;
+    }
+    std::filesystem::path stem = nextScreenshotPath();
+    stem.replace_extension();
+    try {
+        pathtracer::writeReferenceImage(publication->image, stem);
+        pathtracer::writeReferenceAovs(publication->image, stem);
+        if (!publication->denoised.empty()) {
+            pathtracer::writeDenoisedImage(
+                publication->denoised, stem.string() + "-denoised");
+        }
+        statusMessage_ = "Exported CPU raw/denoised Beauty, HDR, and AOVs: " + stem.string();
+    } catch (const std::exception& error) {
+        statusMessage_ = std::string("CPU preview export failed: ") + error.what();
+    }
+}
+
+void Application::applyModuleEnvironmentOverrides() {
+    if (const char* module = std::getenv("MYRENDERER_MODULE")) {
+        activeModuleId_ = module;
+        ++moduleInputRevision_;
+        moduleMessage_ = moduleRegistry_.contains(activeModuleId_)
+            ? "Module '" + activeModuleId_ + "' selected."
+            : "Unknown module id: " + activeModuleId_;
+    }
+    if (const char* seed = std::getenv("MYRENDERER_MODULE_SEED")) {
+        moduleSeed_ = static_cast<std::uint32_t>(std::max(std::atoi(seed), 0));
+    }
+    if (const char* frame = std::getenv("MYRENDERER_TIMELINE_FRAME")) {
+        editorSession_.setFrame(std::atoi(frame));
+    }
+}
+
+const Scene& Application::viewportScene() const {
+    if (!modulePreviewEnabled() || !moduleRuntime_.active()) return scene_;
+    if (moduleRuntime_.report().status == ModuleRunStatus::Failed) return scene_;
+    return moduleRuntime_.runtimeScene().scene();
+}
+
+void Application::updateModulePreview() {
+    if (!modulePreviewEnabled()) return;
+
+    const bool inputsChanged = moduleBuiltRevision_ != moduleInputRevision_
+        || moduleBuiltSceneGeneration_ != sceneGeneration_
+        || moduleBuiltEntityCount_ != scene_.size();
+    std::string error;
+    if (inputsChanged) {
+        if (!moduleRuntime_.configure(
+                activeModuleId_, moduleParameterOverrides_, moduleSeed_, error
+            )) {
+            moduleMessage_ = "Module '" + activeModuleId_ + "' rejected: " + error;
+            statusMessage_ = moduleMessage_;
+            return;
+        }
+        if (!moduleRuntime_.reset(
+                scene_, editorSession_.startFrame(), editorSession_.endFrame(),
+                editorSession_.framesPerSecond(), error
+            )) {
+            moduleMessage_ = "Module initialize failed: " + error;
+            statusMessage_ = moduleMessage_;
+            return;
+        }
+        moduleBuiltRevision_ = moduleInputRevision_;
+        moduleBuiltSceneGeneration_ = sceneGeneration_;
+        moduleBuiltEntityCount_ = scene_.size();
+    }
+
+    // The runtime is deliberately forward-only. Scrubbing backwards reconstructs the
+    // discardable scene from the authored scene, then deterministically steps forward.
+    if (moduleRuntime_.timeline().frame() > editorSession_.frame()) {
+        if (!moduleRuntime_.reset(
+                scene_, editorSession_.startFrame(), editorSession_.endFrame(),
+                editorSession_.framesPerSecond(), error
+            )) {
+            moduleMessage_ = "Module reset failed: " + error;
+            statusMessage_ = moduleMessage_;
+            return;
+        }
+    }
+    if (!moduleRuntime_.runToFrame(editorSession_.frame(), error)) {
+        moduleMessage_ = "Module step failed: " + error;
+        statusMessage_ = moduleMessage_;
+        return;
+    }
+
+    const ModuleRunReport& report = moduleRuntime_.report();
+    moduleMessage_ = "Module " + report.moduleDisplayName
+        + " | frame " + std::to_string(report.lastFrame)
+        + " | " + moduleRunStatusName(report.status)
+        + " | content " + std::to_string(report.contentHash);
+}
+
 void Application::drawViewportPanel() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     const bool visible = ImGui::Begin(EditorUi::label("Viewport###Viewport"));
@@ -1834,15 +2432,60 @@ void Application::drawViewportPanel() {
         camera_.reset(selected ? glm::vec3(selected->worldTransform[3]) : modelPosition_);
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton(EditorUi::label("Save PNG"))) {
-        pendingScreenshotPath_ = nextScreenshotPath();
+    ImGui::SetNextItemWidth(142.0f);
+    if (ImGui::SmallButton(viewportRenderMode_ == 0
+            ? EditorUi::label("Save PNG")
+            : EditorUi::label("Export"))) {
+        if (viewportRenderMode_ == 0) pendingScreenshotPath_ = nextScreenshotPath();
+        else exportCpuPreview();
+    }
+    if (viewportRenderMode_ == 1) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton(cpuPreviewPaused_ ? "Resume" : "Pause")) {
+            editorSession_.requestPause(!cpuPreviewPaused_);
+            if (cpuPreviewPaused_ && cpuPreviewTaskId_ == 0U) {
+                cpuPreviewRestartRequested_ = true;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Restart")) cpuPreviewRestartRequested_ = true;
+        ImGui::SameLine();
+        if (ImGui::SmallButton("CPU Settings")) ImGui::OpenPopup("CpuPreviewSettings");
+        if (ImGui::BeginPopup("CpuPreviewSettings")) {
+            const char* scaleNames[] = {"Auto (1/4 -> 1/2 -> Full)", "1/4", "1/2", "Full"};
+            ImGui::SetNextItemWidth(210.0f);
+            ImGui::Combo("Preview resolution", &cpuPreviewScaleMode_, scaleNames, 4);
+            ImGui::SliderInt("Target SPP", &cpuPreviewSamplesPerPixel_, 1, 4096,
+                             "%d", ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderInt("Max depth", &cpuPreviewMaxDepth_, 1, 32);
+            ImGui::InputInt("Seed", &cpuPreviewSeed_);
+            cpuPreviewSeed_ = std::max(cpuPreviewSeed_, 0);
+            const char* outputNames[] = {
+                "Beauty", "Albedo", "Normal", "Depth", "Direct", "Indirect",
+                "Sample Count", "Variance"
+            };
+            ImGui::Combo("AOV", &cpuPreviewOutput_, outputNames, 8);
+            ImGui::SeparatorText("P0-D sampling / denoising");
+            ImGui::Checkbox("AOV A-Trous denoiser", &cpuPreviewDenoise_);
+            ImGui::BeginDisabled(!cpuPreviewDenoise_);
+            ImGui::SliderInt("A-Trous passes", &cpuPreviewAtrousIterations_, 1, 6);
+            ImGui::Checkbox("Temporal reprojection", &cpuPreviewTemporalDenoise_);
+            ImGui::Checkbox("Firefly clamp (biased)", &cpuPreviewFireflyClamp_);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Optional biased preview mode; never used for reference images.");
+            ImGui::EndDisabled();
+            ImGui::Checkbox("Power-weighted lights", &cpuPreviewPowerWeightedLights_);
+            ImGui::Checkbox("GGX visible normals (VNDF)", &cpuPreviewGgxVndf_);
+            ImGui::TextDisabled("Camera/scene/light/settings changes cancel stale work.");
+            ImGui::EndPopup();
+        }
     }
     ImGui::SameLine();
     if (ImGui::SmallButton(EditorUi::label("Panels"))) ImGui::OpenPopup("ViewportPanels");
     if (ImGui::BeginPopup("ViewportPanels")) {
-        ImGui::MenuItem(EditorUi::label("Hierarchy###Hierarchy"), nullptr, &hierarchyPanelOpen_);
+        ImGui::MenuItem(EditorUi::label("Scene Explorer###Hierarchy"), nullptr, &hierarchyPanelOpen_);
         ImGui::MenuItem(EditorUi::label("Inspector###Inspector"), nullptr, &inspectorPanelOpen_);
-        ImGui::MenuItem(EditorUi::label("Content Browser###Assets"), nullptr, &assetsPanelOpen_);
+        ImGui::MenuItem(EditorUi::label("Workspace###Workspace"), nullptr, &assetsPanelOpen_);
         ImGui::EndPopup();
     }
     ImGui::SameLine();
@@ -1876,6 +2519,7 @@ void Application::drawViewportPanel() {
     std::vector<RenderItem> renderItems;
     scene_.beginFrame();
     syncSceneEntities(normalization);
+    updateModulePreview();
     if (model_ != nullptr && instanceStressDemoEnabled_) {
         static constexpr std::array<glm::vec3, 6> instanceTints{
             glm::vec3(0.82f, 0.34f, 0.22f),
@@ -1957,7 +2601,7 @@ void Application::drawViewportPanel() {
     }
     if (!benchmarkMode_ && (lightStressDemoEnabled_ || instanceStressDemoEnabled_)) materializeStressEntities(renderItems);
     if (!lightStressDemoEnabled_ && !instanceStressDemoEnabled_) {
-        renderItems = scene_.buildRenderItems();
+        renderItems = viewportScene().buildRenderItems();
     }
     if (!loadedSceneDocument_) {
         rendererSettings_.causticsReceiverPlaneY =
@@ -1967,13 +2611,19 @@ void Application::drawViewportPanel() {
         ? static_cast<float>(std::fmod(glfwGetTime() * 0.16, 1.0))
         : 0.0f;
     if (lightStressDemoEnabled_ || instanceStressDemoEnabled_) {
-        for (const RenderItem& item : scene_.buildRenderItems()) {
+        for (const RenderItem& item : viewportScene().buildRenderItems()) {
             if (std::find(stressEntities_.begin(), stressEntities_.end(), item.entityId) == stressEntities_.end()
                 && item.entityId != primaryEntity_ && item.entityId != comparisonEntity_ && item.model != groundModel_.get()
                 && item.model != glassBackdropModel_.get()) renderItems.push_back(item);
         }
     }
-    renderer_->render(renderItems, camera_, rendererSettings_, width, height);
+    const bool cpuPreviewVisible = viewportRenderMode_ == 1
+        && !benchmarkMode_ && !prismReelMode_ && !referenceComparisonMode_;
+    if (cpuPreviewVisible) {
+        updateCpuPreview(width, height);
+    } else {
+        renderer_->render(renderItems, camera_, rendererSettings_, width, height);
+    }
     if (referenceComparisonMode_ && !referenceComparisonComplete_
         && !pendingModelImport_.has_value() && !scene_.entities().empty()) {
         if (referenceComparisonWarmupFrames_ > 0) {
@@ -1982,7 +2632,8 @@ void Application::drawViewportPanel() {
             captureReferenceComparison(width, height);
         }
     }
-    if (!benchmarkMode_ && !prismReelMode_ && !referenceComparisonMode_) {
+    if (!cpuPreviewVisible && !benchmarkMode_ && !prismReelMode_ && !referenceComparisonMode_
+        && !hideSelectionOutlineForAutomation_) {
         renderer_->drawSelectionOutline(renderItems, camera_, selectedSceneEntity_, rendererSettings_.cullBackFaces);
     }
 
@@ -2004,10 +2655,10 @@ void Application::drawViewportPanel() {
         }
     }
 
-    if (!pendingScreenshotPath_.empty() && !scene_.entities().empty() && !pendingModelImport_.has_value()
+    if (!cpuPreviewVisible && !pendingScreenshotPath_.empty() && !scene_.entities().empty() && !pendingModelImport_.has_value()
         && pendingScreenshotWarmupFrames_ > 0) {
         --pendingScreenshotWarmupFrames_;
-    } else if (!pendingScreenshotPath_.empty() && !scene_.entities().empty()
+    } else if (!cpuPreviewVisible && !pendingScreenshotPath_.empty() && !scene_.entities().empty()
         && !pendingModelImport_.has_value()) {
         std::string screenshotError;
         if (renderer_->saveScreenshot(pendingScreenshotPath_, screenshotError)) {
@@ -2022,12 +2673,109 @@ void Application::drawViewportPanel() {
         pendingScreenshotPath_.clear();
     }
 
-    ImGui::Image(
-        static_cast<ImTextureID>(static_cast<std::uintptr_t>(renderer_->colorTexture())),
-        ImVec2(static_cast<float>(width), static_cast<float>(height)),
-        ImVec2(0.0f, 1.0f),
-        ImVec2(1.0f, 0.0f)
-    );
+    const bool hasCurrentCpuTexture = cpuPreviewVisible
+        && cpuPreviewTexture_ != 0U
+        && cpuPreviewTaskId_ != 0U
+        && cpuPreviewUploadedTaskId_ == cpuPreviewTaskId_;
+    if (cpuPreviewVisible && !hasCurrentCpuTexture) {
+        ImGui::InvisibleButton("###CpuPreviewWaiting", ImVec2(
+            static_cast<float>(width), static_cast<float>(height)
+        ));
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(18, 21, 28, 255)
+        );
+    } else {
+        const unsigned int viewportTexture = cpuPreviewVisible
+            ? cpuPreviewTexture_
+            : renderer_->colorTexture();
+        ImGui::Image(
+            static_cast<ImTextureID>(static_cast<std::uintptr_t>(viewportTexture)),
+            ImVec2(static_cast<float>(width), static_cast<float>(height)),
+            ImVec2(0.0f, 1.0f),
+            ImVec2(1.0f, 0.0f)
+        );
+    }
+
+    if (cpuPreviewVisible) {
+        const ImVec2 imageMin = ImGui::GetItemRectMin();
+        const auto progress = cpuPreviewProgress_;
+        const bool current = progress && progress->taskId == cpuPreviewTaskId_;
+        const std::uint32_t completed = current ? progress->image.completedSamples : 0U;
+        const pathtracer::RenderStatistics* statistics = current
+            ? &progress->image.statistics
+            : nullptr;
+        const char* outputNames[] = {
+            "Beauty", "Albedo", "Normal", "Depth", "Direct", "Indirect",
+            "Sample Count", "Variance"
+        };
+        const char* state = cpuPreviewPaused_
+            ? "Paused"
+            : (!current || cpuPreviewTaskId_ == 0U
+                ? "Restarting"
+                : (progress->status == pathtracer::RenderStatus::Completed
+                    ? "Complete"
+                    : (progress->status == pathtracer::RenderStatus::Failed
+                        ? "Failed"
+                        : "Rendering")));
+        char overlay[640]{};
+        const double denoiseMilliseconds = current ? progress->denoised.milliseconds : 0.0;
+        const std::size_t historyAccepted = current ? progress->denoised.temporalAccepted : 0U;
+        const std::size_t historyRejected = current ? progress->denoised.temporalRejected : 0U;
+        const bool filteredOutput = cpuPreviewDenoise_
+            && (cpuPreviewOutput_ == static_cast<int>(pathtracer::RenderOutput::Beauty)
+                || cpuPreviewOutput_ == static_cast<int>(pathtracer::RenderOutput::Direct)
+                || cpuPreviewOutput_ == static_cast<int>(pathtracer::RenderOutput::Indirect));
+        std::snprintf(
+            overlay, sizeof(overlay),
+            "CPU Path Traced | %s | %s%s\n%u / %d SPP (%.1f%%) | %dx%d -> %dx%d | Seed %d | Depth %d\nRender %.1f ms | Denoise %.1f ms | History %zu / %zu\nPaths %llu | Shadow %llu | BVH tests %llu / %llu",
+            state, outputNames[cpuPreviewOutput_], filteredOutput ? " + AOV Denoised" : "",
+            completed, cpuPreviewSamplesPerPixel_,
+            100.0f * static_cast<float>(completed) / std::max(cpuPreviewSamplesPerPixel_, 1),
+            cpuPreviewTextureWidth_, cpuPreviewTextureHeight_, width, height,
+            cpuPreviewSeed_, cpuPreviewMaxDepth_,
+            statistics ? statistics->renderMilliseconds : 0.0,
+            denoiseMilliseconds, historyAccepted, historyRejected,
+            static_cast<unsigned long long>(statistics ? statistics->pathRays : 0U),
+            static_cast<unsigned long long>(statistics ? statistics->shadowRays : 0U),
+            static_cast<unsigned long long>(statistics ? statistics->bvhTraversal.boundsTests : 0U),
+            static_cast<unsigned long long>(statistics ? statistics->bvhTraversal.triangleTests : 0U)
+        );
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImVec2 padding(7.0f, 5.0f);
+        const ImVec2 textSize = ImGui::CalcTextSize(overlay);
+        drawList->AddRectFilled(
+            ImVec2(imageMin.x + 8.0f, imageMin.y + 8.0f),
+            ImVec2(imageMin.x + 8.0f + textSize.x + padding.x * 2.0f,
+                   imageMin.y + 8.0f + textSize.y + padding.y * 2.0f),
+            IM_COL32(12, 15, 22, 215), 5.0f
+        );
+        drawList->AddText(
+            ImVec2(imageMin.x + 8.0f + padding.x, imageMin.y + 8.0f + padding.y),
+            IM_COL32(235, 239, 247, 255), overlay
+        );
+    } else {
+        const ImVec2 imageMin = ImGui::GetItemRectMin();
+        char overlay[256]{};
+        std::snprintf(
+            overlay, sizeof(overlay),
+            "Raster | %s | %dx%d\nFrame %d @ %d FPS | Denoiser Off | Live",
+            activityName(editorSession_.activity()), width, height,
+            editorSession_.frame(), editorSession_.framesPerSecond()
+        );
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImVec2 padding(7.0f, 5.0f);
+        const ImVec2 textSize = ImGui::CalcTextSize(overlay);
+        drawList->AddRectFilled(
+            ImVec2(imageMin.x + 8.0f, imageMin.y + 8.0f),
+            ImVec2(imageMin.x + 8.0f + textSize.x + padding.x * 2.0f,
+                   imageMin.y + 8.0f + textSize.y + padding.y * 2.0f),
+            IM_COL32(12, 15, 22, 215), 5.0f
+        );
+        drawList->AddText(
+            ImVec2(imageMin.x + 8.0f + padding.x, imageMin.y + 8.0f + padding.y),
+            IM_COL32(235, 239, 247, 255), overlay
+        );
+    }
 
     if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         const ImVec2 min = ImGui::GetItemRectMin();
@@ -2037,7 +2785,12 @@ void Application::drawViewportPanel() {
         ImGui::SetWindowFocus();
     }
     if (ImGui::IsWindowFocused() && !ImGui::GetIO().WantTextInput
-        && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) deleteSelectedEntity();
+        && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+        editorSession_.request(EditorCommand{
+            EditorCommandType::DeleteEntity,
+            static_cast<std::uint64_t>(selectedSceneEntity_)
+        });
+    }
     if (ImGui::IsItemHovered() && !(prismDemoEnabled_ && prismCameraLocked_)) {
         ImGuiIO& io = ImGui::GetIO();
         if (io.MouseWheel != 0.0f) {
@@ -2239,36 +2992,25 @@ void Application::drawAboutPopup() {
 }
 
 void Application::discoverModels() {
-    availableModels_.clear();
-    availableScenes_.clear();
-    unsupportedModelCount_ = 0;
-    const auto modelDirectory = sourceRoot_ / "assets" / "models";
-    if (!std::filesystem::exists(modelDirectory)) {
+    std::string error;
+    if (!workspaceAssets_.refresh(sourceRoot_, error)) {
+        statusMessage_ = error;
         return;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(modelDirectory)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        if (findImporter(entry.path()) != nullptr) {
-            availableModels_.push_back(entry.path());
-        } else {
-            const std::string extension = lowercase(entry.path().extension().string());
-            if (extension == ".dae" || extension == ".fbx" || extension == ".gltf" || extension == ".glb") {
-                ++unsupportedModelCount_;
-            }
-        }
+
+    std::vector<std::filesystem::path> models;
+    std::vector<std::filesystem::path> scenes;
+    for (const WorkspaceAssetRecord& asset : workspaceAssets_.records()) {
+        if (asset.category == WorkspaceAssetCategory::Models) models.push_back(asset.path);
+        else if (asset.category == WorkspaceAssetCategory::Scenes) scenes.push_back(asset.path);
     }
-    std::sort(availableModels_.begin(), availableModels_.end());
-    const auto sceneDirectory = sourceRoot_ / "assets" / "scenes";
-    if (std::filesystem::exists(sceneDirectory)) {
-        for (const auto& entry : std::filesystem::directory_iterator(sceneDirectory)) {
-            if (entry.is_regular_file()
-                && lowercase(entry.path().extension().string()) == myRendererSceneExtension) {
-                availableScenes_.push_back(entry.path());
-            }
-        }
-        std::sort(availableScenes_.begin(), availableScenes_.end());
+    availableModels_ = std::move(models);
+    availableScenes_ = std::move(scenes);
+    unsupportedModelCount_ = 0U;
+    thumbnailCacheGeneration_ = workspaceAssets_.generation();
+    if (!selectedWorkspaceAsset_.empty()
+        && workspaceAssets_.find(selectedWorkspaceAsset_) == nullptr) {
+        selectedWorkspaceAsset_.clear();
     }
 }
 
@@ -2779,6 +3521,97 @@ void Application::activateGlassCausticsPreset() {
     }
 }
 
+void Application::applyStylizedPreset(StylizedPreset preset) {
+    rendererSettings_.stylizedPreset = preset;
+    if (preset == StylizedPreset::Custom) return;
+
+    rendererSettings_.shadingMode = ShadingMode::Stylized;
+    rendererSettings_.toneMapping = true;
+    rendererSettings_.stylizedDebugView = StylizedDebugView::Final;
+    rendererSettings_.stylizedOutlineEnabled = true;
+    rendererSettings_.stylizedOutlineDepthThreshold = 0.025f;
+    rendererSettings_.stylizedOutlineNormalThreshold = 0.25f;
+    rendererSettings_.stylizedColorGradingEnabled = true;
+
+    switch (preset) {
+    case StylizedPreset::CleanToon:
+        rendererSettings_.stylizedBandCount = 3;
+        rendererSettings_.stylizedBandSoftness = 0.025f;
+        rendererSettings_.stylizedSpecularSize = 0.20f;
+        rendererSettings_.stylizedSpecularSoftness = 0.025f;
+        rendererSettings_.stylizedRimWidth = 0.25f;
+        rendererSettings_.stylizedRimSoftness = 0.06f;
+        rendererSettings_.stylizedRimIntensity = 0.55f;
+        rendererSettings_.stylizedShadowTint = glm::vec3(0.16f, 0.21f, 0.32f);
+        rendererSettings_.stylizedRimColor = glm::vec3(0.65f, 0.82f, 1.0f);
+        rendererSettings_.stylizedOutlineWidth = 1.25f;
+        rendererSettings_.stylizedOutlineColor = glm::vec3(0.02f, 0.03f, 0.05f);
+        rendererSettings_.stylizedDitherEnabled = false;
+        rendererSettings_.stylizedHeightFogEnabled = false;
+        rendererSettings_.stylizedColorGradingLut = StylizedColorGradingLut::CleanToon;
+        rendererSettings_.stylizedColorGradingStrength = 0.75f;
+        rendererSettings_.bloom = false;
+        rendererSettings_.bloomThreshold = 1.0f;
+        rendererSettings_.bloomIntensity = 0.08f;
+        rendererSettings_.exposure = 1.0f;
+        break;
+    case StylizedPreset::Painterly:
+        rendererSettings_.stylizedBandCount = 4;
+        rendererSettings_.stylizedBandSoftness = 0.10f;
+        rendererSettings_.stylizedSpecularSize = 0.28f;
+        rendererSettings_.stylizedSpecularSoftness = 0.10f;
+        rendererSettings_.stylizedRimWidth = 0.42f;
+        rendererSettings_.stylizedRimSoftness = 0.16f;
+        rendererSettings_.stylizedRimIntensity = 0.80f;
+        rendererSettings_.stylizedShadowTint = glm::vec3(0.27f, 0.18f, 0.20f);
+        rendererSettings_.stylizedRimColor = glm::vec3(0.95f, 0.72f, 0.55f);
+        rendererSettings_.stylizedOutlineWidth = 1.0f;
+        rendererSettings_.stylizedOutlineColor = glm::vec3(0.045f, 0.03f, 0.035f);
+        rendererSettings_.stylizedDitherEnabled = true;
+        rendererSettings_.stylizedDitherStrength = 0.45f;
+        rendererSettings_.stylizedHeightFogEnabled = true;
+        rendererSettings_.stylizedHeightFogDensity = 0.12f;
+        rendererSettings_.stylizedHeightFogBaseHeight = -0.65f;
+        rendererSettings_.stylizedHeightFogFalloff = 1.10f;
+        rendererSettings_.stylizedHeightFogColor = glm::vec3(0.38f, 0.42f, 0.50f);
+        rendererSettings_.stylizedColorGradingLut = StylizedColorGradingLut::Painterly;
+        rendererSettings_.stylizedColorGradingStrength = 0.85f;
+        rendererSettings_.bloom = true;
+        rendererSettings_.bloomThreshold = 0.85f;
+        rendererSettings_.bloomIntensity = 0.10f;
+        rendererSettings_.exposure = 1.05f;
+        break;
+    case StylizedPreset::NightAurora:
+        rendererSettings_.stylizedBandCount = 3;
+        rendererSettings_.stylizedBandSoftness = 0.06f;
+        rendererSettings_.stylizedSpecularSize = 0.15f;
+        rendererSettings_.stylizedSpecularSoftness = 0.06f;
+        rendererSettings_.stylizedRimWidth = 0.50f;
+        rendererSettings_.stylizedRimSoftness = 0.10f;
+        rendererSettings_.stylizedRimIntensity = 1.40f;
+        rendererSettings_.stylizedShadowTint = glm::vec3(0.06f, 0.08f, 0.22f);
+        rendererSettings_.stylizedRimColor = glm::vec3(0.30f, 1.0f, 0.88f);
+        rendererSettings_.stylizedOutlineWidth = 1.5f;
+        rendererSettings_.stylizedOutlineColor = glm::vec3(0.015f, 0.02f, 0.06f);
+        rendererSettings_.stylizedDitherEnabled = true;
+        rendererSettings_.stylizedDitherStrength = 0.60f;
+        rendererSettings_.stylizedHeightFogEnabled = true;
+        rendererSettings_.stylizedHeightFogDensity = 0.25f;
+        rendererSettings_.stylizedHeightFogBaseHeight = -0.80f;
+        rendererSettings_.stylizedHeightFogFalloff = 0.80f;
+        rendererSettings_.stylizedHeightFogColor = glm::vec3(0.035f, 0.09f, 0.18f);
+        rendererSettings_.stylizedColorGradingLut = StylizedColorGradingLut::NightAurora;
+        rendererSettings_.stylizedColorGradingStrength = 0.85f;
+        rendererSettings_.bloom = true;
+        rendererSettings_.bloomThreshold = 0.65f;
+        rendererSettings_.bloomIntensity = 0.22f;
+        rendererSettings_.exposure = 0.85f;
+        break;
+    case StylizedPreset::Custom:
+        break;
+    }
+}
+
 void Application::applyVolumeGlassPreset(VolumeGlassPreset preset) {
     volumeGlassPreset_ = preset;
     rendererSettings_.volumeGlassOverrideEnabled = true;
@@ -3053,6 +3886,17 @@ void Application::writePrismBenchmarkReport() {
            << "  \"renderPath\": "
            << std::quoted(rendererSettings_.renderPath == RenderPath::Deferred
                 ? "deferred" : "forward") << ",\n"
+           << "  \"shadingMode\": "
+           << std::quoted(rendererSettings_.shadingMode == ShadingMode::Stylized
+                ? "stylized" : "physicallyBased") << ",\n"
+           << "  \"stylizedPreset\": "
+           << static_cast<int>(rendererSettings_.stylizedPreset) << ",\n"
+           << "  \"stylizedDitherEnabled\": "
+           << (rendererSettings_.stylizedDitherEnabled ? "true" : "false") << ",\n"
+           << "  \"stylizedHeightFogEnabled\": "
+           << (rendererSettings_.stylizedHeightFogEnabled ? "true" : "false") << ",\n"
+           << "  \"stylizedColorGradingEnabled\": "
+           << (rendererSettings_.stylizedColorGradingEnabled ? "true" : "false") << ",\n"
            << "  \"skinningEnabled\": "
            << (model_ != nullptr && model_->hasSkinning() ? "true" : "false") << ",\n"
            << "  \"animationEnabled\": " << (animationEnabled_ ? "true" : "false") << ",\n"

@@ -2,6 +2,8 @@ if(NOT DEFINED RENDERER OR NOT DEFINED COMPARATOR OR NOT DEFINED SOURCE_DIR OR N
     message(FATAL_ERROR "RendererRegressionSuite requires RENDERER, COMPARATOR, SOURCE_DIR, and BINARY_DIR")
 endif()
 
+set(failed_suites "")
+
 function(run_visual_suite script output_name)
     execute_process(
         COMMAND "${CMAKE_COMMAND}"
@@ -14,7 +16,8 @@ function(run_visual_suite script output_name)
         RESULT_VARIABLE result
     )
     if(NOT result EQUAL 0)
-        message(FATAL_ERROR "Renderer regression suite failed in ${script}")
+        list(APPEND failed_suites "${script}")
+        set(failed_suites "${failed_suites}" PARENT_SCOPE)
     endif()
 endfunction()
 
@@ -28,3 +31,8 @@ run_visual_suite(InstanceStressVisualRegression instance-stress-visual-current)
 run_visual_suite(ScreenSpaceVisualRegression screen-space-visual-current)
 run_visual_suite(SkinningVisualRegression skinning-visual-current)
 run_visual_suite(FoundationVisualRegression foundation-visual-current)
+
+if(failed_suites)
+    list(JOIN failed_suites ", " failed_suite_summary)
+    message(FATAL_ERROR "Renderer regression suite failed in: ${failed_suite_summary}")
+endif()

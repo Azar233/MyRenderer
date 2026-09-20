@@ -28,7 +28,8 @@ float materialBsdfPdf(
     const EvaluatedPbrMaterial& material,
     const glm::vec3& normal,
     const glm::vec3& outgoing,
-    const glm::vec3& incoming
+    const glm::vec3& incoming,
+    GgxSamplingStrategy strategy = GgxSamplingStrategy::Distribution
 );
 MaterialBsdfSample sampleMaterialBsdf(
     const EvaluatedPbrMaterial& material,
@@ -36,7 +37,8 @@ MaterialBsdfSample sampleMaterialBsdf(
     const glm::vec3& outgoing,
     bool frontFace,
     float componentSample,
-    const glm::vec2& directionSample
+    const glm::vec2& directionSample,
+    GgxSamplingStrategy strategy = GgxSamplingStrategy::Distribution
 );
 glm::vec3 beerLambertTransmittance(
     const glm::vec3& attenuationColor,

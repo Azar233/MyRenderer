@@ -47,4 +47,8 @@ The visual comparator intentionally uses GPU-tolerant MAE and changed-pixel thre
 - Never overwrite historical path-tracer stage images that are documented as historical evidence. Add or advance the active reference deliberately.
 - New acceptance outputs need a stable fixture, deterministic controls, an output location under the build tree, meaningful failure thresholds or artifact assertions, and a documented reproduction command.
 
+## Illustration captures are not baselines
+
+A screenshot taken to explain a feature in a document belongs in `docs/media/`, never in `docs/images/`. `docs/images/` and `docs/reference-images/` are inventories that regression targets compare pixel-wise, so an explanatory capture placed there silently becomes a baseline that later runs must match. Capture illustrations freely, recapture them whenever the feature changes, and record the command that produced each one next to its caption. The writing and caption conventions live in `$myrenderer-documentation` and `docs/README.md`.
+
 Use `$myrenderer-build-and-test` for build-tree selection and CPU/GPU test coverage around the visual run.

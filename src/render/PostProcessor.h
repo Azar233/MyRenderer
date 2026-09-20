@@ -30,6 +30,31 @@ struct PostProcessSettings {
     float outlineNormalThreshold{0.25f};
     glm::vec3 outlineColor{0.025f, 0.035f, 0.055f};
     unsigned int outlineNormalTexture{0};
+    bool dither{false};
+    float ditherStrength{0.65f};
+    bool heightFog{false};
+    float heightFogDensity{0.16f};
+    float heightFogBaseHeight{-0.75f};
+    float heightFogFalloff{1.25f};
+    glm::vec3 heightFogColor{0.32f, 0.42f, 0.58f};
+    // Aerial perspective. The renderer supplies the sky model's own per-channel vertical optical
+    // depth and the radiance of the sky the geometry fades into, so the compositor only has to
+    // integrate the segment in front of the surface and blend. It never has to know how the sky is
+    // built, which is what keeps `postprocess.frag` from growing a second copy of the model.
+    bool aerialPerspective{false};
+    float aerialPerspectiveStrength{1.0f};
+    // Density scale height in world units. The optical depth of a horizontal ray grows by one full
+    // atmospheric column per scale height travelled.
+    float aerialPerspectiveScaleHeight{60.0f};
+    // Optical depth of the whole vertical column, per RGB channel.
+    glm::vec3 aerialPerspectiveColumnDepth{0.0f};
+    glm::vec3 aerialPerspectiveZenithColor{0.0f};
+    glm::vec3 aerialPerspectiveHorizonColor{0.0f};
+    bool colorGrading{false};
+    int colorGradingLut{0};
+    float colorGradingStrength{1.0f};
+    int stylizedDebugView{0};
+    glm::vec3 cameraPosition{0.0f};
     glm::mat4 inverseProjection{1.0f};
     glm::mat4 inverseCurrentViewProjection{1.0f};
     glm::mat4 previousViewProjection{1.0f};
@@ -67,6 +92,7 @@ private:
     unsigned int historyColorTextures_[2]{};
     unsigned int historyDepthTextures_[2]{};
     unsigned int motionTextures_[2]{};
+    unsigned int colorGradingTextures_[3]{};
     int width_{0};
     int height_{0};
     int historyIndex_{0};

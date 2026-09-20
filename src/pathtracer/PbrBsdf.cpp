@@ -58,6 +58,41 @@ glm::vec3 localToWorld(const glm::vec3& local, const glm::vec3& normal) {
     return glm::normalize(tangent * local.x + bitangent * local.y + normal * local.z);
 }
 
+glm::vec3 worldToLocal(const glm::vec3& world, const glm::vec3& normal) {
+    glm::vec3 tangent, bitangent;
+    basis(normal, tangent, bitangent);
+    return {glm::dot(world, tangent), glm::dot(world, bitangent), glm::dot(world, normal)};
+}
+
+glm::vec3 sampleVisibleGgxNormal(
+    const glm::vec3& outgoing,
+    const glm::vec3& normal,
+    float alpha,
+    float u,
+    float v
+) {
+    const glm::vec3 localOutgoing = worldToLocal(outgoing, normal);
+    const glm::vec3 stretched = glm::normalize(glm::vec3(
+        alpha * localOutgoing.x, alpha * localOutgoing.y, localOutgoing.z));
+    const float lensq = stretched.x * stretched.x + stretched.y * stretched.y;
+    const glm::vec3 tangent1 = lensq > 1.0e-12f
+        ? glm::vec3(-stretched.y, stretched.x, 0.0f) / std::sqrt(lensq)
+        : glm::vec3(1.0f, 0.0f, 0.0f);
+    const glm::vec3 tangent2 = glm::cross(stretched, tangent1);
+    const float radius = std::sqrt(u);
+    const float phi = 2.0f * pi * v;
+    const float diskX = radius * std::cos(phi);
+    float diskY = radius * std::sin(phi);
+    const float blend = 0.5f * (1.0f + stretched.z);
+    diskY = (1.0f - blend) * std::sqrt(std::max(0.0f, 1.0f - diskX * diskX))
+        + blend * diskY;
+    const glm::vec3 visible = diskX * tangent1 + diskY * tangent2
+        + std::sqrt(std::max(0.0f, 1.0f - diskX * diskX - diskY * diskY)) * stretched;
+    const glm::vec3 localNormal = glm::normalize(glm::vec3(
+        alpha * visible.x, alpha * visible.y, std::max(visible.z, 0.0f)));
+    return localToWorld(localNormal, normal);
+}
+
 } // namespace
 
 glm::vec3 evaluatePbrBsdf(const PbrSurface& input, const glm::vec3& normal,
@@ -89,7 +124,8 @@ glm::vec3 evaluatePbrBsdf(const PbrSurface& input, const glm::vec3& normal,
 }
 
 float pbrBsdfPdf(const PbrSurface& input, const glm::vec3& normal,
-                 const glm::vec3& outgoing, const glm::vec3& incoming) {
+                 const glm::vec3& outgoing, const glm::vec3& incoming,
+                 GgxSamplingStrategy strategy) {
     const PbrSurface surface = sanitized(input);
     const float noV = glm::dot(normal, outgoing);
     const float noL = glm::dot(normal, incoming);
@@ -104,7 +140,11 @@ float pbrBsdfPdf(const PbrSurface& input, const glm::vec3& normal,
     if (noH <= 0.0f || voH <= 0.0f) return 0.0f;
 
     const float alpha = surface.perceptualRoughness * surface.perceptualRoughness;
-    const float specularPdf = ggxDistribution(noH, alpha * alpha) * noH / (4.0f * voH);
+    const float distribution = ggxDistribution(noH, alpha * alpha);
+    const float halfPdf = strategy == GgxSamplingStrategy::VisibleNormals
+        ? distribution * smithG1(noV, alpha * alpha) * voH / std::max(noV, 1.0e-7f)
+        : distribution * noH;
+    const float specularPdf = halfPdf / (4.0f * voH);
     const float diffusePdf = noL / pi;
     const float chooseSpecular = specularProbability(surface);
     return chooseSpecular * specularPdf + (1.0f - chooseSpecular) * diffusePdf;
@@ -112,7 +152,8 @@ float pbrBsdfPdf(const PbrSurface& input, const glm::vec3& normal,
 
 BsdfSample samplePbrBsdf(const PbrSurface& input, const glm::vec3& normal,
                          const glm::vec3& outgoing, float componentSample,
-                         const glm::vec2& directionSample) {
+                         const glm::vec2& directionSample,
+                         GgxSamplingStrategy strategy) {
     BsdfSample result;
     const PbrSurface surface = sanitized(input);
     if (glm::dot(normal, outgoing) <= 0.0f) return result;
@@ -121,11 +162,17 @@ BsdfSample samplePbrBsdf(const PbrSurface& input, const glm::vec3& normal,
     const float v = std::clamp(directionSample.y, 0.0f, 0.99999994f);
     if (componentSample < specularProbability(surface)) {
         const float alpha = surface.perceptualRoughness * surface.perceptualRoughness;
-        const float alphaSquared = alpha * alpha;
-        const float phi = 2.0f * pi * u;
-        const float cosine = std::sqrt((1.0f - v) / (1.0f + (alphaSquared - 1.0f) * v));
-        const float sine = std::sqrt(std::max(0.0f, 1.0f - cosine * cosine));
-        const glm::vec3 halfVector = localToWorld({sine * std::cos(phi), sine * std::sin(phi), cosine}, normal);
+        glm::vec3 halfVector;
+        if (strategy == GgxSamplingStrategy::VisibleNormals) {
+            halfVector = sampleVisibleGgxNormal(outgoing, normal, alpha, u, v);
+        } else {
+            const float alphaSquared = alpha * alpha;
+            const float phi = 2.0f * pi * u;
+            const float cosine = std::sqrt((1.0f - v) / (1.0f + (alphaSquared - 1.0f) * v));
+            const float sine = std::sqrt(std::max(0.0f, 1.0f - cosine * cosine));
+            halfVector = localToWorld(
+                {sine * std::cos(phi), sine * std::sin(phi), cosine}, normal);
+        }
         result.direction = glm::reflect(-outgoing, halfVector);
     } else {
         const float radius = std::sqrt(u);
@@ -136,7 +183,7 @@ BsdfSample samplePbrBsdf(const PbrSurface& input, const glm::vec3& normal,
 
     const float noL = glm::dot(normal, result.direction);
     if (noL <= 0.0f) return result;
-    result.pdf = pbrBsdfPdf(surface, normal, outgoing, result.direction);
+    result.pdf = pbrBsdfPdf(surface, normal, outgoing, result.direction, strategy);
     if (!(result.pdf > 0.0f) || !std::isfinite(result.pdf)) return result;
     result.weight = evaluatePbrBsdf(surface, normal, outgoing, result.direction) * (noL / result.pdf);
     result.valid = std::isfinite(result.weight.x) && std::isfinite(result.weight.y) &&

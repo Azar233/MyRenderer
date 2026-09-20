@@ -1,5 +1,10 @@
 #include "render/EnvironmentMap.h"
 
+#include <chrono>
+#include <functional>
+
+#include "optics/Atmosphere.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -18,17 +23,6 @@
 namespace {
 
 constexpr float pi = 3.14159265359f;
-
-struct EquirectangularHdr {
-    int width{0};
-    int height{0};
-    std::vector<float> pixels;
-
-    bool valid() const {
-        return width > 0 && height > 0
-            && pixels.size() == static_cast<std::size_t>(width * height * 3);
-    }
-};
 
 bool loadRadianceImage(
     const std::filesystem::path& path,
@@ -237,7 +231,7 @@ EnvironmentMap::EnvironmentMap(
     const std::filesystem::path& vertexShaderPath,
     const std::filesystem::path& fragmentShaderPath
 ) : shader_(std::make_unique<Shader>(vertexShaderPath, fragmentShaderPath)) {
-    EquirectangularHdr source;
+    EquirectangularHdr& source = source_;
     const std::filesystem::path environmentPath = vertexShaderPath.parent_path().parent_path()
         / "assets" / "environments"
         / "kloofendal_48d_partly_cloudy_puresky_4k.exr";
@@ -260,9 +254,56 @@ EnvironmentMap::EnvironmentMap(
         source.height = 0;
     }
 
-    const auto radiance = [&source](const glm::vec3& direction) {
-        return sampleEquirectangular(source, direction);
+    // The bundled HDR environment is the default source; a scene that enables the
+    // analytic sky replaces it wholesale through useAtmosphere().
+    build(
+        [&source](const glm::vec3& direction) { return sampleEquirectangular(source, direction); },
+        true
+    );
+    glGenVertexArrays(1, &vertexArray_);
+}
+
+void EnvironmentMap::useAtmosphere(const atmosphere::AtmosphereParameters& parameters) {
+    const auto start = std::chrono::steady_clock::now();
+    // The lower hemisphere is one view-independent value, so it is resolved once here instead of
+    // being recomputed for every sample of the cubemap, irradiance and prefilter passes (that is
+    // millions of samples, and the ground integral costs nine scattering evaluations).
+    const glm::vec3 ground = atmosphere::skyRadiance(glm::vec3(0.0f, -1.0f, 0.0f), parameters);
+    const auto skyOnly = [parameters, ground](const glm::vec3& direction) {
+        if (direction.y < 0.0f) return ground;
+        return atmosphere::skyRadiance(direction, parameters);
     };
+    build(
+        [skyOnly, parameters](const glm::vec3& direction) {
+            return skyOnly(direction) + atmosphere::sunDiskRadiance(direction, parameters);
+        },
+        // The BRDF LUT depends only on roughness and view angle, so a sun change keeps it.
+        false,
+        skyOnly
+    );
+    lastBuildMilliseconds_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start
+    ).count();
+}
+
+void EnvironmentMap::useHdrSource() {
+    const auto start = std::chrono::steady_clock::now();
+    build(
+        [this](const glm::vec3& direction) { return sampleEquirectangular(source_, direction); },
+        false
+    );
+    lastBuildMilliseconds_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start
+    ).count();
+}
+
+void EnvironmentMap::build(
+    const std::function<glm::vec3(const glm::vec3&)>& radiance,
+    bool buildBrdfLut,
+    const std::function<glm::vec3(const glm::vec3&)>& diffuseRadiance
+) {
+    const std::function<glm::vec3(const glm::vec3&)>& irradianceSource =
+        diffuseRadiance ? diffuseRadiance : radiance;
     const int size = radianceFaceSize_;
     maximumMipLevel_ = static_cast<int>(std::log2(prefilteredFaceSize_));
     glGenTextures(1, &texture_);
@@ -316,7 +357,7 @@ EnvironmentMap::EnvironmentMap(
                 const glm::vec3 normal = faceDirection(face, u, v);
                 glm::vec3 sum(0.0f);
                 for (std::uint32_t sample = 0; sample < irradianceSamples; ++sample) {
-                    sum += radiance(cosineSampleHemisphere(
+                    sum += irradianceSource(cosineSampleHemisphere(
                         hammersley(sample, irradianceSamples),
                         normal
                     ));
@@ -405,6 +446,7 @@ EnvironmentMap::EnvironmentMap(
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, maximumMipLevel_);
 
+    if (!buildBrdfLut) return;
     constexpr int brdfSize = 64;
     std::vector<float> brdfPixels(static_cast<std::size_t>(brdfSize * brdfSize * 2));
     for (int y = 0; y < brdfSize; ++y) {
@@ -437,8 +479,8 @@ EnvironmentMap::EnvironmentMap(
 
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-    glGenVertexArrays(1, &vertexArray_);
 }
+
 
 std::size_t EnvironmentMap::estimatedBytes() const {
     const auto cubemapTexels = [](int baseSize, int maximumMipLevel) {

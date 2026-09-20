@@ -13,6 +13,7 @@ function(capture_instance_stress name optimization culling lod)
             MYRENDERER_RENDER_WIDTH=1920
             MYRENDERER_RENDER_HEIGHT=1080
             MYRENDERER_SCREENSHOT=${output}
+            MYRENDERER_HIDE_SELECTION_OUTLINE=1
             MYRENDERER_MSAA=4
             MYRENDERER_RENDER_PATH=0
             MYRENDERER_INSTANCE_STRESS=1

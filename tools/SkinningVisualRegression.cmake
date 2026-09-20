@@ -17,6 +17,7 @@ function(capture_skinning name animation time debug_view)
             MYRENDERER_RENDER_WIDTH=1920
             MYRENDERER_RENDER_HEIGHT=1080
             MYRENDERER_SCREENSHOT=${output}
+            MYRENDERER_HIDE_SELECTION_OUTLINE=1
             MYRENDERER_MSAA=4
             MYRENDERER_RENDER_PATH=1
             MYRENDERER_TAA=0

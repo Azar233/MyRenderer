@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -16,9 +17,15 @@
 #include <glm/vec3.hpp>
 
 #include "io/ModelImporter.h"
+#include "app/EditorSession.h"
+#include "app/WorkspaceAssets.h"
+#include "module/ModuleRegistry.h"
+#include "module/ModuleRuntime.h"
 #include "optics/PrismDemo.h"
+#include "pathtracer/ProgressiveRenderer.h"
 #include "render/Camera.h"
 #include "render/Renderer.h"
+#include "runtime/RenderQueue.h"
 #include "scene/Scene.h"
 #include "scene/SceneDocument.h"
 
@@ -53,6 +60,12 @@ private:
     void shutdown();
 
     void drawMainMenu();
+    void drawWorkspaceToolbar();
+    void processEditorCommands();
+    void submitRenderJob(const std::filesystem::path& path);
+    void updateRenderQueue();
+    void cancelRenderJob();
+    void applyVsync(bool enabled);
     void drawScenePanel();
     void drawAssetsPanel();
     void drawEditorLayout();
@@ -72,6 +85,23 @@ private:
     bool editorInteractionRegression();
     void drawInspectorPanel();
     void drawViewportPanel();
+    void drawModulePanel();
+    // Aggregates the structured diagnostics the application already owns: import
+    // diagnostics, render task history, frame/pass profile and the module log. It never
+    // invents a state that no subsystem reported.
+    void drawLogProfilePanel();
+    // Drives the active module against the discardable runtime scene for the current
+    // frame and keeps the Viewport on that scene. Never writes back to the edit scene.
+    void updateModulePreview();
+    bool modulePreviewEnabled() const { return !activeModuleId_.empty(); }
+    const Scene& viewportScene() const;
+    // Automation entry point for the module preview: `MYRENDERER_MODULE`,
+    // `MYRENDERER_MODULE_SEED` and `MYRENDERER_TIMELINE_FRAME`.
+    void applyModuleEnvironmentOverrides();
+    std::uint64_t cpuPreviewInputSignature(int width, int height) const;
+    void updateCpuPreview(int width, int height);
+    void uploadCpuPreviewTexture();
+    void exportCpuPreview();
     void captureReferenceComparison(int width, int height);
     void drawOrientationGizmo();
     void drawAboutPopup();
@@ -90,6 +120,7 @@ private:
     void syncSceneEntities(const glm::mat4& normalization);
     void activatePrismDemoPreset(bool loadFixture);
     void activateGlassCausticsPreset();
+    void applyStylizedPreset(StylizedPreset preset);
     void applyVolumeGlassPreset(VolumeGlassPreset preset);
     void activateLightStressPreset(bool loadFixture);
     void activateInstanceStressPreset(bool loadFixture);
@@ -113,6 +144,37 @@ private:
     bool loadedSceneDocument_{false};
     bool focusObjectTab_{false};
     bool focusRendererTab_{false};
+    bool focusAssetsTab_{false};
+    bool focusRenderQueueTab_{false};
+    bool focusModulesTab_{false};
+    bool focusModuleTab_{false};
+    bool focusLogTab_{false};
+    EditorSession editorSession_;
+    // Statically linked module set. The Modules panel and the Content Browser read
+    // manifests from here; the runtime creates instances by stable id.
+    ModuleRegistry moduleRegistry_{createBuiltinModuleRegistry()};
+    ModuleRuntime moduleRuntime_{moduleRegistry_};
+    // Module preview state: the selection and its parameter overrides are the module's
+    // input identity, so any change rebuilds the runtime scene from the edit scene.
+    std::string activeModuleId_;
+    std::vector<ModuleParameterOverride> moduleParameterOverrides_;
+    std::uint32_t moduleSeed_{20260919U};
+    std::uint64_t moduleInputRevision_{0U};
+    std::uint64_t moduleBuiltRevision_{0U};
+    std::uint64_t moduleBuiltSceneGeneration_{0U};
+    std::size_t moduleBuiltEntityCount_{0U};
+    std::string moduleMessage_{"No module is active."};
+    std::unique_ptr<RenderQueue> renderQueue_;
+    std::array<char, 1024> renderJobPathBuffer_{};
+    std::string renderQueueMessage_{"No Render Job submitted."};
+    std::array<char, 128> contentSearch_{};
+    int contentCategory_{0};
+    std::string contentExtensionFilter_;
+    int contentSortMode_{0};
+    bool contentGridView_{true};
+    std::filesystem::path selectedWorkspaceAsset_;
+    WorkspaceAssetCatalog workspaceAssets_;
+    std::uint64_t thumbnailCacheGeneration_{0U};
     std::uint64_t sceneGeneration_{0};
     std::unique_ptr<Shader> pickingShader_;
     std::vector<SceneEntityId> stressEntities_;
@@ -128,6 +190,7 @@ private:
     SceneEntityId backdropEntity_{invalidSceneEntityId};
     SceneEntityId groundEntity_{invalidSceneEntityId};
     SceneEntityId selectedSceneEntity_{invalidSceneEntityId};
+    bool hideSelectionOutlineForAutomation_{false};
     std::vector<SceneEntityId> foundationDemoEntities_;
 
     std::filesystem::path sourceRoot_;
@@ -135,8 +198,15 @@ private:
     std::filesystem::path currentScenePath_;
     std::filesystem::path pendingScreenshotPath_;
     std::filesystem::path pendingEditorScreenshotPath_;
+    // `MYRENDERER_CPU_PREVIEW_EXPORT`: waits until the preview reaches its target SPP,
+    // writes the same reference PNG the CLI writes and then closes, so a GUI frame and a
+    // batch frame can be compared byte for byte.
+    std::filesystem::path pendingCpuPreviewExportPath_;
     int pendingScreenshotWarmupFrames_{0};
     int pendingEditorScreenshotWarmupFrames_{3};
+    // `MYRENDERER_EDITOR_SCREENSHOT_SCROLL`: Inspector scroll offset used while an automated
+    // editor capture is pending, so a capture can reach a section below the fold.
+    float pendingEditorScreenshotScroll_{0.0f};
     std::filesystem::path benchmarkOutputPath_;
     std::filesystem::path prismReelFramesDirectory_;
     std::filesystem::path referenceComparisonDirectory_;
@@ -209,6 +279,32 @@ private:
     std::uint32_t referenceComparisonSamples_{128U};
     std::uint32_t referenceComparisonMaxDepth_{8U};
     std::uint32_t referenceComparisonSeed_{20260915U};
+
+    pathtracer::RenderTask cpuPreviewTask_;
+    std::shared_ptr<const pathtracer::RenderProgress> cpuPreviewProgress_;
+    std::uint64_t cpuPreviewObservedSignature_{0U};
+    std::uint64_t cpuPreviewTaskSignature_{0U};
+    std::uint64_t cpuPreviewTaskId_{0U};
+    std::uint64_t cpuPreviewUploadedTaskId_{0U};
+    std::uint32_t cpuPreviewUploadedSamples_{0U};
+    std::chrono::steady_clock::time_point cpuPreviewLastInputChange_{};
+    unsigned int cpuPreviewTexture_{0U};
+    int cpuPreviewTextureWidth_{0};
+    int cpuPreviewTextureHeight_{0};
+    int viewportRenderMode_{0}; // 0 Raster, 1 CPU Path Traced.
+    int cpuPreviewScaleMode_{0}; // 0 Auto, 1 1/4, 2 1/2, 3 Full.
+    int cpuPreviewOutput_{0};
+    int cpuPreviewSamplesPerPixel_{64};
+    int cpuPreviewMaxDepth_{6};
+    int cpuPreviewSeed_{1};
+    bool cpuPreviewDenoise_{true};
+    bool cpuPreviewTemporalDenoise_{true};
+    bool cpuPreviewFireflyClamp_{false};
+    int cpuPreviewAtrousIterations_{4};
+    bool cpuPreviewPowerWeightedLights_{true};
+    bool cpuPreviewGgxVndf_{true};
+    bool cpuPreviewPaused_{false};
+    bool cpuPreviewRestartRequested_{true};
 
     bool showAbout_{false};
     bool showImGuiDemo_{false};

@@ -1,5 +1,7 @@
 #include "render/Renderer.h"
 
+#include <iostream>
+
 #include <algorithm>
 #include <chrono>
 #include <iterator>
@@ -25,6 +27,7 @@
 #include "render/SceneDrawList.h"
 #include "render/Shader.h"
 #include "render/ShadowMap.h"
+#include "render/ShadowCascade.h"
 #include "render/SsaoRenderer.h"
 #include "render/SpectralBeamRenderer.h"
 #include "render/Texture2D.h"
@@ -139,6 +142,33 @@ Renderer::~Renderer() {
     glDeleteQueries(static_cast<GLsizei>(passEndQueries_.size()), passEndQueries_.data());
 }
 
+// A rebuild costs a few hundred milliseconds, so it only happens when the sun moved enough to be
+// visible in the sky or a parameter changed. This keeps dragging responsive while guaranteeing
+// that the rendered sky always matches the sun the shadows and the light use. The tolerance lives
+// in the atmosphere model so the CPU path tracer's own sky cache uses the same definition of
+// "changed" (atmosphere::parametersMatch).
+bool Renderer::atmosphereKeyMatches(const atmosphere::AtmosphereParameters& parameters) const {
+    if (!atmosphereActive_) return false;
+    return atmosphere::parametersMatch(parameters, builtAtmosphere_);
+}
+
+void Renderer::updateAtmosphereEnvironment(const RendererSettings& settings) {
+    if (environmentMap_ == nullptr) return;
+    if (!settings.atmosphere.enabled) {
+        if (!atmosphereActive_) return;
+        environmentMap_->useHdrSource();
+        atmosphereActive_ = false;
+        builtAtmosphere_ = atmosphere::AtmosphereParameters{};
+        return;
+    }
+    if (atmosphereKeyMatches(settings.atmosphere)) return;
+    environmentMap_->useAtmosphere(settings.atmosphere);
+    std::cout << "Atmosphere environment rebuilt in "
+              << environmentMap_->lastBuildMilliseconds() << " ms (sun "
+              << settings.atmosphere.sunElevationDegrees << " deg)\n";
+    builtAtmosphere_ = settings.atmosphere;
+    atmosphereActive_ = true;
+}
 void Renderer::render(
     const std::vector<RenderItem>& renderItems,
     const Camera& camera,
@@ -360,25 +390,106 @@ void Renderer::render(
         lightDirection = glm::vec3(-0.45f, -0.8f, -0.35f);
     }
     lightDirection = glm::normalize(lightDirection);
+    float diffuseStrength = settings.diffuseStrength;
+    float specularStrength = settings.specularStrength;
+    // While the analytic sky is enabled one sun drives everything: the environment cubemaps, the
+    // shadow map below and the shading uniforms further down all read this same direction, so the
+    // sky, the shadows and the lighting cannot disagree about where the sun is. The two intensity
+    // controls stay meaningful and separate: sky intensity scales the ambient sky (and the
+    // background), sun intensity scales the key light and the disk together. The key light's
+    // *spectrum* comes from `skyLightColor` while its brightness stays in the two strengths, so a
+    // setting sun reddens the light instead of only dimming it, and the light still matches the sky
+    // it is drawn against (docs/atmosphere-sky.md).
+    glm::vec3 lightColor(1.0f);
+    updateAtmosphereEnvironment(settings);
+    if (settings.atmosphere.enabled) {
+        lightDirection = -atmosphere::sunDirection(settings.atmosphere);
+        const glm::vec3 transmittance = atmosphere::sunTransmittance(settings.atmosphere);
+        const float luminance = 0.2126f * transmittance.r + 0.7152f * transmittance.g
+            + 0.0722f * transmittance.b;
+        const float keyScale = luminance * std::max(settings.atmosphere.sunIntensity, 0.0f);
+        diffuseStrength *= keyScale;
+        specularStrength *= keyScale;
+        lightColor = atmosphere::skyLightColor(settings.atmosphere);
+    }
     glm::vec3 sceneCenter(0.0f);
+    glm::vec3 sceneMinimum(0.0f);
+    glm::vec3 sceneMaximum(0.0f);
     bool hasVisibleItems = false;
     bool hasTransmissiveCasters = false;
     for (const RenderItem& item : renderItems) {
         if (!item.visible || item.model == nullptr) {
             continue;
         }
+        const glm::vec3 itemCenter(item.modelMatrix[3]);
+        const glm::vec3 itemRadius(item.model->boundsRadius());
         if (!hasVisibleItems) {
-            sceneCenter = glm::vec3(item.modelMatrix[3]);
+            sceneCenter = itemCenter;
+            sceneMinimum = itemCenter - itemRadius;
+            sceneMaximum = itemCenter + itemRadius;
             hasVisibleItems = true;
+        } else {
+            sceneMinimum = glm::min(sceneMinimum, itemCenter - itemRadius);
+            sceneMaximum = glm::max(sceneMaximum, itemCenter + itemRadius);
         }
         hasTransmissiveCasters |= item.castsShadow
             && item.model->transmissiveSubmeshCount() > 0U;
     }
-    glm::vec3 lightUp(0.0f, 1.0f, 0.0f);
-    if (std::abs(glm::dot(lightDirection, lightUp)) > 0.96f) lightUp = glm::vec3(0.0f, 0.0f, 1.0f);
-    const glm::mat4 lightView = glm::lookAt(sceneCenter - lightDirection * 6.0f, sceneCenter, lightUp);
-    const glm::mat4 lightProjection = glm::ortho(-4.0f, 4.0f, -4.0f, 4.0f, 0.1f, 16.0f);
-    const glm::mat4 lightViewProjection = lightProjection * lightView;
+    // Radius of the content the shadows have to cover. Cascades are matched to this rather than to the
+    // camera's far plane: a scene occupying ten units does not need shadow boxes reaching a hundred, and
+    // sizing them by the far plane throws away an order of magnitude of texel density on the geometry
+    // that is actually visible -- which is exactly the shadow softness the single-box path did not have.
+    // The camera's far plane remains the ceiling so a cascade can still be fitted to the whole frustum
+    // when the content really does fill it.
+    const float sceneRadius = hasVisibleItems
+        ? glm::length(sceneMaximum - sceneMinimum) * 0.5f
+        : 0.0f;
+    const float shadowRange = std::clamp(
+        sceneRadius * 1.2f, 1.0e-3f, std::max(camera.farPlane(), 1.0e-3f)
+    );
+    // Cascaded shadow fitting. The light view is shared by every cascade so the per-cascade boxes are
+    // expressed in one frame, and it is anchored to the scene rather than to the camera so it does not
+    // move when the camera does. Only the orthographic projection differs per cascade.
+    shadow::CameraFrustum shadowCamera;
+    shadowCamera.origin = camera.position();
+    shadowCamera.forward = camera.forwardDirection();
+    shadowCamera.right = camera.rightDirection();
+    shadowCamera.up = camera.upDirection();
+    shadowCamera.nearPlane = camera.nearPlane();
+    shadowCamera.farPlane = camera.farPlane();
+    shadowCamera.fieldOfViewDegrees = camera.fieldOfView();
+    shadowCamera.aspectRatio =
+        static_cast<float>(width) / static_cast<float>(std::max(height, 1));
+
+    const std::size_t cascadeCount = static_cast<std::size_t>(std::clamp(
+        settings.shadowCascadeCount, 1, static_cast<int>(shadow::maximumCascadeCount)
+    ));
+    const std::array<float, shadow::maximumCascadeCount> cascadeSplits = shadow::splitDistances(
+        camera.nearPlane(), camera.farPlane(), cascadeCount, settings.shadowCascadeSplitLambda
+    );
+    const float shadowViewRange = shadowRange;
+    const glm::mat4 sharedLightView =
+        shadow::buildLightView(sceneCenter, -lightDirection, shadowViewRange);
+    std::array<shadow::CascadeFit, shadow::maximumCascadeCount> cascades;
+    for (std::size_t index = 0U; index < cascadeCount; ++index) {
+        cascades[index] = shadow::fitCascade(
+            shadow::subFrustumCorners(shadowCamera, cascadeSplits[index]),
+            sharedLightView,
+            shadowViewRange,
+            cascadeSplits[index],
+            shadowMap_->resolution()
+        );
+    }
+    // The projector caustics and the coloured transmission shadow keep their own tightly framed box
+    // rather than borrowing a cascade's: both were authored against this framing, while a cascade's box
+    // is sized by the camera's far plane instead, which visibly relocates the caustics.
+    glm::vec3 legacyLightUp(0.0f, 1.0f, 0.0f);
+    if (std::abs(glm::dot(lightDirection, legacyLightUp)) > 0.96f) {
+        legacyLightUp = glm::vec3(0.0f, 0.0f, 1.0f);
+    }
+    const glm::mat4 lightViewProjection =
+        glm::ortho(-4.0f, 4.0f, -4.0f, 4.0f, 0.1f, 16.0f)
+        * glm::lookAt(sceneCenter - lightDirection * 6.0f, sceneCenter, legacyLightUp);
 
     std::vector<TransparentSortEntry> transparentDraws;
     for (std::size_t itemIndex = 0; itemIndex < renderItems.size(); ++itemIndex) {
@@ -451,6 +562,28 @@ void Renderer::render(
             localLightCount
         );
     };
+
+    // Cascade metadata shared by the forward and deferred paths. Both shaders declare the same
+    // fixed-size arrays, so one binding pair serves both and cannot drift apart.
+    const auto bindCascadeSettings = [&](Shader& targetShader) {
+        std::array<glm::mat4, shadow::maximumCascadeCount> cascadeMatrices{};
+        for (std::size_t index = 0U; index < shadow::maximumCascadeCount; ++index) {
+            // Unused layers repeat the last fitted cascade rather than staying identity: a shader that
+            // read one by mistake would then project into a real box instead of a degenerate one, which
+            // is far harder to notice.
+            cascadeMatrices[index] = index < cascadeCount
+                ? cascades[index].lightViewProjection
+                : cascades[cascadeCount - 1U].lightViewProjection;
+        }
+        targetShader.setMat4Array(
+            "uLightViewProjection[0]", cascadeMatrices.data(), cascadeMatrices.size()
+        );
+        targetShader.setInt("uShadowCascadeCount", static_cast<int>(cascadeCount));
+        targetShader.setFloatArray(
+            "uCascadeSplits[0]", cascadeSplits.data(), cascadeSplits.size()
+        );
+    };
+
     const auto bindStylizedSettings = [&](Shader& targetShader) {
         targetShader.setBool(
             "uStylizedEnabled", settings.shadingMode == ShadingMode::Stylized
@@ -468,19 +601,24 @@ void Renderer::render(
         targetShader.setFloat("uStylizedRimIntensity", settings.stylizedRimIntensity);
         targetShader.setVec3("uStylizedShadowTint", settings.stylizedShadowTint);
         targetShader.setVec3("uStylizedRimColor", settings.stylizedRimColor);
+        targetShader.setInt(
+            "uStylizedDebugView", static_cast<int>(settings.stylizedDebugView)
+        );
     };
 
     const auto bindSceneShader = [&] {
         shader_->use();
-        shader_->setMat4("uView", view);
+shader_->setMat4("uView", view);
         shader_->setMat4("uProjection", projection);
         shader_->setMat4("uLightViewProjection", lightViewProjection);
+        bindCascadeSettings(*shader_);
         shader_->setVec3("uLightDirection", lightDirection);
         bindLocalLights(*shader_);
         shader_->setVec3("uCameraPosition", camera.position());
         shader_->setFloat("uAmbientStrength", settings.ambientStrength);
-        shader_->setFloat("uDiffuseStrength", settings.diffuseStrength);
-        shader_->setFloat("uSpecularStrength", settings.specularStrength);
+        shader_->setFloat("uDiffuseStrength", diffuseStrength);
+        shader_->setFloat("uSpecularStrength", specularStrength);
+        shader_->setVec3("uLightColor", lightColor);
         shader_->setFloat("uShininess", settings.shininess);
         shader_->setBool("uNormalMappingEnabled", settings.normalMapping);
         shader_->setBool("uPbrEnabled", settings.pbrEnabled);
@@ -573,22 +711,28 @@ void Renderer::render(
     }
     RenderPassSequence sequence(width, height);
     if (settings.shadowsEnabled) {
-        sequence.add("Shadow map", [&] {
-            shadowMap_->bindForWriting();
+sequence.add("Shadow maps", [&] {
             glViewport(0, 0, shadowMap_->resolution(), shadowMap_->resolution());
             glEnable(GL_DEPTH_TEST);
             glEnable(GL_CULL_FACE);
+            // Front-face culling keeps back faces out of the depth map, which is what stops a closed
+            // caster from shadowing itself.
             glCullFace(GL_FRONT);
-            glClear(GL_DEPTH_BUFFER_BIT);
-            shadowShader_->use();
-            shadowShader_->setMat4("uLightViewProjection", lightViewProjection);
-            for (const RenderItem& item : renderItems) {
-                if (!item.visible || !item.castsShadow || item.model == nullptr) {
-                    continue;
+            for (std::size_t cascade = 0U; cascade < cascadeCount; ++cascade) {
+                shadowMap_->bindForWriting(cascade);
+                glClear(GL_DEPTH_BUFFER_BIT);
+                shadowShader_->use();
+                shadowShader_->setMat4(
+                    "uLightViewProjection", cascades[cascade].lightViewProjection
+                );
+                for (const RenderItem& item : renderItems) {
+                    if (!item.visible || !item.castsShadow || item.model == nullptr) {
+                        continue;
+                    }
+                    shadowShader_->setMat4("uModel", item.modelMatrix);
+                    item.model->drawDepth(*shadowShader_);
+                    drawCallCount_ += item.model->opaqueSubmeshCount();
                 }
-                shadowShader_->setMat4("uModel", item.modelMatrix);
-                item.model->drawDepth(*shadowShader_);
-                drawCallCount_ += item.model->opaqueSubmeshCount();
             }
             glCullFace(GL_BACK);
             glDisable(GL_CULL_FACE);
@@ -895,13 +1039,19 @@ void Renderer::render(
                 "uInverseViewProjection",
                 glm::inverse(projection * view)
             );
+            // The G-buffer depth debug view linearises with the camera's own planes.
+            deferredLightingShader_->setFloat("uCameraNearPlane", camera.nearPlane());
+            deferredLightingShader_->setFloat("uCameraFarPlane", camera.farPlane());
             deferredLightingShader_->setMat4("uLightViewProjection", lightViewProjection);
-            deferredLightingShader_->setVec3("uCameraPosition", camera.position());
+            bindCascadeSettings(*deferredLightingShader_);
+deferredLightingShader_->setVec3("uCameraPosition", camera.position());
+            deferredLightingShader_->setVec3("uCameraForward", camera.forwardDirection());
             deferredLightingShader_->setVec3("uLightDirection", lightDirection);
             bindLocalLights(*deferredLightingShader_);
             deferredLightingShader_->setFloat("uAmbientStrength", settings.ambientStrength);
-            deferredLightingShader_->setFloat("uDiffuseStrength", settings.diffuseStrength);
-            deferredLightingShader_->setFloat("uSpecularStrength", settings.specularStrength);
+            deferredLightingShader_->setFloat("uDiffuseStrength", diffuseStrength);
+            deferredLightingShader_->setFloat("uSpecularStrength", specularStrength);
+            deferredLightingShader_->setVec3("uLightColor", lightColor);
             deferredLightingShader_->setFloat("uShininess", settings.shininess);
             deferredLightingShader_->setFloat(
                 "uEnvironmentIntensity",
@@ -1202,6 +1352,54 @@ void Renderer::render(
         postSettings.outlineNormalThreshold = settings.stylizedOutlineNormalThreshold;
         postSettings.outlineColor = settings.stylizedOutlineColor;
         postSettings.outlineNormalTexture = deferredActive ? gBuffer_->normalTexture() : 0U;
+        postSettings.dither = settings.shadingMode == ShadingMode::Stylized
+            && settings.stylizedDitherEnabled
+            && !gBufferDebugActive;
+        postSettings.ditherStrength = settings.stylizedDitherStrength;
+        postSettings.heightFog = settings.shadingMode == ShadingMode::Stylized
+            && settings.stylizedHeightFogEnabled
+            && !gBufferDebugActive;
+        postSettings.heightFogDensity = settings.stylizedHeightFogDensity;
+        postSettings.heightFogBaseHeight = settings.stylizedHeightFogBaseHeight;
+        postSettings.heightFogFalloff = settings.stylizedHeightFogFalloff;
+        postSettings.heightFogColor = settings.stylizedHeightFogColor;
+        // Aerial perspective is the analytic sky's own air, integrated between the camera and each
+        // surface in the composite pass. It needs no extra render target and no depth of its own --
+        // it reconstructs the segment from the scene depth the compositor already samples -- and
+        // running it here rather than in the material shaders means transparent surfaces and the
+        // skybox are handled by the same code path. The sky it fades into is the disk-free sky:
+        // smearing a 4.6e3 sun disk across the landscape would be the one thing that ruins the
+        // effect, and the horizon sample is lifted 2 degrees so the fade reads as the sky the
+        // raster actually drew at eye level.
+        postSettings.aerialPerspective = settings.atmosphere.enabled
+            && settings.atmosphere.aerialPerspectiveEnabled
+            && !gBufferDebugActive;
+        postSettings.aerialPerspectiveStrength =
+            settings.atmosphere.aerialPerspectiveStrength;
+        postSettings.aerialPerspectiveScaleHeight =
+            settings.atmosphere.aerialPerspectiveScaleHeight;
+        postSettings.aerialPerspectiveColumnDepth = settings.atmosphere.enabled
+            ? atmosphere::verticalOpticalDepth(settings.atmosphere)
+            : glm::vec3(0.0f);
+        postSettings.aerialPerspectiveZenithColor = settings.atmosphere.enabled
+            ? atmosphere::skyRadiance(glm::vec3(0.0f, 1.0f, 0.0f), settings.atmosphere)
+            : glm::vec3(0.0f);
+        postSettings.aerialPerspectiveHorizonColor = settings.atmosphere.enabled
+            ? atmosphere::skyRadiance(
+                glm::vec3(0.0f, std::sin(glm::radians(2.0f)), std::cos(glm::radians(2.0f))),
+                settings.atmosphere
+            )
+            : glm::vec3(0.0f);
+        postSettings.colorGrading = settings.shadingMode == ShadingMode::Stylized
+            && settings.stylizedColorGradingEnabled
+            && !gBufferDebugActive;
+        postSettings.colorGradingLut = static_cast<int>(settings.stylizedColorGradingLut);
+        postSettings.colorGradingStrength = settings.stylizedColorGradingStrength;
+        postSettings.stylizedDebugView = settings.shadingMode == ShadingMode::Stylized
+            && !gBufferDebugActive
+            ? static_cast<int>(settings.stylizedDebugView)
+            : static_cast<int>(StylizedDebugView::Final);
+        postSettings.cameraPosition = camera.position();
         postSettings.inverseProjection = glm::inverse(projection);
         postSettings.inverseCurrentViewProjection = glm::inverse(currentViewProjection);
         postSettings.previousViewProjection = previousViewProjectionValid_

@@ -13,6 +13,7 @@ function(capture_foundation name model scene_demo object_motion animation_demo a
             MYRENDERER_RENDER_WIDTH=1920
             MYRENDERER_RENDER_HEIGHT=1080
             MYRENDERER_SCREENSHOT=${output}
+            MYRENDERER_HIDE_SELECTION_OUTLINE=1
             MYRENDERER_SCREENSHOT_WARMUP=4
             MYRENDERER_MSAA=1
             MYRENDERER_RENDER_PATH=1

@@ -14,6 +14,7 @@ function(capture_and_compare name)
             MYRENDERER_RENDER_WIDTH=1920
             MYRENDERER_RENDER_HEIGHT=1080
             MYRENDERER_SCREENSHOT=${output}
+            MYRENDERER_HIDE_SELECTION_OUTLINE=1
             MYRENDERER_GLASS_DEBUG=0
             MYRENDERER_CAUSTICS=1
             MYRENDERER_CAUSTICS_MODE=1

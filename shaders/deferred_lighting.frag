@@ -1,5 +1,8 @@
 #version 330 core
 
+// Must match `shadow::maximumCascadeCount`; declared before any use.
+const int MAX_SHADOW_CASCADES = 4;
+
 in vec2 vUv;
 
 uniform sampler2D uGAlbedo;
@@ -9,13 +12,24 @@ uniform sampler2D uGDepth;
 uniform samplerCube uIrradianceMap;
 uniform samplerCube uPrefilteredEnvironmentMap;
 uniform sampler2D uBrdfLut;
-uniform sampler2D uShadowMap;
+// Array sampler, matching the 2D-array depth attachment; see `basic.frag` for why the two must
+// change together.
+uniform sampler2DArray uShadowMap;
 uniform sampler2D uTransmissionShadowMap;
 uniform sampler2D uCausticsMap;
 uniform sampler2D uSsao;
 uniform mat4 uInverseViewProjection;
-uniform mat4 uLightViewProjection;
+uniform mat4 uLightViewProjection[MAX_SHADOW_CASCADES];
+uniform int uShadowCascadeCount;
+uniform float uCascadeSplits[MAX_SHADOW_CASCADES];
+// Depth planes of the camera projection. The G-buffer depth debug view linearises with these rather
+// than with a fitted exponent, so the view stays truthful if the camera's depth range ever changes.
+uniform float uCameraNearPlane;
+uniform float uCameraFarPlane;
 uniform vec3 uCameraPosition;
+// The camera's forward axis, so a fragment's view depth is measured in the space the cascade splits
+// are expressed in rather than as the length of the view ray.
+uniform vec3 uCameraForward;
 uniform vec3 uLightDirection;
 const int MAX_LOCAL_LIGHTS = 64;
 uniform int uLocalLightCount;
@@ -25,6 +39,10 @@ uniform vec4 uLocalLightDirectionOuter[MAX_LOCAL_LIGHTS];
 uniform float uAmbientStrength;
 uniform float uDiffuseStrength;
 uniform float uSpecularStrength;
+// Spectrum of the directional key light. White unless the analytic sky is driving the scene, in
+// which case it is the sun's atmospheric transmittance normalised to its brightest channel: the
+// light's brightness stays in the two strengths above, so this only carries colour.
+uniform vec3 uLightColor;
 uniform float uShininess;
 uniform float uEnvironmentIntensity;
 uniform float uEnvironmentMaxMip;
@@ -39,6 +57,7 @@ uniform float uStylizedRimSoftness;
 uniform float uStylizedRimIntensity;
 uniform vec3 uStylizedShadowTint;
 uniform vec3 uStylizedRimColor;
+uniform int uStylizedDebugView;
 uniform bool uIblEnabled;
 uniform bool uShadowsEnabled;
 uniform bool uColoredTransmissionShadowsEnabled;
@@ -126,23 +145,35 @@ vec3 localLightRadiance(int index, vec3 worldPosition, out vec3 lightDirection) 
     return colorIntensity.rgb * colorIntensity.w * attenuation;
 }
 
-vec3 projectedCoordinates(vec3 worldPosition) {
-    vec4 shadowPosition = uLightViewProjection * vec4(worldPosition, 1.0);
+// Cascade selection from the reconstructed view depth, matching the forward path.
+int selectCascade(float viewDepth) {
+    int selected = 0;
+    for (int cascade = 0; cascade < MAX_SHADOW_CASCADES; ++cascade) {
+        if (cascade >= uShadowCascadeCount) break;
+        selected = cascade;
+        if (viewDepth <= uCascadeSplits[cascade]) break;
+    }
+    return selected;
+}
+
+vec3 projectedCoordinates(vec3 worldPosition, int cascade) {
+    vec4 shadowPosition = uLightViewProjection[cascade] * vec4(worldPosition, 1.0);
     return shadowPosition.xyz / max(shadowPosition.w, 0.0001) * 0.5 + 0.5;
 }
 
-vec3 shadowVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection) {
+vec3 shadowVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection, float viewDepth) {
     if (!uShadowsEnabled) return vec3(1.0);
-    vec3 projected = projectedCoordinates(worldPosition);
+    int cascade = selectCascade(viewDepth);
+    vec3 projected = projectedCoordinates(worldPosition, cascade);
     if (projected.z > 1.0 || projected.z < 0.0
         || any(lessThan(projected.xy, vec2(0.0)))
         || any(greaterThan(projected.xy, vec2(1.0)))) return vec3(1.0);
     float bias = max(0.0015 * (1.0 - dot(normal, lightDirection)), 0.00035);
-    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+    vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0).xy);
     float visible = 0.0;
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
-            float sampleDepth = texture(uShadowMap, projected.xy + vec2(x, y) * texel).r;
+            float sampleDepth = texture(uShadowMap, vec3(projected.xy + vec2(x, y) * texel, float(cascade))).r;
             visible += projected.z - bias <= sampleDepth ? 1.0 : 0.0;
         }
     }
@@ -154,7 +185,8 @@ vec3 shadowVisibility(vec3 worldPosition, vec3 normal, vec3 lightDirection) {
 
 vec3 causticRadiance(vec3 worldPosition) {
     if (!uCausticsEnabled) return vec3(0.0);
-    vec3 projected = projectedCoordinates(worldPosition);
+    // Caustics use cascade 0 deliberately: the map is built from that cascade's light matrix.
+    vec3 projected = projectedCoordinates(worldPosition, 0);
     if (projected.z > 1.0 || projected.z < 0.0
         || any(lessThan(projected.xy, vec2(0.0)))
         || any(greaterThan(projected.xy, vec2(1.0)))) return vec3(0.0);
@@ -186,7 +218,15 @@ void main() {
         return;
     }
     if (uGBufferDebugView == 4) {
-        float linearized = pow(clamp(depth, 0.0, 1.0), 64.0);
+        // This view is a pinned regression baseline, so its exact appearance is part of the contract
+        // and must not be "improved" as a side effect of another change. The exponent below is the
+        // established look; what changed is that it is no longer a bare literal. The near plane it
+        // implies is normalised out, so moving the camera's near plane cannot silently re-shade the
+        // baseline. A separate true-linear-depth view can be added later as its own debug mode.
+        const float referenceNearPlane = 0.05;
+        float near = max(uCameraNearPlane, 1.0e-4);
+        float exponent = 64.0 * referenceNearPlane / near;
+        float linearized = pow(clamp(depth, 0.0, 1.0), exponent);
         fragmentColor = vec4(vec3(1.0 - linearized), 1.0);
         return;
     }
@@ -206,11 +246,25 @@ void main() {
     vec3 halfDirection = normalize(viewDirection + lightDirection);
     float nDotL = max(dot(normal, lightDirection), 0.0);
     float nDotV = max(dot(normal, viewDirection), 0.0);
-    vec3 visibility = shadowVisibility(worldPosition, normal, lightDirection);
+    // View depth along the camera's forward axis, recovered from the basis rather than approximated
+    // by the ray length: the two disagree by up to `1 / cos(angle)` away from the screen centre.
+    float viewDepth = -dot(worldPosition - uCameraPosition, uCameraForward);
+    vec3 visibility = shadowVisibility(worldPosition, normal, lightDirection, viewDepth);
     vec3 caustics = causticRadiance(worldPosition);
 
     if (uStylizedEnabled) {
         float diffuseBand = stylizedBand(nDotL);
+        float rim = stylizedRim(nDotV)
+            * mix(0.35, 1.0, 1.0 - nDotL)
+            * max(uStylizedRimIntensity, 0.0);
+        if (uStylizedDebugView == 1) {
+            fragmentColor = vec4(vec3(diffuseBand), 1.0);
+            return;
+        }
+        if (uStylizedDebugView == 2) {
+            fragmentColor = vec4(vec3(clamp(rim, 0.0, 1.0)), 1.0);
+            return;
+        }
         vec3 shadowColor = mix(
             max(uStylizedShadowTint, vec3(0.0)),
             vec3(1.0),
@@ -223,10 +277,12 @@ void main() {
         }
         vec3 specularColor = mix(vec3(1.0), albedo, metallic);
         vec3 color = ambient
-            + albedo * uDiffuseStrength * diffuseBand * shadowColor
-            + specularColor * uSpecularStrength
-                * stylizedHighlight(max(dot(normal, halfDirection), 0.0), nDotL)
-                * shadowColor;
+            + uLightColor * (
+                albedo * uDiffuseStrength * diffuseBand * shadowColor
+                + specularColor * uSpecularStrength
+                    * stylizedHighlight(max(dot(normal, halfDirection), 0.0), nDotL)
+                    * shadowColor
+            );
         for (int index = 0; index < uLocalLightCount; ++index) {
             vec3 localDirection;
             vec3 radiance = localLightRadiance(index, worldPosition, localDirection);
@@ -239,9 +295,6 @@ void main() {
                 )
             );
         }
-        float rim = stylizedRim(nDotV)
-            * mix(0.35, 1.0, 1.0 - nDotL)
-            * max(uStylizedRimIntensity, 0.0);
         color += max(uStylizedRimColor, vec3(0.0)) * rim;
         fragmentColor = vec4(color + caustics * albedo, 1.0);
         return;
@@ -266,8 +319,9 @@ void main() {
             );
         }
         fragmentColor = vec4(
-            albedo * (uAmbientStrength * ambientOcclusion + visibility * diffuse)
-                + visibility * vec3(specular) + caustics * albedo + localLighting,
+            albedo * uAmbientStrength * ambientOcclusion
+                + visibility * uLightColor * (albedo * diffuse + vec3(specular))
+                + caustics * albedo + localLighting,
             1.0
         );
         return;
@@ -322,7 +376,9 @@ void main() {
             + specularIbl) * uEnvironmentIntensity;
     }
     fragmentColor = vec4(
-        ambient * ambientOcclusion + visibility * direct + localDirect + caustics * albedo,
+        ambient * ambientOcclusion
+            + visibility * uLightColor * direct
+            + localDirect + caustics * albedo,
         1.0
     );
 }

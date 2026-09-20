@@ -13,7 +13,16 @@
 #pragma warning(push)
 #pragma warning(disable : 4505)
 #endif
+#if defined(__GNUC__)
+// stb_image with STB_IMAGE_STATIC exposes its whole optional API as unused static
+// functions; this keeps the project's own -Wall -Wextra output meaningful.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#endif
 #include <stb_image.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif

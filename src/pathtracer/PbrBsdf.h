@@ -5,6 +5,11 @@
 
 namespace pathtracer {
 
+enum class GgxSamplingStrategy {
+    Distribution,
+    VisibleNormals
+};
+
 struct PbrSurface {
     glm::vec3 baseColor{1.0f};
     float metallic{0.0f};
@@ -22,9 +27,11 @@ struct BsdfSample {
 glm::vec3 evaluatePbrBsdf(const PbrSurface& surface, const glm::vec3& normal,
                           const glm::vec3& outgoing, const glm::vec3& incoming);
 float pbrBsdfPdf(const PbrSurface& surface, const glm::vec3& normal,
-                 const glm::vec3& outgoing, const glm::vec3& incoming);
+                 const glm::vec3& outgoing, const glm::vec3& incoming,
+                 GgxSamplingStrategy strategy = GgxSamplingStrategy::Distribution);
 BsdfSample samplePbrBsdf(const PbrSurface& surface, const glm::vec3& normal,
                          const glm::vec3& outgoing, float componentSample,
-                         const glm::vec2& directionSample);
+                         const glm::vec2& directionSample,
+                         GgxSamplingStrategy strategy = GgxSamplingStrategy::Distribution);
 
 } // namespace pathtracer

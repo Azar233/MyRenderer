@@ -602,11 +602,14 @@ void accumulationAndTasks() {
     require(r.image().sum == expected.sum, "Resume differs");
     require(render(scene, s).sum == expected.sum, "Render not deterministic");
     RenderTask task;
-    task.start(scene, s);
+    const std::uint64_t firstTask = task.start(scene, s);
     task.wait();
     auto progress = task.progress();
-    require(progress.status == RenderStatus::Completed && progress.image.sum == expected.sum,
+    require(progress.taskId == firstTask && progress.status == RenderStatus::Completed
+                && progress.image.sum == expected.sum,
             "Worker differs");
+    require(progress.staging.rgba == makeDisplayRgba8BottomUp(expected, RenderOutput::Beauty),
+            "Background staging differs from the synchronous renderer");
     auto longSettings = s;
     longSettings.samplesPerPixel = 1000000;
     task.start(scene, longSettings);
@@ -621,10 +624,13 @@ void accumulationAndTasks() {
     auto prefix = s;
     prefix.samplesPerPixel = progress.image.completedSamples;
     require(progress.image.sum == render(scene, prefix).sum, "Cancelled prefix contains partial pass");
-    task.start(scene, longSettings);
-    task.start(scene, s);
+    const std::uint64_t staleTask = task.start(scene, longSettings);
+    const std::uint64_t replacementTask = task.start(scene, s);
+    require(replacementTask > staleTask, "Task generations did not advance");
     task.wait();
-    require(task.progress().image.sum == expected.sum, "Restart did not reset");
+    progress = task.progress();
+    require(progress.taskId == replacementTask && progress.image.sum == expected.sum,
+            "Stale restart publication replaced the current task");
     s.maxDepth = 0;
     task.start(scene, s);
     task.wait();
@@ -860,6 +866,20 @@ void output() {
     require(png && w == 2 && h == 2, "PNG decode failed");
     require(png[0] == 231 && png[1] == 0 && png[4] == 188 && png[8] == 124 && png[9] == 0,
             "Tone map / sRGB / orientation mismatch");
+    const auto guiStaging = makeDisplayRgba8BottomUp(image, RenderOutput::Beauty);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const std::size_t pngPixel = static_cast<std::size_t>(y * w + x);
+            const std::size_t guiPixel = static_cast<std::size_t>((h - 1 - y) * w + x);
+            for (int channel = 0; channel < 3; ++channel) {
+                require(
+                    png[pngPixel * 3U + static_cast<std::size_t>(channel)]
+                        == guiStaging[guiPixel * 4U + static_cast<std::size_t>(channel)],
+                    "GUI staging and CLI PNG pixels differ"
+                );
+            }
+        }
+    }
     stbi_image_free(png);
     auto *normal = stbi_loadf((stem.string() + "-normal.hdr").c_str(), &w, &h, &c, 3);
     require(normal && w == 2 && h == 2, "Normal AOV decode failed");

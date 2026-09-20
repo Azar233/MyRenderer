@@ -49,6 +49,7 @@ void writeRendererSettings(Writer& writer, const RendererSettings& settings) {
     WRITE_FLOAT(shininess); WRITE_INT(msaaSamples);
     writer.Key("renderPath"); writer.Int(static_cast<int>(settings.renderPath));
     writer.Key("shadingMode"); writer.Int(static_cast<int>(settings.shadingMode));
+    writer.Key("stylizedPreset"); writer.Int(static_cast<int>(settings.stylizedPreset));
     writer.Key("gBufferDebugView"); writer.Int(static_cast<int>(settings.gBufferDebugView));
     WRITE_BOOL(wireframe); WRITE_BOOL(cullBackFaces); WRITE_BOOL(normalMapping);
     WRITE_BOOL(showGrid); WRITE_BOOL(showAxes); WRITE_BOOL(pbrEnabled); WRITE_BOOL(iblEnabled);
@@ -60,7 +61,21 @@ void writeRendererSettings(Writer& writer, const RendererSettings& settings) {
     WRITE_BOOL(stylizedOutlineEnabled); WRITE_FLOAT(stylizedOutlineWidth);
     WRITE_FLOAT(stylizedOutlineDepthThreshold); WRITE_FLOAT(stylizedOutlineNormalThreshold);
     WRITE_VEC3(stylizedOutlineColor);
+    WRITE_BOOL(stylizedDitherEnabled); WRITE_FLOAT(stylizedDitherStrength);
+    WRITE_BOOL(stylizedHeightFogEnabled); WRITE_FLOAT(stylizedHeightFogDensity);
+    WRITE_FLOAT(stylizedHeightFogBaseHeight); WRITE_FLOAT(stylizedHeightFogFalloff);
+    WRITE_VEC3(stylizedHeightFogColor);
+    WRITE_BOOL(stylizedColorGradingEnabled);
+    writer.Key("stylizedColorGradingLut");
+    writer.Int(static_cast<int>(settings.stylizedColorGradingLut));
+    WRITE_FLOAT(stylizedColorGradingStrength);
+    writer.Key("stylizedDebugView"); writer.Int(static_cast<int>(settings.stylizedDebugView));
     WRITE_BOOL(shadowsEnabled); WRITE_BOOL(coloredTransmissionShadowsEnabled);
+    // Cascaded shadows. Defaults match `RendererSettings`, so a scene written before these fields
+    // existed keeps the cascade count and split blend it was rendered with.
+    writer.Key("shadowCascadeCount"); writer.Int(std::clamp(settings.shadowCascadeCount, 1, 4));
+    writer.Key("shadowCascadeSplitLambda");
+    writer.Double(std::clamp(settings.shadowCascadeSplitLambda, 0.0f, 1.0f));
     WRITE_BOOL(causticsEnabled);
     writer.Key("causticsMode"); writer.Int(static_cast<int>(settings.causticsMode));
     WRITE_FLOAT(causticsStrength); WRITE_FLOAT(causticsScale); WRITE_VEC3(causticsDirection);
@@ -68,6 +83,20 @@ void writeRendererSettings(Writer& writer, const RendererSettings& settings) {
     WRITE_FLOAT(causticsReceiverPlaneY); WRITE_BOOL(transmissionEnabled);
     WRITE_BOOL(skyboxEnabled); WRITE_BOOL(toneMapping); WRITE_BOOL(bloom);
     WRITE_BOOL(showPrismIncidentBeam); WRITE_FLOAT(environmentIntensity);
+    // Sun-driven analytic sky. Off by default, so a scene written before these fields existed
+    // keeps its HDR environment.
+    writer.Key("atmosphereEnabled"); writer.Bool(settings.atmosphere.enabled);
+    writer.Key("sunElevationDegrees"); writer.Double(settings.atmosphere.sunElevationDegrees);
+    writer.Key("sunAzimuthDegrees"); writer.Double(settings.atmosphere.sunAzimuthDegrees);
+    writer.Key("skyTurbidity"); writer.Double(settings.atmosphere.turbidity);
+    writer.Key("skyIntensity"); writer.Double(settings.atmosphere.skyIntensity);
+    writer.Key("sunIntensity"); writer.Double(settings.atmosphere.sunIntensity);
+    writer.Key("groundAlbedo"); writer.Double(settings.atmosphere.groundAlbedo);
+    // Aerial perspective is part of the same sky description; the distance field is in world
+    // units, not metres, so a scene keeps its own unit scale.
+    writer.Key("aerialPerspectiveEnabled"); writer.Bool(settings.atmosphere.aerialPerspectiveEnabled);
+    writer.Key("aerialPerspectiveStrength"); writer.Double(settings.atmosphere.aerialPerspectiveStrength);
+    writer.Key("aerialPerspectiveScaleHeight"); writer.Double(settings.atmosphere.aerialPerspectiveScaleHeight);
     WRITE_FLOAT(refractionScale); WRITE_INT(refractionSteps); WRITE_FLOAT(volumeThicknessScale);
     WRITE_BOOL(geometricThicknessEnabled); WRITE_BOOL(twoInterfaceRefractionEnabled);
     WRITE_BOOL(volumeGlassOverrideEnabled); WRITE_FLOAT(volumeGlassTransmission);
@@ -199,6 +228,9 @@ void readRendererSettings(const scene_json::Value& value, RendererSettings& sett
     READ_FLOAT(shininess); READ_INT(msaaSamples);
     settings.renderPath = static_cast<RenderPath>(readInt(value, "renderPath", static_cast<int>(settings.renderPath)));
     settings.shadingMode = static_cast<ShadingMode>(readInt(value, "shadingMode", static_cast<int>(settings.shadingMode)));
+    settings.stylizedPreset = static_cast<StylizedPreset>(readInt(
+        value, "stylizedPreset", static_cast<int>(settings.stylizedPreset)
+    ));
     settings.gBufferDebugView = static_cast<GBufferDebugView>(readInt(value, "gBufferDebugView", static_cast<int>(settings.gBufferDebugView)));
     READ_BOOL(wireframe); READ_BOOL(cullBackFaces); READ_BOOL(normalMapping);
     READ_BOOL(showGrid); READ_BOOL(showAxes); READ_BOOL(pbrEnabled); READ_BOOL(iblEnabled);
@@ -210,12 +242,64 @@ void readRendererSettings(const scene_json::Value& value, RendererSettings& sett
     READ_BOOL(stylizedOutlineEnabled); READ_FLOAT(stylizedOutlineWidth);
     READ_FLOAT(stylizedOutlineDepthThreshold); READ_FLOAT(stylizedOutlineNormalThreshold);
     READ_VEC3(stylizedOutlineColor);
-    READ_BOOL(shadowsEnabled); READ_BOOL(coloredTransmissionShadowsEnabled); READ_BOOL(causticsEnabled);
+    READ_BOOL(stylizedDitherEnabled); READ_FLOAT(stylizedDitherStrength);
+    READ_BOOL(stylizedHeightFogEnabled); READ_FLOAT(stylizedHeightFogDensity);
+    READ_FLOAT(stylizedHeightFogBaseHeight); READ_FLOAT(stylizedHeightFogFalloff);
+    READ_VEC3(stylizedHeightFogColor);
+    READ_BOOL(stylizedColorGradingEnabled);
+    settings.stylizedColorGradingLut = static_cast<StylizedColorGradingLut>(readInt(
+        value,
+        "stylizedColorGradingLut",
+        static_cast<int>(settings.stylizedColorGradingLut)
+    ));
+    READ_FLOAT(stylizedColorGradingStrength);
+    settings.stylizedDebugView = static_cast<StylizedDebugView>(readInt(
+        value, "stylizedDebugView", static_cast<int>(settings.stylizedDebugView)
+    ));
+    READ_BOOL(shadowsEnabled); READ_BOOL(coloredTransmissionShadowsEnabled);
+    settings.shadowCascadeCount = std::clamp(
+        readInt(value, "shadowCascadeCount", settings.shadowCascadeCount), 1, 4
+    );
+    settings.shadowCascadeSplitLambda = std::clamp(
+        readFloat(value, "shadowCascadeSplitLambda", settings.shadowCascadeSplitLambda),
+        0.0f, 1.0f
+    );
+    READ_BOOL(causticsEnabled);
     settings.causticsMode = static_cast<CausticsMode>(readInt(value, "causticsMode", static_cast<int>(settings.causticsMode)));
     READ_FLOAT(causticsStrength); READ_FLOAT(causticsScale); READ_VEC3(causticsDirection);
     READ_FLOAT(causticsSharpness); READ_BOOL(causticsAnimated); READ_FLOAT(causticsReceiverPlaneY);
     READ_BOOL(transmissionEnabled); READ_BOOL(skyboxEnabled); READ_BOOL(toneMapping); READ_BOOL(bloom);
-    READ_BOOL(showPrismIncidentBeam); READ_FLOAT(environmentIntensity); READ_FLOAT(refractionScale);
+    READ_BOOL(showPrismIncidentBeam); READ_FLOAT(environmentIntensity);
+    settings.atmosphere.enabled = readBool(
+        value, "atmosphereEnabled", settings.atmosphere.enabled
+    );
+    settings.atmosphere.sunElevationDegrees = readFloat(
+        value, "sunElevationDegrees", settings.atmosphere.sunElevationDegrees
+    );
+    settings.atmosphere.sunAzimuthDegrees = readFloat(
+        value, "sunAzimuthDegrees", settings.atmosphere.sunAzimuthDegrees
+    );
+    settings.atmosphere.turbidity = readFloat(
+        value, "skyTurbidity", settings.atmosphere.turbidity
+    );
+    settings.atmosphere.skyIntensity = readFloat(
+        value, "skyIntensity", settings.atmosphere.skyIntensity
+    );
+    settings.atmosphere.sunIntensity = readFloat(
+        value, "sunIntensity", settings.atmosphere.sunIntensity
+    );
+    settings.atmosphere.groundAlbedo = readFloat(
+        value, "groundAlbedo", settings.atmosphere.groundAlbedo
+    );
+    settings.atmosphere.aerialPerspectiveEnabled = readBool(
+        value, "aerialPerspectiveEnabled", settings.atmosphere.aerialPerspectiveEnabled
+    );
+    settings.atmosphere.aerialPerspectiveStrength = readFloat(
+        value, "aerialPerspectiveStrength", settings.atmosphere.aerialPerspectiveStrength
+    );
+    settings.atmosphere.aerialPerspectiveScaleHeight = readFloat(
+        value, "aerialPerspectiveScaleHeight", settings.atmosphere.aerialPerspectiveScaleHeight
+    ); READ_FLOAT(refractionScale);
     READ_INT(refractionSteps); READ_FLOAT(volumeThicknessScale); READ_BOOL(geometricThicknessEnabled);
     READ_BOOL(twoInterfaceRefractionEnabled); READ_BOOL(volumeGlassOverrideEnabled);
     READ_FLOAT(volumeGlassTransmission); READ_FLOAT(volumeGlassRoughness);

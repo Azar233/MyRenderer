@@ -13,6 +13,7 @@ function(capture_screen_space name ssao taa gbuffer_debug taa_debug motion)
             MYRENDERER_RENDER_WIDTH=1920
             MYRENDERER_RENDER_HEIGHT=1080
             MYRENDERER_SCREENSHOT=${output}
+            MYRENDERER_HIDE_SELECTION_OUTLINE=1
             MYRENDERER_SCREENSHOT_WARMUP=3
             MYRENDERER_MSAA=1
             MYRENDERER_RENDER_PATH=1

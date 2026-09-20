@@ -18,6 +18,10 @@ bool emits(const glm::vec3& radiance) {
     return finite(radiance) && glm::any(glm::greaterThan(radiance, glm::vec3(0.0f)));
 }
 
+float luminance(const glm::vec3& color) {
+    return std::max(glm::dot(color, glm::vec3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
+}
+
 } // namespace
 
 float powerHeuristic(float firstPdf, float secondPdf) {
@@ -27,16 +31,23 @@ float powerHeuristic(float firstPdf, float secondPdf) {
     return static_cast<float>((first * first) / (first * first + second * second));
 }
 
-SceneLights::SceneLights(const SceneSnapshot& snapshot, const std::vector<Triangle>& triangles)
+SceneLights::SceneLights(const SceneSnapshot& snapshot, const std::vector<Triangle>& triangles,
+                         LightSelectionStrategy strategy)
     : lighting_(snapshot.lighting()), environment_(snapshot.lighting().environment) {
+    std::vector<float> weights;
     if (emits(lighting_.directional.radiance) &&
-        glm::dot(lighting_.directional.direction, lighting_.directional.direction) > 1.0e-12f)
+        glm::dot(lighting_.directional.direction, lighting_.directional.direction) > 1.0e-12f) {
         entries_.push_back({Kind::Directional, 0U});
+        weights.push_back(luminance(lighting_.directional.radiance) * 12.5663706144f);
+    }
 
     for (std::size_t index = 0; index < lighting_.localLights.size(); ++index) {
         const SnapshotLocalLight& light = lighting_.localLights[index];
-        if (emits(light.radiance) && light.radius > 0.0f)
+        if (emits(light.radiance) && light.radius > 0.0f) {
             entries_.push_back({Kind::Local, static_cast<std::uint32_t>(index)});
+            const float coneFactor = light.type == SnapshotLocalLightType::Spot ? 0.25f : 1.0f;
+            weights.push_back(luminance(light.radiance) * light.radius * light.radius * coneFactor);
+        }
     }
 
     for (const Triangle& triangle : triangles) {
@@ -64,9 +75,59 @@ SceneLights::SceneLights(const SceneSnapshot& snapshot, const std::vector<Triang
         emitters_.push_back(emitter);
         emitterByPrimitive_.emplace(emitter.primitiveIndex, index);
         entries_.push_back({Kind::EmissiveTriangle, index});
+        weights.push_back(luminance(emitter.radiance) * emitter.area
+            * (emitter.doubleSided ? 6.28318530718f : 3.14159265359f));
     }
 
-    if (environment_.importanceSampled()) entries_.push_back({Kind::Environment, 0U});
+    if (environment_.importanceSampled()) {
+        environmentEntry_ = entries_.size();
+        entries_.push_back({Kind::Environment, 0U});
+        double weightedLuminance = 0.0;
+        const SnapshotEnvironment& source = lighting_.environment;
+        for (std::uint32_t y = 0U; y < source.height; ++y) {
+            const float theta = 3.14159265359f
+                * (static_cast<float>(y) + 0.5f) / static_cast<float>(source.height);
+            for (std::uint32_t x = 0U; x < source.width; ++x) {
+                weightedLuminance += luminance(source.radiancePixels[
+                    static_cast<std::size_t>(y) * source.width + x]) * std::sin(theta);
+            }
+        }
+        const double texelSolidAngle = 2.0 * 3.14159265358979323846
+            * 3.14159265358979323846
+            / static_cast<double>(source.width * source.height);
+        weights.push_back(static_cast<float>(weightedLuminance * texelSolidAngle
+            * std::max(source.intensity, 0.0f)));
+    }
+
+    if (entries_.empty()) return;
+    selectionPdfs_.resize(entries_.size(), 1.0f / static_cast<float>(entries_.size()));
+    if (strategy == LightSelectionStrategy::PowerWeighted) {
+        double total = 0.0;
+        for (float weight : weights) total += std::max(weight, 0.0f);
+        if (total > 0.0 && std::isfinite(total)) {
+            for (std::size_t i = 0U; i < weights.size(); ++i)
+                selectionPdfs_[i] = static_cast<float>(std::max(weights[i], 0.0f) / total);
+        }
+    }
+
+    const std::size_t count = entries_.size();
+    aliasProbabilities_.resize(count, 1.0f);
+    aliasIndices_.resize(count);
+    std::vector<float> scaled(count);
+    std::vector<std::size_t> small, large;
+    for (std::size_t i = 0U; i < count; ++i) {
+        aliasIndices_[i] = static_cast<std::uint32_t>(i);
+        scaled[i] = selectionPdfs_[i] * static_cast<float>(count);
+        (scaled[i] < 1.0f ? small : large).push_back(i);
+    }
+    while (!small.empty() && !large.empty()) {
+        const std::size_t low = small.back(); small.pop_back();
+        const std::size_t high = large.back(); large.pop_back();
+        aliasProbabilities_[low] = scaled[low];
+        aliasIndices_[low] = static_cast<std::uint32_t>(high);
+        scaled[high] = (scaled[high] + scaled[low]) - 1.0f;
+        (scaled[high] < 1.0f ? small : large).push_back(high);
+    }
 }
 
 DirectLightSample SceneLights::sample(const glm::vec3& position, float lightSample,
@@ -74,10 +135,13 @@ DirectLightSample SceneLights::sample(const glm::vec3& position, float lightSamp
     DirectLightSample result;
     if (entries_.empty() || !finite(position)) return result;
     const float selection = std::clamp(lightSample, 0.0f, 0.99999994f);
-    const std::size_t entryIndex = std::min(
-        static_cast<std::size_t>(selection * static_cast<float>(entries_.size())), entries_.size() - 1U);
+    const float scaledSelection = selection * static_cast<float>(entries_.size());
+    const std::size_t column = std::min(static_cast<std::size_t>(scaledSelection), entries_.size() - 1U);
+    const float remainder = scaledSelection - static_cast<float>(column);
+    const std::size_t entryIndex = remainder < aliasProbabilities_[column]
+        ? column : aliasIndices_[column];
     const Entry& entry = entries_[entryIndex];
-    const float selectionPdf = 1.0f / static_cast<float>(entries_.size());
+    const float selectionPdf = selectionPdfs_[entryIndex];
 
     if (entry.kind == Kind::Directional) {
         result.direction = -glm::normalize(lighting_.directional.direction);
@@ -160,7 +224,16 @@ float SceneLights::emissiveHitPdf(const glm::vec3& previousPosition,
     const float rawCosine = glm::dot(emitter.normal, -direction);
     const float lightCosine = emitter.doubleSided ? std::abs(rawCosine) : rawCosine;
     if (lightCosine <= 1.0e-7f) return 0.0f;
-    const float selectionPdf = 1.0f / static_cast<float>(entries_.size());
+    std::size_t entryIndex = static_cast<std::size_t>(-1);
+    for (std::size_t index = 0U; index < entries_.size(); ++index) {
+        if (entries_[index].kind == Kind::EmissiveTriangle
+            && entries_[index].index == found->second) {
+            entryIndex = index;
+            break;
+        }
+    }
+    if (entryIndex == static_cast<std::size_t>(-1)) return 0.0f;
+    const float selectionPdf = selectionPdfs_[entryIndex];
     return selectionPdf * distanceSquared / (lightCosine * emitter.area);
 }
 
@@ -169,8 +242,8 @@ glm::vec3 SceneLights::environmentRadiance(const glm::vec3& direction) const {
 }
 
 float SceneLights::environmentPdf(const glm::vec3& direction) const {
-    if (!environment_.importanceSampled() || entries_.empty()) return 0.0f;
-    return environment_.pdf(direction) / static_cast<float>(entries_.size());
+    if (!environment_.importanceSampled() || environmentEntry_ >= entries_.size()) return 0.0f;
+    return environment_.pdf(direction) * selectionPdfs_[environmentEntry_];
 }
 
 } // namespace pathtracer

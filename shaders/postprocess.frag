@@ -5,6 +5,7 @@ uniform sampler2D uBloom;
 uniform sampler2D uMotion;
 uniform sampler2D uDepth;
 uniform sampler2D uEncodedNormal;
+uniform sampler3D uColorGradingLut;
 uniform int uTemporalDebugView;
 uniform bool uToneMapping;
 uniform bool uBloomEnabled;
@@ -17,9 +18,27 @@ uniform float uOutlineWidth;
 uniform float uOutlineDepthThreshold;
 uniform float uOutlineNormalThreshold;
 uniform vec3 uOutlineColor;
+uniform bool uDitherEnabled;
+uniform float uDitherStrength;
+uniform bool uHeightFogEnabled;
+uniform float uHeightFogDensity;
+uniform float uHeightFogBaseHeight;
+uniform float uHeightFogFalloff;
+uniform vec3 uHeightFogColor;
+uniform bool uAerialEnabled;
+uniform float uAerialStrength;
+uniform float uAerialScaleHeight;
+uniform vec3 uAerialColumnDepth;
+uniform vec3 uAerialZenithColor;
+uniform vec3 uAerialHorizonColor;
+uniform bool uColorGradingEnabled;
+uniform float uColorGradingStrength;
+uniform int uStylizedDebugView;
 uniform float uInverseWidth;
 uniform float uInverseHeight;
 uniform mat4 uInverseProjection;
+uniform mat4 uInverseCurrentViewProjection;
+uniform vec3 uCameraPosition;
 out vec4 fragmentColor;
 
 vec3 aces(vec3 color) {
@@ -37,11 +56,86 @@ vec3 linearToSrgb(vec3 color) {
     return mix(1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055, color * 12.92, cutoff);
 }
 
+float orderedDitherThreshold() {
+    const float pattern[16] = float[16](
+         0.0,  8.0,  2.0, 10.0,
+        12.0,  4.0, 14.0,  6.0,
+         3.0, 11.0,  1.0,  9.0,
+        15.0,  7.0, 13.0,  5.0
+    );
+    ivec2 pixel = ivec2(mod(floor(gl_FragCoord.xy), 4.0));
+    return (pattern[pixel.y * 4 + pixel.x] + 0.5) / 16.0;
+}
+
+vec3 applyOrderedDither(vec3 color) {
+    const float colorLevels = 15.0;
+    vec3 quantized = floor(
+        clamp(color, 0.0, 1.0) * colorLevels + orderedDitherThreshold()
+    ) / colorLevels;
+    return mix(color, quantized, clamp(uDitherStrength, 0.0, 1.0));
+}
+
+// Reconstruction of the camera-to-surface segment. Sky has no finite surface depth in the current
+// contract, so it reports the far flag; transparent surfaces reuse the opaque depth behind them and
+// therefore fade with the geometry behind them instead of being skipped, which is the same
+// compromise the height fog makes.
+void worldSegment(float deviceDepth, out float distanceToSurface, out vec3 segment, out bool isSky) {
+    distanceToSurface = 0.0;
+    segment = vec3(0.0);
+    isSky = deviceDepth >= 0.999999;
+    if (isSky) return;
+    vec4 world = uInverseCurrentViewProjection
+        * vec4(vUv * 2.0 - 1.0, deviceDepth * 2.0 - 1.0, 1.0);
+    vec3 worldPosition = world.xyz / max(abs(world.w), 1.0e-6);
+    segment = worldPosition - uCameraPosition;
+    distanceToSurface = length(segment);
+}
+
+float heightFogFactor(float deviceDepth, vec3 segment, float distanceToSurface, bool isSky) {
+    if (isSky || uHeightFogDensity <= 0.0) return 0.0;
+    // The segment already is `worldPosition - uCameraPosition`, so its Y is the height difference.
+    float heightDelta = segment.y;
+    float falloff = max(uHeightFogFalloff, 0.01);
+    float cameraDensity = uHeightFogDensity * exp(clamp(
+        -falloff * (uCameraPosition.y - uHeightFogBaseHeight), -20.0, 20.0
+    ));
+    float integratedDensity = abs(heightDelta) < 1.0e-4
+        ? cameraDensity * distanceToSurface
+        : cameraDensity * distanceToSurface
+            * (1.0 - exp(clamp(-falloff * heightDelta, -20.0, 20.0)))
+            / (falloff * heightDelta);
+    return clamp(1.0 - exp(-max(integratedDensity, 0.0)), 0.0, 1.0);
+}
+
 float viewDepth(vec2 uv, float deviceDepth) {
     if (deviceDepth >= 0.999999) return 1.0e20;
     vec4 viewPosition = uInverseProjection
         * vec4(uv * 2.0 - 1.0, deviceDepth * 2.0 - 1.0, 1.0);
     return abs(viewPosition.z / max(abs(viewPosition.w), 1.0e-6));
+}
+
+// Aerial perspective. `uAerialColumnDepth` is the optical depth of the whole vertical column, so
+// the segment in front of a surface is that column scaled by how much atmosphere the ray actually
+// crosses: `airMass` for the angle, `length / scaleHeight` for the distance, and the vertical
+// profile along the way. A horizontal ray walks one column's worth of air per scale height
+// travelled, and a ray pointing up saturates on the full column no matter how long it is, which is
+// `clamp(abs(direction.y), ...)` cancelling the `1 / abs(direction.y)` in the air mass. The
+// in-scatter is the sky itself, interpolated from the zenith towards the horizon by view elevation,
+// and is deliberately the disk-free sky: a 4.6e3 sun disk must not be smeared over the landscape.
+vec3 aerialPerspectiveColor(vec3 color, float deviceDepth, float distanceToSurface, vec3 segment) {
+    if (!uAerialEnabled || uAerialStrength <= 0.0 || deviceDepth >= 0.999999) return color;
+    vec3 direction = segment / max(distanceToSurface, 1.0e-6);
+    float vertical = abs(direction.y);
+    float zenithDegrees = degrees(acos(clamp(vertical, 0.0, 1.0)));
+    float horizonTerm = pow(max(96.07995 - zenithDegrees, 0.01), -1.6364);
+    float airMass = 1.0 / max(cos(radians(zenithDegrees)) + 0.50572 * horizonTerm, 1.0e-4);
+    float columnFraction = uAerialStrength * airMass * clamp(vertical, 1.0e-4, 1.0)
+        * distanceToSurface / uAerialScaleHeight;
+    vec3 transmittance = exp(-uAerialColumnDepth * columnFraction);
+    // The horizon colour already carries the low-sun glow, so lifting it as the view flattens keeps
+    // a sunset reading warm at eye level instead of fading everything into a flat grey.
+    vec3 sky = mix(uAerialZenithColor, uAerialHorizonColor, pow(1.0 - vertical, 3.0));
+    return mix(color, sky, clamp(1.0 - transmittance, vec3(0.0), vec3(1.0)));
 }
 
 float outlineEdge() {
@@ -111,11 +205,56 @@ void main() {
         fragmentColor = vec4(vec3(historyWeight), 1.0);
         return;
     }
+    if (uStylizedDebugView == 1 || uStylizedDebugView == 2) {
+        fragmentColor = vec4(clamp(texture(uScene, vUv).rgb, 0.0, 1.0), 1.0);
+        return;
+    }
+    if (uStylizedDebugView == 3) {
+        fragmentColor = vec4(vec3(outlineEdge()), 1.0);
+        return;
+    }
     vec3 color = texture(uScene, vUv).rgb;
     if (uBloomEnabled) color += texture(uBloom, vUv).rgb * uBloomIntensity;
+    float deviceDepth = texture(uDepth, vUv).r;
+    // One reconstruction serves both effects: the height fog needs it only when it is on, but the
+    // aerial perspective needs it whenever it is on, and neither can share the other's early-out.
+    float aerialDistance = 0.0;
+    vec3 aerialSegment = vec3(0.0);
+    bool aerialIsSky = true;
+    if (uAerialEnabled || uHeightFogEnabled) {
+        worldSegment(deviceDepth, aerialDistance, aerialSegment, aerialIsSky);
+    }
+    float fogFactor = heightFogFactor(
+        deviceDepth, aerialSegment, aerialDistance,
+        uAerialEnabled || uHeightFogEnabled ? aerialIsSky : true
+    );
+    if (uStylizedDebugView == 5) {
+        fragmentColor = vec4(vec3(fogFactor), 1.0);
+        return;
+    }
+    if (uHeightFogEnabled) {
+        color = mix(color, max(uHeightFogColor, vec3(0.0)), fogFactor);
+    }
+    // The air sits in front of the stylized fog, so it composites on top: the fog is a look, the
+    // aerial perspective is the atmosphere the scene is standing in.
+    color = aerialPerspectiveColor(color, deviceDepth, aerialDistance, aerialSegment);
     color *= max(uExposure, 0.0);
     color = uToneMapping ? aces(color) : clamp(color, 0.0, 1.0);
     color = uEncodeSrgb ? linearToSrgb(color) : color;
+    vec3 lutCoordinate = (clamp(color, 0.0, 1.0) * 31.0 + 0.5) / 32.0;
+    vec3 gradedColor = texture(uColorGradingLut, lutCoordinate).rgb;
+    if (uStylizedDebugView == 6) {
+        fragmentColor = vec4(clamp(abs(gradedColor - color) * 4.0, 0.0, 1.0), 1.0);
+        return;
+    }
+    if (uColorGradingEnabled) {
+        color = mix(color, gradedColor, clamp(uColorGradingStrength, 0.0, 1.0));
+    }
+    if (uStylizedDebugView == 4) {
+        fragmentColor = vec4(vec3(orderedDitherThreshold()), 1.0);
+        return;
+    }
+    if (uDitherEnabled) color = applyOrderedDither(color);
     if (uOutlineEnabled) {
         color = mix(color, max(uOutlineColor, vec3(0.0)), outlineEdge());
     }

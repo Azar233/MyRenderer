@@ -6,10 +6,12 @@
 #include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <glm/vec3.hpp>
 #include "render/Shader.h"
 
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -21,6 +23,8 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include "app/EditorDomain.h"
+#include "module/BuiltinModules.h"
 #include "app/EditorUi.h"
 
 #include "app/FileDialog.h"
@@ -41,14 +45,883 @@ bool hasUndersizedDockLeaf(const ImGuiDockNode* node) {
         || node->Size.y + 1.0f < EditorUi::minimumDockedPanelSize.y;
 }
 
+const char* backendName(EditorRenderBackend backend) {
+    switch (backend) {
+        case EditorRenderBackend::Raster: return "Raster";
+        case EditorRenderBackend::CpuPathTraced: return "CPU Path Traced";
+        case EditorRenderBackend::GpuPathTraced: return "GPU Path Traced";
+    }
+    return "Unknown";
+}
+
+std::string formatAssetSize(std::uintmax_t bytes) {
+    static constexpr std::array<const char*, 4> units{"B", "KB", "MB", "GB"};
+    double value = static_cast<double>(bytes);
+    std::size_t unit = 0U;
+    while (value >= 1024.0 && unit + 1U < units.size()) {
+        value /= 1024.0;
+        ++unit;
+    }
+    char text[64]{};
+    std::snprintf(text, sizeof(text), unit == 0U ? "%.0f %s" : "%.1f %s",
+                  value, units[unit]);
+    return text;
+}
+
 } // namespace
+
+void Application::drawWorkspaceToolbar() {
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar
+        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar;
+    if (!ImGui::BeginViewportSideBar("##WorkspaceToolbar", viewport, ImGuiDir_Up, 38.0f, flags)) {
+        ImGui::End();
+        return;
+    }
+    if (ImGui::BeginMenuBar()) {
+        ImGui::TextDisabled("Backend");
+        ImGui::SetNextItemWidth(150.0f);
+        if (ImGui::BeginCombo("##WorkspaceBackend", backendName(editorSession_.backend()))) {
+            for (int index = 0; index < 3; ++index) {
+                const auto backend = static_cast<EditorRenderBackend>(index);
+                const bool available = backend != EditorRenderBackend::GpuPathTraced;
+                ImGui::BeginDisabled(!available);
+                if (ImGui::Selectable(backendName(backend), editorSession_.backend() == backend)) {
+                    editorSession_.requestBackend(backend);
+                }
+                ImGui::EndDisabled();
+                if (!available && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::SetTooltip("GPU Path Tracing is scheduled after the Vulkan raster baseline.");
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        ImGui::Separator();
+        const char* activityLabels[] = {"Edit", "Preview", "Bake", "Render"};
+        for (int index = 0; index < 4; ++index) {
+            if (index > 0) ImGui::SameLine();
+            const auto activity = static_cast<EditorActivity>(index);
+            bool selected = editorSession_.activity() == activity;
+            if (EditorUi::toolbarToggle(activityLabels[index], &selected) && selected) {
+                editorSession_.requestActivity(activity);
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::BeginDisabled(editorSession_.activity() == EditorActivity::Edit);
+        if (ImGui::SmallButton(editorSession_.paused() ? "Resume" : "Pause")) {
+            editorSession_.requestPause(!editorSession_.paused());
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!editorSession_.paused());
+        if (ImGui::SmallButton("Single Step")) {
+            editorSession_.request(EditorCommand{EditorCommandType::Step});
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset")) editorSession_.request(EditorCommand{EditorCommandType::Reset});
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Render Frame")) {
+            editorSession_.request(EditorCommand{EditorCommandType::RenderFrame});
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Render Sequence")) {
+            editorSession_.request(EditorCommand{EditorCommandType::RenderSequence});
+        }
+
+        const std::string frameLabel = "Frame " + std::to_string(editorSession_.frame())
+            + " | " + editorSession_.taskStatus();
+        const float right = ImGui::GetWindowWidth() - ImGui::CalcTextSize(frameLabel.c_str()).x - 12.0f;
+        if (right > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(right);
+        ImGui::TextDisabled("%s", frameLabel.c_str());
+        ImGui::EndMenuBar();
+    }
+    ImGui::End();
+}
+
+void Application::processEditorCommands() {
+    for (const EditorCommand& command : editorSession_.takeCommands()) {
+        switch (command.type) {
+            case EditorCommandType::BackendChanged: {
+                const auto backend = static_cast<EditorRenderBackend>(command.value);
+                const int requested = backend == EditorRenderBackend::CpuPathTraced ? 1 : 0;
+                if (viewportRenderMode_ == requested) break;
+                viewportRenderMode_ = requested;
+                if (viewportRenderMode_ == 0) {
+                    cpuPreviewTask_.cancel();
+                    cpuPreviewTaskId_ = 0U;
+                } else {
+                    cpuPreviewRestartRequested_ = true;
+                }
+                break;
+            }
+            case EditorCommandType::ActivityChanged: {
+                const auto activity = static_cast<EditorActivity>(command.value);
+                if (activity == EditorActivity::Edit) {
+                    cpuPreviewPaused_ = false;
+                    cpuPreviewTask_.setPaused(false);
+                    animationPlaying_ = false;
+                    editorSession_.setTaskStatus("Idle");
+                } else if (activity == EditorActivity::Preview) {
+                    animationPlaying_ = true;
+                    editorSession_.setTaskStatus("Previewing");
+                } else {
+                    editorSession_.setTaskStatus("Ready");
+                }
+                break;
+            }
+            case EditorCommandType::PauseChanged:
+                cpuPreviewPaused_ = command.flag;
+                cpuPreviewTask_.setPaused(command.flag);
+                animationPlaying_ = !command.flag;
+                editorSession_.setTaskStatus(command.flag ? "Paused" : "Previewing");
+                break;
+            case EditorCommandType::Step:
+                editorSession_.setFrame(editorSession_.frame() + 1);
+                animationTimeFixed_ = true;
+                animationTimeSeconds_ = static_cast<float>(editorSession_.timeSeconds());
+                cpuPreviewRestartRequested_ = true;
+                editorSession_.setTaskStatus("Stepped");
+                break;
+            case EditorCommandType::Reset:
+                editorSession_.setFrame(editorSession_.startFrame());
+                animationTimeFixed_ = true;
+                animationTimeSeconds_ = static_cast<float>(editorSession_.timeSeconds());
+                cpuPreviewRestartRequested_ = true;
+                editorSession_.setTaskStatus("Reset");
+                break;
+            case EditorCommandType::RenderFrame:
+                if (viewportRenderMode_ == 0) pendingScreenshotPath_ = nextScreenshotPath();
+                else exportCpuPreview();
+                editorSession_.setTaskStatus("Frame requested");
+                break;
+            case EditorCommandType::RenderSequence:
+                submitRenderJob(std::filesystem::u8path(renderJobPathBuffer_.data()));
+                assetsPanelOpen_ = true;
+                break;
+            case EditorCommandType::SubmitRenderJob:
+                submitRenderJob(std::filesystem::u8path(command.text));
+                break;
+            case EditorCommandType::CancelRenderJob:
+                cancelRenderJob();
+                break;
+            case EditorCommandType::MoveRenderJobUp:
+            case EditorCommandType::MoveRenderJobDown: {
+                std::string error;
+                const int direction = command.type == EditorCommandType::MoveRenderJobUp ? -1 : 1;
+                if (!renderQueue_->movePending(command.entity, direction, error)) {
+                    renderQueueMessage_ = error;
+                } else {
+                    renderQueueMessage_ = "Pending Render Job reordered.";
+                }
+                statusMessage_ = renderQueueMessage_;
+                break;
+            }
+            case EditorCommandType::RemoveRenderJob: {
+                std::string error;
+                renderQueueMessage_ = renderQueue_->remove(command.entity, error)
+                    ? "Render Job removed from the queue."
+                    : error;
+                statusMessage_ = renderQueueMessage_;
+                break;
+            }
+            case EditorCommandType::RetryRenderJob: {
+                std::string error;
+                renderQueueMessage_ = renderQueue_->retry(command.entity, error)
+                    ? "Render Job returned to Pending."
+                    : error;
+                statusMessage_ = renderQueueMessage_;
+                break;
+            }
+            case EditorCommandType::RefreshAssetCatalog: {
+                const std::uint64_t previousGeneration = workspaceAssets_.generation();
+                discoverModels();
+                if (workspaceAssets_.generation() != previousGeneration) {
+                    statusMessage_ = "Workspace asset catalog refreshed: "
+                        + std::to_string(workspaceAssets_.records().size()) + " indexed asset(s).";
+                }
+                break;
+            }
+            case EditorCommandType::OpenSceneAsset:
+                openScene(std::filesystem::u8path(command.text));
+                break;
+            case EditorCommandType::ImportModelAsset:
+                loadModel(std::filesystem::u8path(command.text), true);
+                break;
+            case EditorCommandType::SelectRenderJobAsset: {
+                const std::string path = std::filesystem::u8path(command.text).string();
+                std::snprintf(renderJobPathBuffer_.data(), renderJobPathBuffer_.size(),
+                              "%s", path.c_str());
+                focusRenderQueueTab_ = true;
+                assetsPanelOpen_ = true;
+                statusMessage_ = "Render Job selected for the Queue: " + path;
+                break;
+            }
+            case EditorCommandType::SetEntityTransform: {
+                SceneEntity* entity = scene_.find(static_cast<SceneEntityId>(command.entity));
+                const auto finite = [](const EditorVector3Payload& value) {
+                    return std::isfinite(value.x) && std::isfinite(value.y)
+                        && std::isfinite(value.z);
+                };
+                const bool scaleValid = command.transform.scale.x >= 0.01f
+                    && command.transform.scale.y >= 0.01f
+                    && command.transform.scale.z >= 0.01f
+                    && command.transform.scale.x <= 100.0f
+                    && command.transform.scale.y <= 100.0f
+                    && command.transform.scale.z <= 100.0f;
+                if (entity == nullptr || !finite(command.transform.translation)
+                    || !finite(command.transform.rotationDegrees)
+                    || !finite(command.transform.scale) || !scaleValid) {
+                    statusMessage_ = "Inspector rejected an invalid entity transform.";
+                    break;
+                }
+                entity->transform.translation = glm::vec3(
+                    command.transform.translation.x,
+                    command.transform.translation.y,
+                    command.transform.translation.z
+                );
+                entity->transform.rotationDegrees = glm::vec3(
+                    command.transform.rotationDegrees.x,
+                    command.transform.rotationDegrees.y,
+                    command.transform.rotationDegrees.z
+                );
+                entity->transform.scale = glm::vec3(
+                    command.transform.scale.x,
+                    command.transform.scale.y,
+                    command.transform.scale.z
+                );
+                editedEntities_.insert(entity->id);
+                entity->motionHistoryValid = false;
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetEntityTint: {
+                SceneEntity* entity = scene_.find(static_cast<SceneEntityId>(command.entity));
+                if (entity == nullptr || !std::isfinite(command.color.x)
+                    || !std::isfinite(command.color.y) || !std::isfinite(command.color.z)) {
+                    statusMessage_ = "Inspector rejected an invalid entity tint.";
+                    break;
+                }
+                entity->tint = glm::vec3(
+                    std::clamp(command.color.x, 0.0f, 1.0f),
+                    std::clamp(command.color.y, 0.0f, 1.0f),
+                    std::clamp(command.color.z, 0.0f, 1.0f)
+                );
+                editedEntities_.insert(entity->id);
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetEntityCastsShadow:
+                if (SceneEntity* entity = scene_.find(static_cast<SceneEntityId>(command.entity))) {
+                    entity->castsShadow = command.flag;
+                    editedEntities_.insert(entity->id);
+                    cpuPreviewRestartRequested_ = true;
+                    if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                }
+                break;
+            case EditorCommandType::SetStageSettings: {
+                const auto& stage = command.stage;
+                const bool valid = std::isfinite(stage.groundColor.x)
+                    && std::isfinite(stage.groundColor.y)
+                    && std::isfinite(stage.groundColor.z)
+                    && std::isfinite(stage.groundOffset)
+                    && stage.groundOffset >= -3.0f && stage.groundOffset <= 0.0f;
+                if (!valid) {
+                    statusMessage_ = "Inspector rejected invalid Stage settings.";
+                    break;
+                }
+                showGroundPlane_ = stage.groundReceiver;
+                groundColor_ = glm::vec3(
+                    std::clamp(stage.groundColor.x, 0.0f, 1.0f),
+                    std::clamp(stage.groundColor.y, 0.0f, 1.0f),
+                    std::clamp(stage.groundColor.z, 0.0f, 1.0f)
+                );
+                groundOffset_ = stage.groundOffset;
+                showComparisonObject_ = stage.comparisonObject;
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetMaterialSettings: {
+                const auto& material = command.material;
+                const bool valid = std::isfinite(material.baseColor.x)
+                    && std::isfinite(material.baseColor.y)
+                    && std::isfinite(material.baseColor.z)
+                    && std::isfinite(material.shininess)
+                    && material.shininess >= 1.0f && material.shininess <= 256.0f;
+                if (!valid) {
+                    statusMessage_ = "Inspector rejected invalid Material settings.";
+                    break;
+                }
+                rendererSettings_.baseColor = glm::vec3(
+                    std::clamp(material.baseColor.x, 0.0f, 1.0f),
+                    std::clamp(material.baseColor.y, 0.0f, 1.0f),
+                    std::clamp(material.baseColor.z, 0.0f, 1.0f)
+                );
+                rendererSettings_.shininess = material.shininess;
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetDirectionalLightSettings: {
+                const auto& lighting = command.directionalLight;
+                const float directionLengthSquared = lighting.direction.x * lighting.direction.x
+                    + lighting.direction.y * lighting.direction.y
+                    + lighting.direction.z * lighting.direction.z;
+                const bool valid = std::isfinite(directionLengthSquared)
+                    && directionLengthSquared > 1.0e-6f
+                    && std::isfinite(lighting.ambientStrength)
+                    && std::isfinite(lighting.diffuseStrength)
+                    && std::isfinite(lighting.specularStrength)
+                    && lighting.ambientStrength >= 0.0f && lighting.ambientStrength <= 1.0f
+                    && lighting.diffuseStrength >= 0.0f && lighting.diffuseStrength <= 2.0f
+                    && lighting.specularStrength >= 0.0f && lighting.specularStrength <= 2.0f;
+                if (!valid) {
+                    statusMessage_ = "Inspector rejected invalid Directional Light settings.";
+                    break;
+                }
+                rendererSettings_.lightDirection = glm::vec3(
+                    std::clamp(lighting.direction.x, -1.0f, 1.0f),
+                    std::clamp(lighting.direction.y, -1.0f, 1.0f),
+                    std::clamp(lighting.direction.z, -1.0f, 1.0f)
+                );
+                rendererSettings_.ambientStrength = lighting.ambientStrength;
+                rendererSettings_.diffuseStrength = lighting.diffuseStrength;
+                rendererSettings_.specularStrength = lighting.specularStrength;
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetPbrEnvironmentSettings: {
+                const auto& environment = command.pbrEnvironment;
+                if (!std::isfinite(environment.environmentIntensity)
+                    || environment.environmentIntensity < 0.0f
+                    || environment.environmentIntensity > 2.0f
+                    || environment.shadowCascadeCount < 1
+                    || environment.shadowCascadeCount > 4
+                    || !std::isfinite(environment.shadowCascadeSplitLambda)
+                    || environment.shadowCascadeSplitLambda < 0.0f
+                    || environment.shadowCascadeSplitLambda > 1.0f) {
+                    statusMessage_ = "Inspector rejected invalid PBR environment settings.";
+                    break;
+                }
+                rendererSettings_.pbrEnabled = environment.pbrEnabled;
+                rendererSettings_.iblEnabled = environment.iblEnabled;
+                rendererSettings_.skyboxEnabled = environment.skyboxEnabled;
+                rendererSettings_.shadowsEnabled = environment.shadowsEnabled;
+                rendererSettings_.shadowCascadeCount = environment.shadowCascadeCount;
+                rendererSettings_.shadowCascadeSplitLambda =
+                    environment.shadowCascadeSplitLambda;
+                rendererSettings_.coloredTransmissionShadowsEnabled =
+                    environment.coloredTransmissionShadowsEnabled;
+                rendererSettings_.environmentIntensity = environment.environmentIntensity;
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetShadingSettings: {
+                const auto& shading = command.shading;
+                const auto finiteColor = [](const EditorVector3Payload& value) {
+                    return std::isfinite(value.x) && std::isfinite(value.y)
+                        && std::isfinite(value.z);
+                };
+                // NaN fails every range comparison below, so explicit isfinite
+                // checks are only needed for the clamped color payloads.
+                const bool enumsValid = shading.shadingMode >= 0 && shading.shadingMode <= 1
+                    && shading.renderPath >= 0 && shading.renderPath <= 1
+                    && shading.gBufferDebugView >= 0 && shading.gBufferDebugView <= 5
+                    && shading.stylizedColorGradingLut >= 0 && shading.stylizedColorGradingLut <= 2
+                    && shading.stylizedDebugView >= 0 && shading.stylizedDebugView <= 6;
+                const bool rangesValid = shading.stylizedBandCount >= 2
+                    && shading.stylizedBandCount <= 8
+                    && shading.stylizedBandSoftness >= 0.0f
+                    && shading.stylizedBandSoftness <= 0.25f
+                    && shading.stylizedSpecularSize >= 0.02f
+                    && shading.stylizedSpecularSize <= 0.8f
+                    && shading.stylizedSpecularSoftness >= 0.0f
+                    && shading.stylizedSpecularSoftness <= 0.2f
+                    && shading.stylizedRimWidth >= 0.02f && shading.stylizedRimWidth <= 0.9f
+                    && shading.stylizedRimSoftness >= 0.0f && shading.stylizedRimSoftness <= 0.3f
+                    && shading.stylizedRimIntensity >= 0.0f && shading.stylizedRimIntensity <= 3.0f
+                    && shading.stylizedOutlineWidth >= 0.5f
+                    && shading.stylizedOutlineWidth <= 6.0f
+                    && shading.stylizedOutlineDepthThreshold >= 0.001f
+                    && shading.stylizedOutlineDepthThreshold <= 0.12f
+                    && shading.stylizedOutlineNormalThreshold >= 0.02f
+                    && shading.stylizedOutlineNormalThreshold <= 0.8f
+                    && shading.stylizedDitherStrength >= 0.0f
+                    && shading.stylizedDitherStrength <= 1.0f
+                    && shading.stylizedHeightFogDensity >= 0.0f
+                    && shading.stylizedHeightFogDensity <= 2.0f
+                    && shading.stylizedHeightFogBaseHeight >= -10.0f
+                    && shading.stylizedHeightFogBaseHeight <= 10.0f
+                    && shading.stylizedHeightFogFalloff >= 0.01f
+                    && shading.stylizedHeightFogFalloff <= 4.0f
+                    && shading.stylizedColorGradingStrength >= 0.0f
+                    && shading.stylizedColorGradingStrength <= 1.0f;
+                const bool colorsValid = finiteColor(shading.stylizedShadowTint)
+                    && finiteColor(shading.stylizedRimColor)
+                    && finiteColor(shading.stylizedOutlineColor)
+                    && finiteColor(shading.stylizedHeightFogColor);
+                if (!enumsValid || !rangesValid || !colorsValid) {
+                    statusMessage_ = "Inspector rejected invalid shading settings.";
+                    break;
+                }
+                rendererSettings_.shadingMode = static_cast<ShadingMode>(shading.shadingMode);
+                rendererSettings_.renderPath = static_cast<RenderPath>(shading.renderPath);
+                rendererSettings_.gBufferDebugView =
+                    static_cast<GBufferDebugView>(shading.gBufferDebugView);
+                rendererSettings_.stylizedBandCount = shading.stylizedBandCount;
+                rendererSettings_.stylizedBandSoftness = shading.stylizedBandSoftness;
+                rendererSettings_.stylizedSpecularSize = shading.stylizedSpecularSize;
+                rendererSettings_.stylizedSpecularSoftness = shading.stylizedSpecularSoftness;
+                rendererSettings_.stylizedRimWidth = shading.stylizedRimWidth;
+                rendererSettings_.stylizedRimSoftness = shading.stylizedRimSoftness;
+                rendererSettings_.stylizedRimIntensity = shading.stylizedRimIntensity;
+                rendererSettings_.stylizedShadowTint = glm::vec3(
+                    std::clamp(shading.stylizedShadowTint.x, 0.0f, 1.0f),
+                    std::clamp(shading.stylizedShadowTint.y, 0.0f, 1.0f),
+                    std::clamp(shading.stylizedShadowTint.z, 0.0f, 1.0f)
+                );
+                rendererSettings_.stylizedRimColor = glm::vec3(
+                    std::clamp(shading.stylizedRimColor.x, 0.0f, 1.0f),
+                    std::clamp(shading.stylizedRimColor.y, 0.0f, 1.0f),
+                    std::clamp(shading.stylizedRimColor.z, 0.0f, 1.0f)
+                );
+                rendererSettings_.stylizedOutlineEnabled = shading.stylizedOutlineEnabled;
+                rendererSettings_.stylizedOutlineWidth = shading.stylizedOutlineWidth;
+                rendererSettings_.stylizedOutlineDepthThreshold =
+                    shading.stylizedOutlineDepthThreshold;
+                rendererSettings_.stylizedOutlineNormalThreshold =
+                    shading.stylizedOutlineNormalThreshold;
+                rendererSettings_.stylizedOutlineColor = glm::vec3(
+                    std::clamp(shading.stylizedOutlineColor.x, 0.0f, 1.0f),
+                    std::clamp(shading.stylizedOutlineColor.y, 0.0f, 1.0f),
+                    std::clamp(shading.stylizedOutlineColor.z, 0.0f, 1.0f)
+                );
+                rendererSettings_.stylizedDitherEnabled = shading.stylizedDitherEnabled;
+                rendererSettings_.stylizedDitherStrength = shading.stylizedDitherStrength;
+                rendererSettings_.stylizedHeightFogEnabled = shading.stylizedHeightFogEnabled;
+                rendererSettings_.stylizedHeightFogDensity = shading.stylizedHeightFogDensity;
+                rendererSettings_.stylizedHeightFogBaseHeight =
+                    shading.stylizedHeightFogBaseHeight;
+                rendererSettings_.stylizedHeightFogFalloff = shading.stylizedHeightFogFalloff;
+                rendererSettings_.stylizedHeightFogColor = glm::vec3(
+                    std::clamp(shading.stylizedHeightFogColor.x, 0.0f, 1.0f),
+                    std::clamp(shading.stylizedHeightFogColor.y, 0.0f, 1.0f),
+                    std::clamp(shading.stylizedHeightFogColor.z, 0.0f, 1.0f)
+                );
+                rendererSettings_.stylizedColorGradingEnabled =
+                    shading.stylizedColorGradingEnabled;
+                rendererSettings_.stylizedColorGradingLut =
+                    static_cast<StylizedColorGradingLut>(shading.stylizedColorGradingLut);
+                rendererSettings_.stylizedColorGradingStrength =
+                    shading.stylizedColorGradingStrength;
+                rendererSettings_.stylizedDebugView =
+                    static_cast<StylizedDebugView>(shading.stylizedDebugView);
+                // Raster-only domain: the reference integrator keeps the physical
+                // material and light semantics, so only temporal history drops.
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetPostProcessingSettings: {
+                const auto& post = command.postProcessing;
+                const bool valid = post.temporalDebugView >= 0 && post.temporalDebugView <= 2
+                    && post.ssaoRadius >= 0.05f && post.ssaoRadius <= 2.0f
+                    && post.ssaoBias >= 0.0f && post.ssaoBias <= 0.15f
+                    && post.ssaoStrength >= 0.1f && post.ssaoStrength <= 3.0f
+                    && post.temporalHistoryWeight >= 0.0f
+                    && post.temporalHistoryWeight <= 0.98f
+                    && post.bloomThreshold >= 0.1f && post.bloomThreshold <= 4.0f
+                    && post.bloomIntensity >= 0.0f && post.bloomIntensity <= 1.0f
+                    && post.exposure >= 0.1f && post.exposure <= 4.0f;
+                if (!valid) {
+                    statusMessage_ = "Inspector rejected invalid post-processing settings.";
+                    break;
+                }
+                // SSAO and TAA change the resolved HDR scene that history
+                // reprojection reuses. Exposure, tone mapping and bloom are
+                // applied after history resolution and must not reset it.
+                const bool affectsHistory = post.ssaoEnabled != rendererSettings_.ssaoEnabled
+                    || post.ssaoRadius != rendererSettings_.ssaoRadius
+                    || post.ssaoBias != rendererSettings_.ssaoBias
+                    || post.ssaoStrength != rendererSettings_.ssaoStrength
+                    || post.temporalAaEnabled != rendererSettings_.temporalAaEnabled
+                    || post.temporalHistoryWeight != rendererSettings_.temporalHistoryWeight;
+                rendererSettings_.ssaoEnabled = post.ssaoEnabled;
+                rendererSettings_.ssaoRadius = post.ssaoRadius;
+                rendererSettings_.ssaoBias = post.ssaoBias;
+                rendererSettings_.ssaoStrength = post.ssaoStrength;
+                rendererSettings_.temporalAaEnabled = post.temporalAaEnabled;
+                rendererSettings_.temporalHistoryWeight = post.temporalHistoryWeight;
+                rendererSettings_.temporalDebugView = post.temporalDebugView;
+                rendererSettings_.toneMapping = post.toneMapping;
+                rendererSettings_.bloom = post.bloom;
+                rendererSettings_.bloomThreshold = post.bloomThreshold;
+                rendererSettings_.bloomIntensity = post.bloomIntensity;
+                rendererSettings_.exposure = post.exposure;
+                if (affectsHistory && renderer_ != nullptr) {
+                    renderer_->invalidateTemporalHistory();
+                }
+                break;
+            }
+            case EditorCommandType::SetRasterizationSettings: {
+                const auto& raster = command.rasterization;
+                const bool valid = (raster.msaaSamples == 1 || raster.msaaSamples == 4)
+                    && std::isfinite(raster.backgroundColor.x)
+                    && std::isfinite(raster.backgroundColor.y)
+                    && std::isfinite(raster.backgroundColor.z);
+                if (!valid) {
+                    statusMessage_ = "Inspector rejected invalid rasterization settings.";
+                    break;
+                }
+                rendererSettings_.wireframe = raster.wireframe;
+                rendererSettings_.cullBackFaces = raster.cullBackFaces;
+                rendererSettings_.normalMapping = raster.normalMapping;
+                rendererSettings_.showGrid = raster.showGrid;
+                rendererSettings_.showAxes = raster.showAxes;
+                rendererSettings_.backgroundColor = glm::vec3(
+                    std::clamp(raster.backgroundColor.x, 0.0f, 1.0f),
+                    std::clamp(raster.backgroundColor.y, 0.0f, 1.0f),
+                    std::clamp(raster.backgroundColor.z, 0.0f, 1.0f)
+                );
+                rendererSettings_.msaaSamples = raster.msaaSamples;
+                // Wireframe, culling, normal mapping, debug overlays, clear color
+                // and MSAA all change what is written into the HDR scene.
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetCameraSettings: {
+                const auto& settings = command.camera;
+                if (!std::isfinite(settings.fieldOfViewDegrees)
+                    || settings.fieldOfViewDegrees < 15.0f
+                    || settings.fieldOfViewDegrees > 90.0f) {
+                    statusMessage_ = "Inspector rejected invalid Camera settings.";
+                    break;
+                }
+                camera_.setFieldOfView(settings.fieldOfViewDegrees);
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetRuntimeSettings: {
+                const auto& settings = command.runtime;
+                applyVsync(settings.vsync);
+                rendererSettings_.shaderHotReloadEnabled = settings.shaderHotReloadEnabled;
+                break;
+            }
+            case EditorCommandType::SetGlassSettings: {
+                const auto& glass = command.glass;
+                const bool valid = glass.refractionScale >= 0.0f
+                    && glass.refractionScale <= 0.8f
+                    && glass.refractionSteps >= 4 && glass.refractionSteps <= 32
+                    && glass.volumeThicknessScale >= 0.0f
+                    && glass.volumeThicknessScale <= 4.0f
+                    && glass.volumeGlassTransmission >= 0.0f
+                    && glass.volumeGlassTransmission <= 1.0f
+                    && glass.volumeGlassRoughness >= 0.04f
+                    && glass.volumeGlassRoughness <= 1.0f
+                    && glass.volumeGlassAttenuationDistance >= 0.05f
+                    && glass.volumeGlassAttenuationDistance <= 8.0f
+                    && glass.dispersionStrength >= 0.0f && glass.dispersionStrength <= 2.5f
+                    && glass.glassDebugView >= 0 && glass.glassDebugView <= 12
+                    && std::isfinite(glass.volumeGlassAttenuationColor.x)
+                    && std::isfinite(glass.volumeGlassAttenuationColor.y)
+                    && std::isfinite(glass.volumeGlassAttenuationColor.z);
+                if (!valid) {
+                    statusMessage_ = "Inspector rejected invalid Glass settings.";
+                    break;
+                }
+                rendererSettings_.transmissionEnabled = glass.transmissionEnabled;
+                rendererSettings_.dispersionEnabled = glass.dispersionEnabled;
+                rendererSettings_.geometricThicknessEnabled = glass.geometricThicknessEnabled;
+                rendererSettings_.twoInterfaceRefractionEnabled =
+                    glass.twoInterfaceRefractionEnabled;
+                rendererSettings_.refractionScale = glass.refractionScale;
+                rendererSettings_.refractionSteps = glass.refractionSteps;
+                rendererSettings_.volumeThicknessScale = glass.volumeThicknessScale;
+                rendererSettings_.volumeGlassOverrideEnabled =
+                    glass.volumeGlassOverrideEnabled;
+                rendererSettings_.volumeGlassTransmission = glass.volumeGlassTransmission;
+                rendererSettings_.volumeGlassRoughness = glass.volumeGlassRoughness;
+                rendererSettings_.volumeGlassAttenuationColor = glm::vec3(
+                    std::clamp(glass.volumeGlassAttenuationColor.x, 0.0f, 1.0f),
+                    std::clamp(glass.volumeGlassAttenuationColor.y, 0.0f, 1.0f),
+                    std::clamp(glass.volumeGlassAttenuationColor.z, 0.0f, 1.0f)
+                );
+                rendererSettings_.volumeGlassAttenuationDistance =
+                    glass.volumeGlassAttenuationDistance;
+                rendererSettings_.dispersionStrength = glass.dispersionStrength;
+                rendererSettings_.glassDebugView =
+                    static_cast<GlassDebugView>(glass.glassDebugView);
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetCausticsSettings: {
+                const auto& caustics = command.caustics;
+                const bool valid = caustics.causticsMode >= 0 && caustics.causticsMode <= 1
+                    && caustics.causticsStrength >= 0.0f && caustics.causticsStrength <= 8.0f
+                    && caustics.causticsScale >= 0.1f && caustics.causticsScale <= 3.0f
+                    && caustics.causticsSharpness >= 0.0f && caustics.causticsSharpness <= 1.0f
+                    && std::isfinite(caustics.causticsDirection.x)
+                    && std::isfinite(caustics.causticsDirection.y)
+                    && std::isfinite(caustics.causticsDirection.z);
+                if (!valid) {
+                    statusMessage_ = "Inspector rejected invalid caustics settings.";
+                    break;
+                }
+                rendererSettings_.causticsEnabled = caustics.causticsEnabled;
+                rendererSettings_.causticsMode = static_cast<CausticsMode>(caustics.causticsMode);
+                rendererSettings_.causticsStrength = caustics.causticsStrength;
+                rendererSettings_.causticsScale = caustics.causticsScale;
+                rendererSettings_.causticsDirection = glm::vec3(
+                    std::clamp(caustics.causticsDirection.x, -1.5f, 1.5f),
+                    std::clamp(caustics.causticsDirection.y, -1.5f, 1.5f),
+                    std::clamp(caustics.causticsDirection.z, -1.5f, 1.5f)
+                );
+                rendererSettings_.causticsSharpness = caustics.causticsSharpness;
+                rendererSettings_.causticsAnimated = caustics.causticsAnimated;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetInstanceSettings: {
+                const auto& instance = command.instance;
+                // Culling and LOD stay dormant while batching is off, exactly like the
+                // disabled control group in the Inspector, so the payload is applied
+                // as submitted instead of being rejected.
+                rendererSettings_.instanceOptimizationEnabled =
+                    instance.instanceOptimizationEnabled;
+                rendererSettings_.frustumCullingEnabled = instance.frustumCullingEnabled;
+                rendererSettings_.lodSelectionEnabled = instance.lodSelectionEnabled;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetAtmosphereSettings: {
+                const auto& atmosphere = command.atmosphere;
+                // The sun is the one input the sky, the light and the shadows share, so an
+                // out-of-range value here would desynchronise all three. The entry point
+                // rejects instead of clamping: the Inspector already bounds every control.
+                const bool valid = std::isfinite(atmosphere.sunElevationDegrees)
+                    && atmosphere.sunElevationDegrees >= -10.0f
+                    && atmosphere.sunElevationDegrees <= 90.0f
+                    && std::isfinite(atmosphere.sunAzimuthDegrees)
+                    && atmosphere.sunAzimuthDegrees >= 0.0f
+                    && atmosphere.sunAzimuthDegrees <= 360.0f
+                    && std::isfinite(atmosphere.turbidity)
+                    && atmosphere.turbidity >= 0.0f && atmosphere.turbidity <= 10.0f
+                    && std::isfinite(atmosphere.skyIntensity)
+                    && atmosphere.skyIntensity >= 0.0f && atmosphere.skyIntensity <= 20.0f
+                    && std::isfinite(atmosphere.sunIntensity)
+                    && atmosphere.sunIntensity >= 0.0f && atmosphere.sunIntensity <= 8.0f
+                    && std::isfinite(atmosphere.groundAlbedo)
+                    && atmosphere.groundAlbedo >= 0.0f && atmosphere.groundAlbedo <= 1.0f
+                    && std::isfinite(atmosphere.aerialPerspectiveStrength)
+                    && atmosphere.aerialPerspectiveStrength >= 0.0f
+                    && atmosphere.aerialPerspectiveStrength <= 4.0f
+                    && std::isfinite(atmosphere.aerialPerspectiveScaleHeight)
+                    && atmosphere.aerialPerspectiveScaleHeight >= 0.01f
+                    && atmosphere.aerialPerspectiveScaleHeight <= 20000.0f;
+                if (!valid) {
+                    statusMessage_ = "Inspector rejected invalid atmosphere settings.";
+                    break;
+                }
+                rendererSettings_.atmosphere.enabled = atmosphere.enabled;
+                rendererSettings_.atmosphere.sunElevationDegrees =
+                    atmosphere.sunElevationDegrees;
+                rendererSettings_.atmosphere.sunAzimuthDegrees =
+                    atmosphere.sunAzimuthDegrees;
+                rendererSettings_.atmosphere.turbidity = atmosphere.turbidity;
+                rendererSettings_.atmosphere.skyIntensity = atmosphere.skyIntensity;
+                rendererSettings_.atmosphere.sunIntensity = atmosphere.sunIntensity;
+                rendererSettings_.atmosphere.groundAlbedo = atmosphere.groundAlbedo;
+                rendererSettings_.atmosphere.aerialPerspectiveEnabled =
+                    atmosphere.aerialPerspectiveEnabled;
+                rendererSettings_.atmosphere.aerialPerspectiveStrength =
+                    atmosphere.aerialPerspectiveStrength;
+                rendererSettings_.atmosphere.aerialPerspectiveScaleHeight =
+                    atmosphere.aerialPerspectiveScaleHeight;
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::FrameCamera: {
+                const auto target = static_cast<EditorCameraFrameTarget>(command.value);
+                if (command.value
+                    > static_cast<std::uint64_t>(EditorCameraFrameTarget::Model)) {
+                    statusMessage_ = "Inspector rejected an unknown camera frame target.";
+                    break;
+                }
+                switch (target) {
+                    case EditorCameraFrameTarget::Default:
+                        camera_.reset();
+                        break;
+                    case EditorCameraFrameTarget::Selection: {
+                        const SceneEntity* selected = scene_.find(selectedSceneEntity_);
+                        camera_.reset(selected != nullptr
+                            ? glm::vec3(selected->worldTransform[3])
+                            : modelPosition_);
+                        break;
+                    }
+                    case EditorCameraFrameTarget::Model:
+                        camera_.reset(modelPosition_);
+                        break;
+                }
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetActiveModule: {
+                if (command.text == activeModuleId_) break;
+                activeModuleId_ = command.text;
+                moduleParameterOverrides_.clear();
+                moduleRuntime_.clear();
+                ++moduleInputRevision_;
+                if (activeModuleId_.empty()) {
+                    moduleMessage_ = "No module is active.";
+                    statusMessage_ = "Module preview disabled.";
+                } else if (moduleRegistry_.contains(activeModuleId_)) {
+                    moduleMessage_ = "Module '" + activeModuleId_ + "' selected.";
+                    statusMessage_ = moduleMessage_;
+                } else {
+                    moduleMessage_ = "Unknown module id: " + activeModuleId_;
+                    statusMessage_ = moduleMessage_;
+                }
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetModuleParameter: {
+                const auto& payload = command.moduleParameter;
+                if (payload.type < 0
+                    || payload.type > static_cast<int>(ModuleParameterType::Asset)) {
+                    statusMessage_ = "Inspector rejected an unknown module parameter type.";
+                    break;
+                }
+                ModuleParameterValue value;
+                value.type = static_cast<ModuleParameterType>(payload.type);
+                value.boolean = payload.boolean;
+                value.integer = payload.integer;
+                value.number = payload.number;
+                value.color = glm::vec3(
+                    command.color.x, command.color.y, command.color.z
+                );
+                value.text = payload.text;
+                // Replace the existing override for this parameter, or append it. Only
+                // overrides are stored, so a parameter left at its default stays out of
+                // the persisted set.
+                bool replaced = false;
+                for (ModuleParameterOverride& entry : moduleParameterOverrides_) {
+                    if (entry.id != command.text) continue;
+                    entry.value = value;
+                    replaced = true;
+                    break;
+                }
+                if (!replaced) {
+                    moduleParameterOverrides_.push_back(
+                        ModuleParameterOverride{command.text, value}
+                    );
+                }
+                ++moduleInputRevision_;
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetModuleSeed: {
+                const std::uint32_t seed = command.value > 0xFFFFFFFFULL
+                    ? 0U
+                    : static_cast<std::uint32_t>(command.value);
+                if (seed == moduleSeed_) break;
+                moduleSeed_ = seed;
+                ++moduleInputRevision_;
+                statusMessage_ = "Module seed set to " + std::to_string(moduleSeed_) + ".";
+                cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::DuplicateEntity:
+                selectEntity(scene_.duplicateEntity(static_cast<SceneEntityId>(command.entity)));
+                break;
+            case EditorCommandType::DeleteEntity:
+                if (selectedSceneEntity_ == static_cast<SceneEntityId>(command.entity)) deleteSelectedEntity();
+                break;
+            case EditorCommandType::SetEntityVisibility:
+                if (SceneEntity* entity = scene_.find(static_cast<SceneEntityId>(command.entity))) {
+                    entity->visible = command.flag;
+                    editedEntities_.insert(entity->id);
+                    cpuPreviewRestartRequested_ = true;
+                    if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                }
+                break;
+            case EditorCommandType::SetEntityParent:
+                scene_.setParent(static_cast<SceneEntityId>(command.entity),
+                                 static_cast<SceneEntityId>(command.value));
+                break;
+        }
+    }
+}
+
+void Application::submitRenderJob(const std::filesystem::path& path) {
+    std::filesystem::path resolvedPath = path;
+    if (resolvedPath.is_relative()) resolvedPath = sourceRoot_ / resolvedPath;
+    std::uint64_t id = 0U;
+    std::string error;
+    if (!renderQueue_->enqueue(resolvedPath, id, error)) {
+        renderQueueMessage_ = "Render Job rejected: " + error;
+        statusMessage_ = renderQueueMessage_;
+        editorSession_.setTaskStatus("Failed");
+        return;
+    }
+    renderQueueMessage_ = "Render Job #" + std::to_string(id) + " added to Pending.";
+    statusMessage_ = renderQueueMessage_;
+    editorSession_.setTaskStatus("Pending");
+    editorSession_.requestActivity(EditorActivity::Render);
+}
+
+void Application::updateRenderQueue() {
+    renderQueue_->update();
+    const auto queueEntries = renderQueue_->entries();
+    if (queueEntries.empty()) {
+        editorSession_.setTaskStatus("Idle");
+        return;
+    }
+    const auto active = std::find_if(queueEntries.begin(), queueEntries.end(), [](const auto& entry) {
+        return entry.status == RenderQueueStatus::Running
+            || entry.status == RenderQueueStatus::Cancelling;
+    });
+    if (active != queueEntries.end()) {
+        editorSession_.setTaskStatus(renderQueueStatusName(active->status));
+        return;
+    }
+    const auto pending = std::find_if(queueEntries.begin(), queueEntries.end(), [](const auto& entry) {
+        return entry.status == RenderQueueStatus::Pending;
+    });
+    editorSession_.setTaskStatus(pending != queueEntries.end()
+        ? "Pending"
+        : renderQueueStatusName(queueEntries.back().status));
+}
+
+void Application::cancelRenderJob() {
+    std::string error;
+    if (!renderQueue_->cancelActive(error)) {
+        renderQueueMessage_ = error;
+        statusMessage_ = renderQueueMessage_;
+        return;
+    }
+    renderQueueMessage_ = "Cancellation requested for the active Render Job.";
+    statusMessage_ = renderQueueMessage_;
+    editorSession_.setTaskStatus("Cancelling");
+}
 
 void Application::drawScenePanel() {
     ImGui::SetNextWindowSizeConstraints(
         EditorUi::minimumDockedPanelSize,
         ImVec2(FLT_MAX, FLT_MAX)
     );
-    if (!ImGui::Begin(EditorUi::label("Hierarchy###Hierarchy"))) {
+    if (!ImGui::Begin(EditorUi::label("Scene Explorer###Hierarchy"))) {
         ImGui::End();
         return;
     }
@@ -60,7 +933,10 @@ void Application::drawScenePanel() {
             bool visible = entity.visible;
             const std::string visibilityId = "##Visible_" + std::to_string(entity.id);
             if (EditorUi::Checkbox(visibilityId.c_str(), &visible)) {
-                if (SceneEntity* editable = scene_.find(entity.id)) editable->visible = visible;
+                editorSession_.request(EditorCommand{
+                    EditorCommandType::SetEntityVisibility,
+                    static_cast<std::uint64_t>(entity.id), 0U, visible
+                });
             }
             ImGui::SameLine();
             const bool selected = selectedSceneEntity_ == entity.id;
@@ -73,23 +949,39 @@ void Application::drawScenePanel() {
         }
         ImGui::BeginDisabled(selectedSceneEntity_ == invalidSceneEntityId);
         if (ImGui::Button(EditorUi::label("Duplicate selected"))) {
-            selectEntity(scene_.duplicateEntity(selectedSceneEntity_));
+            editorSession_.request(EditorCommand{
+                EditorCommandType::DuplicateEntity,
+                static_cast<std::uint64_t>(selectedSceneEntity_)
+            });
         }
         ImGui::SameLine();
-        if (ImGui::Button(EditorUi::label("Delete"))) deleteSelectedEntity();
+        if (ImGui::Button(EditorUi::label("Delete"))) {
+            editorSession_.request(EditorCommand{
+                EditorCommandType::DeleteEntity,
+                static_cast<std::uint64_t>(selectedSceneEntity_)
+            });
+        }
         ImGui::EndDisabled();
         if (SceneEntity* selected = scene_.find(selectedSceneEntity_)) {
             const char* parentName = "None";
             if (const SceneEntity* parent = scene_.find(selected->parent)) parentName = parent->name.c_str();
             if (ImGui::BeginCombo(EditorUi::label("Parent"), parentName)) {
                 if (ImGui::Selectable(EditorUi::label("None"), selected->parent == invalidSceneEntityId)) {
-                    scene_.setParent(selected->id, invalidSceneEntityId);
+                    editorSession_.request(EditorCommand{
+                        EditorCommandType::SetEntityParent,
+                        static_cast<std::uint64_t>(selected->id),
+                        static_cast<std::uint64_t>(invalidSceneEntityId)
+                    });
                 }
                 for (const SceneEntity& candidate : scene_.entities()) {
                     if (candidate.id == selected->id) continue;
                     const bool isParent = candidate.id == selected->parent;
                     if (ImGui::Selectable(candidate.name.c_str(), isParent)) {
-                        scene_.setParent(selected->id, candidate.id);
+                        editorSession_.request(EditorCommand{
+                            EditorCommandType::SetEntityParent,
+                            static_cast<std::uint64_t>(selected->id),
+                            static_cast<std::uint64_t>(candidate.id)
+                        });
                     }
                 }
                 ImGui::EndCombo();
@@ -123,8 +1015,306 @@ void Application::drawScenePanel() {
     }
 
     if (ImGui::IsWindowFocused() && !ImGui::GetIO().WantTextInput
-        && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) deleteSelectedEntity();
+        && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+        editorSession_.request(EditorCommand{
+            EditorCommandType::DeleteEntity,
+            static_cast<std::uint64_t>(selectedSceneEntity_)
+        });
+    }
     ImGui::End();
+}
+
+void Application::drawLogProfilePanel() {
+    ImGui::TextWrapped("%s", statusMessage_.c_str());
+    if (pendingModelImport_.has_value()) {
+        const double elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - pendingModelImport_->startedAt).count();
+        const float activity = static_cast<float>(std::fmod(elapsed * 0.35, 1.0));
+        ImGui::ProgressBar(activity, ImVec2(-1.0f, 0.0f), "Importing on CPU...");
+    }
+    ImGui::Separator();
+
+    if (EditorUi::section("Render tasks", true)) {
+        const std::vector<RenderQueueEntrySnapshot> entries = renderQueue_->entries();
+        if (entries.empty()) {
+            ImGui::TextDisabled("No Render Job has been submitted.");
+        }
+        for (const RenderQueueEntrySnapshot& entry : entries) {
+            ImGui::PushID(static_cast<int>(entry.id));
+            ImGui::Text(
+                "#%llu %s | %s",
+                static_cast<unsigned long long>(entry.id),
+                renderQueueStatusName(entry.status),
+                entry.jobPath.filename().string().c_str()
+            );
+            ImGui::TextDisabled(
+                "frames %d..%d @ %d FPS | complete %d skipped %d failed %d | outputs %zu",
+                entry.startFrame,
+                entry.endFrame,
+                entry.framesPerSecond,
+                entry.completedFrames,
+                entry.skippedFrames,
+                entry.failedFrames,
+                entry.outputCount
+            );
+            if (!entry.message.empty()) {
+                ImGui::TextWrapped("%s", entry.message.c_str());
+            }
+            ImGui::PopID();
+        }
+    }
+
+    if (EditorUi::section("Runtime profile", true)) {
+        ImGui::Text("CPU frame: %.2f ms", cpuFrameTimeMilliseconds_);
+        if (renderer_->hasGpuFrameTime()) {
+            ImGui::Text("GPU frame: %.3f ms", renderer_->gpuFrameTimeMilliseconds());
+        } else {
+            ImGui::TextDisabled("GPU frame: collecting...");
+        }
+        ImGui::Text(
+            "Draw calls: %zu | triangles: %zu | active passes: %zu",
+            renderer_->drawCallCount(),
+            loadedTriangleCount_,
+            renderer_->activePassNames().size()
+        );
+        ImGui::Text(
+            "RenderTarget estimate: %.1f MiB | opaque traffic: %.1f MiB/frame",
+            static_cast<double>(renderer_->estimatedRenderMemoryBytes()) / (1024.0 * 1024.0),
+            static_cast<double>(renderer_->estimatedOpaqueTrafficBytesPerFrame()) / (1024.0 * 1024.0)
+        );
+        if (lastLoadTotalMilliseconds_ > 0.0) {
+            ImGui::TextDisabled(
+                "Last load: %.1f ms CPU + %.1f ms GPU = %.1f ms",
+                lastCpuImportMilliseconds_,
+                lastGpuUploadMilliseconds_,
+                lastLoadTotalMilliseconds_
+            );
+        }
+        if (!renderer_->activePassNames().empty() && ImGui::TreeNode("GPU passes")) {
+            for (std::size_t passIndex = 0;
+                 passIndex < renderer_->activePassNames().size();
+                 ++passIndex) {
+                const std::string& passName = renderer_->activePassNames()[passIndex];
+                const auto timing = std::find_if(
+                    renderer_->gpuPassTimings().begin(),
+                    renderer_->gpuPassTimings().end(),
+                    [&](const GpuPassTiming& candidate) { return candidate.name == passName; }
+                );
+                if (timing != renderer_->gpuPassTimings().end()) {
+                    ImGui::BulletText("%s: %.3f ms", passName.c_str(), timing->milliseconds);
+                } else {
+                    ImGui::BulletText("%s: collecting...", passName.c_str());
+                }
+            }
+            ImGui::TreePop();
+        }
+    }
+
+    if (modulePreviewEnabled() && moduleRuntime_.active()
+        && EditorUi::section("Module log", true)) {
+        const std::vector<ModuleLogEntry>& entries = moduleRuntime_.logEntries();
+        if (entries.empty()) {
+            ImGui::TextDisabled("No module output for %s.", activeModuleId_.c_str());
+        }
+        for (const ModuleLogEntry& entry : entries) {
+            ImGui::TextDisabled(
+                "[%s] frame %d: %s",
+                moduleLogSeverityName(entry.severity),
+                entry.frame,
+                entry.message.c_str()
+            );
+        }
+    }
+
+    drawDiagnostics();
+}
+
+void Application::drawModulePanel() {
+    ImGui::TextWrapped(
+        "A C++ module drives a discardable runtime scene for the current frame; the "
+        "unsaved edit scene is never written by a module."
+    );
+    ImGui::Separator();
+
+    const std::vector<ModuleManifest> manifests = moduleRegistry_.manifests();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::BeginCombo(
+            "##ActiveModule",
+            activeModuleId_.empty() ? "None" : activeModuleId_.c_str()
+        )) {
+        if (ImGui::Selectable("None", activeModuleId_.empty())) {
+            EditorCommand command{EditorCommandType::SetActiveModule};
+            editorSession_.request(std::move(command));
+        }
+        for (const ModuleManifest& manifest : manifests) {
+            const bool selected = manifest.id == activeModuleId_;
+            if (ImGui::Selectable(manifest.displayName.c_str(), selected)) {
+                EditorCommand command{EditorCommandType::SetActiveModule};
+                command.text = manifest.id;
+                editorSession_.request(std::move(command));
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                ImGui::SetTooltip("%s | %s | %s", manifest.id.c_str(),
+                                  manifest.cmakeTarget.c_str(), manifest.sourceRoot.c_str());
+            }
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    EditorUi::tooltip("Active module");
+
+    if (const ModuleManifest* manifest = moduleRegistry_.find(activeModuleId_)) {
+        ImGui::TextDisabled(
+            "%s | API %d | %s",
+            moduleKindName(manifest->kind),
+            manifest->apiVersion,
+            manifest->buildId.c_str()
+        );
+        ImGui::TextDisabled("%s @ %s", manifest->cmakeTarget.c_str(), manifest->sourceRoot.c_str());
+    }
+
+    int seed = static_cast<int>(moduleSeed_);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::InputInt("##ModuleSeed", &seed)) {
+        EditorCommand command{EditorCommandType::SetModuleSeed};
+        command.value = static_cast<std::uint64_t>(std::max(seed, 0));
+        editorSession_.request(std::move(command));
+    }
+    EditorUi::tooltip("Module seed");
+
+    ImGui::TextWrapped("%s", moduleMessage_.c_str());
+    if (!modulePreviewEnabled()) {
+        ImGui::TextDisabled(
+            "Select a module to preview it here; the Viewport, the CPU path traced "
+            "preview and the frame report then all use the same run."
+        );
+        return;
+    }
+
+    const ModuleRunReport& report = moduleRuntime_.report();
+    if (moduleRuntime_.active()) {
+        ImGui::TextDisabled(
+            "frame %d / %d | input %llu | content %llu",
+            report.lastFrame,
+            report.endFrame,
+            static_cast<unsigned long long>(report.inputContentHash),
+            static_cast<unsigned long long>(report.contentHash)
+        );
+
+        const auto requestParameter = [&](const ModuleParameterDescriptor& descriptor,
+                                          const ModuleParameterValue& value) {
+            EditorCommand command{EditorCommandType::SetModuleParameter};
+            command.text = descriptor.id;
+            command.moduleParameter.type = static_cast<int>(value.type);
+            command.moduleParameter.boolean = value.boolean;
+            command.moduleParameter.integer = value.integer;
+            command.moduleParameter.number = value.number;
+            command.moduleParameter.text = value.text;
+            command.color = {value.color.x, value.color.y, value.color.z};
+            editorSession_.request(std::move(command));
+        };
+
+        if (EditorUi::section("Module parameters", true)) {
+            for (const ModuleParameterDescriptor& descriptor
+                     : moduleRuntime_.parameters().descriptors()) {
+                const ModuleParameterValue* current =
+                    moduleRuntime_.parameters().value(descriptor.id);
+                if (current == nullptr) continue;
+                const char* label = descriptor.displayName.c_str();
+                switch (descriptor.type) {
+                    case ModuleParameterType::Bool: {
+                        bool value = current->boolean;
+                        if (EditorUi::Checkbox(label, &value)) {
+                            ModuleParameterValue next = *current;
+                            next.boolean = value;
+                            requestParameter(descriptor, next);
+                        }
+                        break;
+                    }
+                    case ModuleParameterType::Int: {
+                        int value = current->integer;
+                        if (EditorUi::SliderInt(
+                                label, &value,
+                                static_cast<int>(descriptor.minimum),
+                                static_cast<int>(descriptor.maximum)
+                            )) {
+                            ModuleParameterValue next = *current;
+                            next.integer = value;
+                            requestParameter(descriptor, next);
+                        }
+                        break;
+                    }
+                    case ModuleParameterType::Float: {
+                        float value = current->number;
+                        if (EditorUi::SliderFloat(
+                                label, &value,
+                                static_cast<float>(descriptor.minimum),
+                                static_cast<float>(descriptor.maximum),
+                                "%.3f"
+                            )) {
+                            ModuleParameterValue next = *current;
+                            next.number = value;
+                            requestParameter(descriptor, next);
+                        }
+                        break;
+                    }
+                    case ModuleParameterType::Color: {
+                        glm::vec3 value = current->color;
+                        if (EditorUi::ColorEdit3(label, &value.x)) {
+                            ModuleParameterValue next = *current;
+                            next.color = value;
+                            requestParameter(descriptor, next);
+                        }
+                        break;
+                    }
+                    case ModuleParameterType::Enum: {
+                        std::vector<const char*> labels;
+                        labels.reserve(descriptor.enumLabels.size());
+                        for (const std::string& entry : descriptor.enumLabels) {
+                            labels.push_back(entry.c_str());
+                        }
+                        if (labels.empty()) break;
+                        int value = std::clamp(
+                            current->integer, 0, static_cast<int>(labels.size()) - 1
+                        );
+                        if (EditorUi::Combo(label, &value, labels.data(), static_cast<int>(labels.size()))) {
+                            ModuleParameterValue next = *current;
+                            next.integer = value;
+                            next.text = descriptor.enumLabels[static_cast<std::size_t>(value)];
+                            requestParameter(descriptor, next);
+                        }
+                        break;
+                    }
+                    case ModuleParameterType::Asset: {
+                        // Asset picking needs the native file dialog slice; showing the
+                        // stored path keeps the panel honest in the meantime.
+                        EditorUi::propertyRow(label, [&](const char*) {
+                            ImGui::TextDisabled(
+                                "%s", current->text.empty() ? "(unset)" : current->text.c_str()
+                            );
+                            return false;
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (EditorUi::section("Module log")) {
+            const std::vector<ModuleLogEntry>& entries = moduleRuntime_.logEntries();
+            if (entries.empty()) {
+                ImGui::TextDisabled("No module output.");
+            }
+            for (const ModuleLogEntry& entry : entries) {
+                ImGui::TextDisabled(
+                    "[%s] frame %d: %s",
+                    moduleLogSeverityName(entry.severity),
+                    entry.frame,
+                    entry.message.c_str()
+                );
+            }
+        }
+    }
 }
 
 void Application::drawAssetsPanel() {
@@ -132,66 +1322,417 @@ void Application::drawAssetsPanel() {
         EditorUi::minimumDockedPanelSize,
         ImVec2(FLT_MAX, FLT_MAX)
     );
-    if (!ImGui::Begin(EditorUi::label("Content Browser###Assets"))) {
+    if (!ImGui::Begin(EditorUi::label("Workspace###Workspace"))) {
         ImGui::End();
         return;
     }
-    ImGui::Spacing();
-    ImGui::SeparatorText(EditorUi::label("Model assets"));
-    for (const auto& path : availableModels_) {
-        const bool selected = !currentModelPath_.empty() && path.filename() == currentModelPath_.filename();
-        const std::string assetLabel = path.filename().string() + "##Asset_" + path.string();
-        if (ImGui::Selectable(assetLabel.c_str(), selected)) {
-            loadModel(path, true);
-        }
-    }
-    if (availableModels_.empty()) {
-        ImGui::TextDisabled("No supported model files found");
-    }
-    if (unsupportedModelCount_ > 0) {
-        ImGui::Spacing();
-        ImGui::TextDisabled("%zu model(s) await a format importer", unsupportedModelCount_);
-    }
+    if (ImGui::BeginTabBar("WorkspaceTabs")) {
+        const ImGuiTabItemFlags assetsTabFlags = focusAssetsTab_
+            ? ImGuiTabItemFlags_SetSelected
+            : ImGuiTabItemFlags_None;
+        if (ImGui::BeginTabItem("Assets", nullptr, assetsTabFlags)) {
+            focusAssetsTab_ = false;
+            const auto queueAssetAction = [&](const WorkspaceAssetRecord& asset) {
+                EditorCommand command;
+                switch (asset.category) {
+                    case WorkspaceAssetCategory::Scenes:
+                        command.type = EditorCommandType::OpenSceneAsset;
+                        break;
+                    case WorkspaceAssetCategory::Models:
+                        command.type = EditorCommandType::ImportModelAsset;
+                        break;
+                    case WorkspaceAssetCategory::RenderJobs:
+                        command.type = EditorCommandType::SelectRenderJobAsset;
+                        break;
+                    default:
+                        return;
+                }
+                command.text = asset.path.u8string();
+                editorSession_.request(std::move(command));
+            };
+            const auto hasAssetAction = [](WorkspaceAssetCategory category) {
+                return category == WorkspaceAssetCategory::Scenes
+                    || category == WorkspaceAssetCategory::Models
+                    || category == WorkspaceAssetCategory::RenderJobs;
+            };
 
-    ImGui::Spacing();
-    ImGui::SeparatorText(EditorUi::label("Open path"));
-    ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputText("##ModelPath", modelPathBuffer_.data(), modelPathBuffer_.size());
-    const bool loadInProgress = pendingModelImport_.has_value();
-    ImGui::BeginDisabled(loadInProgress);
-    if (ImGui::Button(EditorUi::label("Browse..."), ImVec2(-1.0f, 0.0f))) {
-        std::string dialogError;
-        const auto selected = openModelFileDialog(dialogError);
-        if (selected.has_value()) {
-            const std::string selectedPath = selected->string();
-            std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(), "%s", selectedPath.c_str());
-            loadModel(*selected, true);
-        } else if (!dialogError.empty()) {
-            statusMessage_ = "Open failed: " + dialogError;
-        }
-    }
-    if (ImGui::Button(EditorUi::label("Load entered path"), ImVec2(-1.0f, 0.0f))) {
-        loadModel(std::filesystem::u8path(modelPathBuffer_.data()), true);
-    }
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("You can also drop OBJ, DAE, glTF or GLB files onto the window.");
+            ImGui::SetNextItemWidth(std::min(300.0f, ImGui::GetContentRegionAvail().x * 0.45f));
+            ImGui::InputTextWithHint("##ContentSearch", "Search assets...",
+                                     contentSearch_.data(), contentSearch_.size());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Refresh")) {
+                editorSession_.request(EditorCommand{EditorCommandType::RefreshAssetCatalog});
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("%zu assets | cache #%llu", workspaceAssets_.records().size(),
+                static_cast<unsigned long long>(thumbnailCacheGeneration_));
 
-    ImGui::Spacing();
-    ImGui::SeparatorText(EditorUi::label("Status"));
-    ImGui::TextWrapped("%s", statusMessage_.c_str());
-    if (pendingModelImport_.has_value()) {
-        const double elapsed = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - pendingModelImport_->startedAt
-        ).count();
-        const float activity = static_cast<float>(std::fmod(elapsed * 0.35, 1.0));
-        ImGui::ProgressBar(activity, ImVec2(-1.0f, 0.0f), "Importing on CPU...");
-        ImGui::TextDisabled(
-            "%.2f MiB | %.1f s elapsed | current scene stays active",
-            static_cast<double>(pendingModelImport_->fileSize) / (1024.0 * 1024.0),
-            elapsed
-        );
+            if (ImGui::BeginTabBar("ContentCategories", ImGuiTabBarFlags_FittingPolicyScroll)) {
+                for (int index = 0; index < static_cast<int>(WorkspaceAssetCategory::Count); ++index) {
+                    const auto category = static_cast<WorkspaceAssetCategory>(index);
+                    const std::string categoryLabel = std::string(workspaceAssetCategoryName(category))
+                        + " (" + std::to_string(workspaceAssets_.count(category)) + ")##AssetCategory"
+                        + std::to_string(index);
+                    if (ImGui::BeginTabItem(categoryLabel.c_str())) {
+                        if (contentCategory_ != index) contentExtensionFilter_.clear();
+                        contentCategory_ = index;
+                        ImGui::EndTabItem();
+                    }
+                }
+                ImGui::EndTabBar();
+            }
+
+            const auto activeCategory = static_cast<WorkspaceAssetCategory>(contentCategory_);
+            const auto extensions = workspaceAssets_.extensions(activeCategory);
+            ImGui::SetNextItemWidth(135.0f);
+            const char* extensionPreview = contentExtensionFilter_.empty()
+                ? "All types" : contentExtensionFilter_.c_str();
+            if (ImGui::BeginCombo("##AssetExtension", extensionPreview)) {
+                if (ImGui::Selectable("All types", contentExtensionFilter_.empty())) {
+                    contentExtensionFilter_.clear();
+                }
+                for (const std::string& extension : extensions) {
+                    if (ImGui::Selectable(extension.c_str(), contentExtensionFilter_ == extension)) {
+                        contentExtensionFilter_ = extension;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120.0f);
+            const char* sortPreview = contentSortMode_ == 0 ? "Name" : "Size";
+            if (ImGui::BeginCombo("##AssetSort", sortPreview)) {
+                if (ImGui::Selectable("Name", contentSortMode_ == 0)) contentSortMode_ = 0;
+                if (ImGui::Selectable("Size", contentSortMode_ == 1)) contentSortMode_ = 1;
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton(contentGridView_ ? "Grid: On" : "Grid: Off")) {
+                contentGridView_ = !contentGridView_;
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("Search / type / %s", sortPreview);
+
+            const auto visibleAssets = workspaceAssets_.filter(
+                activeCategory,
+                contentSearch_.data(),
+                contentExtensionFilter_,
+                contentSortMode_ == 0 ? WorkspaceAssetSort::Name : WorkspaceAssetSort::Size
+            );
+            const float reservedHeight = activeCategory == WorkspaceAssetCategory::Models
+                ? 178.0f : 112.0f;
+            const float resultHeight = std::max(130.0f,
+                ImGui::GetContentRegionAvail().y - reservedHeight);
+            if (ImGui::BeginChild("AssetResults", ImVec2(0.0f, resultHeight), true)) {
+                if (visibleAssets.empty()) {
+                    ImGui::TextDisabled("No matching %s assets.",
+                        workspaceAssetCategoryName(activeCategory));
+                } else if (contentGridView_) {
+                    const float cardWidth = 155.0f;
+                    const int columns = std::max(1,
+                        static_cast<int>(ImGui::GetContentRegionAvail().x / cardWidth));
+                    if (ImGui::BeginTable("AssetGrid", columns,
+                            ImGuiTableFlags_SizingStretchSame)) {
+                        for (const WorkspaceAssetRecord* asset : visibleAssets) {
+                            ImGui::TableNextColumn();
+                            ImGui::PushID(asset->relativePath.generic_u8string().c_str());
+                            const bool selected = selectedWorkspaceAsset_ == asset->path;
+                            const std::string cardLabel = std::string(workspaceAssetCategoryBadge(asset->category))
+                                + "\n" + (asset->extension.empty() ? "asset" : asset->extension)
+                                + "##Card";
+                            if (ImGui::Selectable(cardLabel.c_str(), selected,
+                                    ImGuiSelectableFlags_None, ImVec2(0.0f, 48.0f))) {
+                                selectedWorkspaceAsset_ = asset->path;
+                                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                    queueAssetAction(*asset);
+                                }
+                            }
+                            ImGui::TextWrapped("%s", asset->displayName.c_str());
+                            ImGui::TextDisabled("%s", formatAssetSize(asset->sizeBytes).c_str());
+                            ImGui::PopID();
+                        }
+                        ImGui::EndTable();
+                    }
+                } else if (ImGui::BeginTable("AssetList", 4,
+                        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
+                        | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY)) {
+                    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+                    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 210.0f);
+                    ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+                    ImGui::TableHeadersRow();
+                    for (const WorkspaceAssetRecord* asset : visibleAssets) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(workspaceAssetCategoryBadge(asset->category));
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::PushID(asset->relativePath.generic_u8string().c_str());
+                        if (ImGui::Selectable(asset->displayName.c_str(),
+                                selectedWorkspaceAsset_ == asset->path,
+                                ImGuiSelectableFlags_SpanAllColumns)) {
+                            selectedWorkspaceAsset_ = asset->path;
+                            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                queueAssetAction(*asset);
+                            }
+                        }
+                        ImGui::PopID();
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted(asset->relativePath.generic_u8string().c_str());
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextUnformatted(formatAssetSize(asset->sizeBytes).c_str());
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::EndChild();
+            }
+
+            ImGui::SeparatorText(EditorUi::label("Asset details"));
+            const WorkspaceAssetRecord* selectedAsset = workspaceAssets_.find(selectedWorkspaceAsset_);
+            if (selectedAsset != nullptr) {
+                ImGui::Text("%s | %s", workspaceAssetCategoryBadge(selectedAsset->category),
+                            selectedAsset->displayName.c_str());
+                ImGui::TextDisabled("%s | %s | preview %016llx",
+                    selectedAsset->relativePath.generic_u8string().c_str(),
+                    formatAssetSize(selectedAsset->sizeBytes).c_str(),
+                    static_cast<unsigned long long>(selectedAsset->previewCacheKey));
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!hasAssetAction(selectedAsset->category));
+                const char* actionLabel = selectedAsset->category == WorkspaceAssetCategory::Scenes
+                    ? "Open Scene" : selectedAsset->category == WorkspaceAssetCategory::Models
+                    ? "Import Model" : selectedAsset->category == WorkspaceAssetCategory::RenderJobs
+                    ? "Send to Render Queue" : "Read-only metadata";
+                if (ImGui::Button(actionLabel)) queueAssetAction(*selectedAsset);
+                ImGui::EndDisabled();
+            } else {
+                ImGui::TextDisabled("Select an asset to inspect its path, size and preview cache key.");
+            }
+
+            if (activeCategory == WorkspaceAssetCategory::Models) {
+                ImGui::SeparatorText(EditorUi::label("Import external model"));
+                ImGui::SetNextItemWidth(std::max(200.0f, ImGui::GetContentRegionAvail().x - 260.0f));
+                ImGui::InputText("##ModelPath", modelPathBuffer_.data(), modelPathBuffer_.size());
+                ImGui::SameLine();
+                const bool loadInProgress = pendingModelImport_.has_value();
+                ImGui::BeginDisabled(loadInProgress);
+                if (ImGui::Button(EditorUi::label("Browse..."))) {
+                    std::string dialogError;
+                    const auto selected = openModelFileDialog(dialogError);
+                    if (selected.has_value()) {
+                        const std::string selectedPath = selected->string();
+                        std::snprintf(modelPathBuffer_.data(), modelPathBuffer_.size(),
+                                      "%s", selectedPath.c_str());
+                        EditorCommand command{EditorCommandType::ImportModelAsset};
+                        command.text = selected->u8string();
+                        editorSession_.request(std::move(command));
+                    } else if (!dialogError.empty()) {
+                        statusMessage_ = "Open failed: " + dialogError;
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(EditorUi::label("Load entered path"))) {
+                    EditorCommand command{EditorCommandType::ImportModelAsset};
+                    command.text = std::filesystem::u8path(modelPathBuffer_.data()).u8string();
+                    editorSession_.request(std::move(command));
+                }
+                ImGui::EndDisabled();
+            }
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Timeline")) {
+            int startFrame = editorSession_.startFrame();
+            int endFrame = editorSession_.endFrame();
+            int fps = editorSession_.framesPerSecond();
+            int frame = editorSession_.frame();
+            ImGui::SetNextItemWidth(100.0f);
+            if (ImGui::InputInt("Start", &startFrame)) editorSession_.setFrameRange(startFrame, endFrame);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100.0f);
+            if (ImGui::InputInt("End", &endFrame)) editorSession_.setFrameRange(startFrame, endFrame);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(90.0f);
+            if (ImGui::InputInt("FPS", &fps)) editorSession_.setFramesPerSecond(fps);
+            if (ImGui::SliderInt("Frame", &frame, editorSession_.startFrame(), editorSession_.endFrame())) {
+                editorSession_.setFrame(frame);
+                animationTimeFixed_ = true;
+                animationTimeSeconds_ = static_cast<float>(editorSession_.timeSeconds());
+                cpuPreviewRestartRequested_ = true;
+            }
+            ImGui::TextDisabled("Time %.3f s | deterministic fixed step %.6f s",
+                editorSession_.timeSeconds(), 1.0 / static_cast<double>(editorSession_.framesPerSecond()));
+            ImGui::TextWrapped("The P1-0A timeline owns editor frame semantics. Cache baking and sequence evaluation are connected in P1-0B/C.");
+            ImGui::EndTabItem();
+        }
+
+        const ImGuiTabItemFlags modulesTabFlags = focusModulesTab_
+            ? ImGuiTabItemFlags_SetSelected
+            : ImGuiTabItemFlags_None;
+        if (ImGui::BeginTabItem("Modules", nullptr, modulesTabFlags)) {
+            focusModulesTab_ = false;
+            const std::vector<ModuleManifest> manifests = moduleRegistry_.manifests();
+            ImGui::TextUnformatted("Statically linked module registry");
+            ImGui::TextDisabled(
+                "%zu module(s) | Module API %d | Build %s",
+                manifests.size(),
+                moduleApiVersion,
+                moduleBuildId().c_str()
+            );
+            if (ImGui::BeginTable(
+                    "ModuleTable",
+                    5,
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
+                        | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_ScrollX
+                )) {
+                // Fixed widths plus horizontal scrolling keep every label readable at the
+                // 1100x680 minimum window instead of clipping the last columns; the full
+                // value is also available as a hover tooltip.
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("Module ID", ImGuiTableColumnFlags_WidthFixed, 185.0f);
+                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+                ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 85.0f);
+                ImGui::TableSetupColumn("Target", ImGuiTableColumnFlags_WidthFixed, 175.0f);
+                ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                ImGui::TableHeadersRow();
+                const auto cell = [](const std::string& text) {
+                    ImGui::TextUnformatted(text.c_str());
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                        ImGui::SetTooltip("%s", text.c_str());
+                    }
+                };
+                for (const ModuleManifest& manifest : manifests) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    cell(manifest.id);
+                    ImGui::TableSetColumnIndex(1);
+                    cell(manifest.displayName);
+                    ImGui::TableSetColumnIndex(2);
+                    cell(moduleKindName(manifest.kind));
+                    ImGui::TableSetColumnIndex(3);
+                    cell(manifest.cmakeTarget);
+                    ImGui::TableSetColumnIndex(4);
+                    cell(manifest.sourceRoot);
+                }
+                ImGui::EndTable();
+            }
+            ImGui::TextWrapped(
+                "The panel and the Content Browser only read module manifests; no C++ source is "
+                "scanned or parsed. Instance lifecycle, parameter controls and module build "
+                "diagnostics arrive with the C1 runtime wiring."
+            );
+            ImGui::EndTabItem();
+        }
+
+        const ImGuiTabItemFlags renderQueueTabFlags = focusRenderQueueTab_
+            ? ImGuiTabItemFlags_SetSelected
+            : ImGuiTabItemFlags_None;
+        if (ImGui::BeginTabItem("Render Queue", nullptr, renderQueueTabFlags)) {
+            focusRenderQueueTab_ = false;
+            ImGui::SetNextItemWidth(std::max(240.0f, ImGui::GetContentRegionAvail().x - 230.0f));
+            ImGui::InputText("##RenderJobPath", renderJobPathBuffer_.data(), renderJobPathBuffer_.size());
+            ImGui::SameLine();
+            if (ImGui::Button("Browse...##RenderJob")) {
+                std::string dialogError;
+                const auto selected = openRenderJobFileDialog(dialogError);
+                if (selected.has_value()) {
+                    const std::string selectedPath = selected->string();
+                    std::snprintf(renderJobPathBuffer_.data(), renderJobPathBuffer_.size(),
+                                  "%s", selectedPath.c_str());
+                } else if (!dialogError.empty()) {
+                    renderQueueMessage_ = dialogError;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(renderJobPathBuffer_[0] == '\0');
+            if (ImGui::Button("Enqueue Sequence")) {
+                EditorCommand command{EditorCommandType::SubmitRenderJob};
+                command.text = renderJobPathBuffer_.data();
+                editorSession_.request(std::move(command));
+            }
+            ImGui::EndDisabled();
+
+            ImGui::Separator();
+            const auto queueEntries = renderQueue_->entries();
+            if (!queueEntries.empty() && ImGui::BeginTable(
+                    "RenderQueueTable", 5,
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg
+                        | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY,
+                    ImVec2(0.0f, 128.0f))) {
+                ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 34.0f);
+                ImGui::TableSetupColumn("Job", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+                ImGui::TableSetupColumn("State / Progress", ImGuiTableColumnFlags_WidthStretch, 1.5f);
+                ImGui::TableSetupColumn("Frames", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 176.0f);
+                ImGui::TableHeadersRow();
+                for (const RenderQueueEntrySnapshot& entry : queueEntries) {
+                    ImGui::PushID(static_cast<int>(entry.id));
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Text("%llu", static_cast<unsigned long long>(entry.id));
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextUnformatted(entry.jobPath.filename().string().c_str());
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.jobPath.string().c_str());
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::TextUnformatted(renderQueueStatusName(entry.status));
+                    ImGui::SameLine();
+                    const int total = entry.endFrame - entry.startFrame + 1;
+                    const float fraction = total > 0
+                        ? static_cast<float>(entry.completedFrames) / static_cast<float>(total)
+                        : 0.0f;
+                    const std::string progressLabel = std::to_string(entry.completedFrames)
+                        + "/" + std::to_string(total);
+                    ImGui::ProgressBar(fraction, ImVec2(-1.0f, ImGui::GetFrameHeight()), progressLabel.c_str());
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%d-%d @ %d FPS", entry.startFrame, entry.endFrame,
+                                entry.framesPerSecond);
+                    ImGui::TableSetColumnIndex(4);
+                    if (entry.status == RenderQueueStatus::Pending) {
+                        if (ImGui::SmallButton("Up")) editorSession_.request(EditorCommand{
+                            EditorCommandType::MoveRenderJobUp, entry.id});
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Down")) editorSession_.request(EditorCommand{
+                            EditorCommandType::MoveRenderJobDown, entry.id});
+                        ImGui::SameLine();
+                    }
+                    if (entry.status == RenderQueueStatus::Running) {
+                        if (ImGui::SmallButton("Cancel")) editorSession_.request(EditorCommand{
+                            EditorCommandType::CancelRenderJob, entry.id});
+                    } else if (entry.status == RenderQueueStatus::Cancelling) {
+                        ImGui::TextDisabled("Cancelling...");
+                    } else {
+                        if (entry.status == RenderQueueStatus::Failed
+                            || entry.status == RenderQueueStatus::Cancelled) {
+                            if (ImGui::SmallButton("Retry")) editorSession_.request(EditorCommand{
+                                EditorCommandType::RetryRenderJob, entry.id});
+                            ImGui::SameLine();
+                        }
+                        if (ImGui::SmallButton("Remove")) editorSession_.request(EditorCommand{
+                            EditorCommandType::RemoveRenderJob, entry.id});
+                    }
+                    if (!entry.message.empty() && ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", entry.message.c_str());
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            } else if (queueEntries.empty()) {
+                ImGui::TextDisabled("Queue is empty.");
+            }
+            ImGui::TextWrapped("%s", renderQueueMessage_.c_str());
+            ImGui::TextDisabled("Jobs run serially. Pending order and results persist across restarts.");
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem(
+                "Log / Profile",
+                nullptr,
+                focusLogTab_ ? ImGuiTabItemFlags_SetSelected : 0
+            )) {
+            focusLogTab_ = false;
+            drawLogProfilePanel();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
     }
-    drawDiagnostics();
     ImGui::End();
 }
 
@@ -342,11 +1883,11 @@ void Application::drawEditorLayout() {
         const float rightWidth = std::max(300.0f, workSize.x * 0.23f);
         const float rightRatio = std::min(rightWidth / remainingWidth, 0.38f);
         const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, rightRatio, nullptr, &center);
-        const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.24f, nullptr, &center);
+        const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.30f, nullptr, &center);
         ImGui::DockBuilderDockWindow("###Hierarchy", left);
         ImGui::DockBuilderDockWindow("###Inspector", right);
         ImGui::DockBuilderDockWindow("###Viewport", center);
-        ImGui::DockBuilderDockWindow("###Assets", bottom);
+        ImGui::DockBuilderDockWindow("###Workspace", bottom);
         ImGui::DockBuilderFinish(dock);
     }
 }
@@ -400,8 +1941,7 @@ void Application::newEmptyScene() {
     modelCenter_ = glm::vec3(0.0f);
     modelNormalizationScale_ = 1.0f;
     resetObjectTransform();
-    camera_.reset();
-    statusMessage_ = EditorUi::chinese ? "已新建空场景，可导入多个模型。" : "New empty scene. Import models to begin.";
+    camera_.reset();    statusMessage_ = EditorUi::chinese ? "已新建空场景，可导入多个模型。" : "New empty scene. Import models to begin.";
 }
 
 SceneDocument Application::captureSceneDocument() const {
@@ -794,6 +2334,437 @@ bool Application::editorInteractionRegression() {
         check(scene_.size() == 1 && !model_ && !lightStressDemoEnabled_, "empty scene first import");
         scene_.updateWorldTransforms();
         const auto first = selectedSceneEntity_;
+        const SceneTransform originalEditorTransform = scene_.find(first)->transform;
+        const glm::vec3 originalEditorTint = scene_.find(first)->tint;
+        const bool originalEditorVisibility = scene_.find(first)->visible;
+        const bool originalEditorCastsShadow = scene_.find(first)->castsShadow;
+        EditorCommand transformCommand{EditorCommandType::SetEntityTransform, first};
+        transformCommand.transform.translation = {0.25f, 0.5f, -0.75f};
+        transformCommand.transform.rotationDegrees = {10.0f, 20.0f, 30.0f};
+        transformCommand.transform.scale = {0.8f, 1.2f, 1.4f};
+        editorSession_.request(std::move(transformCommand));
+        EditorCommand tintCommand{EditorCommandType::SetEntityTint, first};
+        tintCommand.color = {0.2f, 0.4f, 0.8f};
+        editorSession_.request(std::move(tintCommand));
+        editorSession_.request(EditorCommand{
+            EditorCommandType::SetEntityVisibility, first, 0U, false
+        });
+        editorSession_.request(EditorCommand{
+            EditorCommandType::SetEntityCastsShadow, first, 0U, false
+        });
+        processEditorCommands();
+        check(std::abs(scene_.find(first)->transform.translation.x - 0.25f) < 1.0e-6f
+              && std::abs(scene_.find(first)->transform.rotationDegrees.y - 20.0f) < 1.0e-6f
+              && std::abs(scene_.find(first)->transform.scale.z - 1.4f) < 1.0e-6f,
+              "Inspector transform command did not update the Scene entity");
+        check(std::abs(scene_.find(first)->tint.z - 0.8f) < 1.0e-6f,
+              "Inspector tint command did not update the Scene entity");
+        check(!scene_.find(first)->visible && !scene_.find(first)->castsShadow,
+              "Inspector rendering commands did not update the Scene entity");
+
+        EditorCommand restoreTransform{EditorCommandType::SetEntityTransform, first};
+        restoreTransform.transform.translation = {
+            originalEditorTransform.translation.x,
+            originalEditorTransform.translation.y,
+            originalEditorTransform.translation.z
+        };
+        restoreTransform.transform.rotationDegrees = {
+            originalEditorTransform.rotationDegrees.x,
+            originalEditorTransform.rotationDegrees.y,
+            originalEditorTransform.rotationDegrees.z
+        };
+        restoreTransform.transform.scale = {
+            originalEditorTransform.scale.x,
+            originalEditorTransform.scale.y,
+            originalEditorTransform.scale.z
+        };
+        editorSession_.request(std::move(restoreTransform));
+        EditorCommand restoreTint{EditorCommandType::SetEntityTint, first};
+        restoreTint.color = {originalEditorTint.x, originalEditorTint.y, originalEditorTint.z};
+        editorSession_.request(std::move(restoreTint));
+        editorSession_.request(EditorCommand{
+            EditorCommandType::SetEntityVisibility, first, 0U, originalEditorVisibility
+        });
+        editorSession_.request(EditorCommand{
+            EditorCommandType::SetEntityCastsShadow, first, 0U, originalEditorCastsShadow
+        });
+        processEditorCommands();
+
+        const bool originalGroundReceiver = showGroundPlane_;
+        const glm::vec3 originalGroundColor = groundColor_;
+        const float originalGroundOffset = groundOffset_;
+        const bool originalComparisonObject = showComparisonObject_;
+        const glm::vec3 originalBaseColor = rendererSettings_.baseColor;
+        const float originalShininess = rendererSettings_.shininess;
+        const glm::vec3 originalLightDirection = rendererSettings_.lightDirection;
+        const float originalAmbientStrength = rendererSettings_.ambientStrength;
+        const float originalDiffuseStrength = rendererSettings_.diffuseStrength;
+        const float originalSpecularStrength = rendererSettings_.specularStrength;
+
+        EditorCommand stageCommand{EditorCommandType::SetStageSettings};
+        stageCommand.stage.groundReceiver = false;
+        stageCommand.stage.groundColor = {0.1f, 0.2f, 0.3f};
+        stageCommand.stage.groundOffset = -1.25f;
+        stageCommand.stage.comparisonObject = true;
+        editorSession_.request(std::move(stageCommand));
+        EditorCommand materialCommand{EditorCommandType::SetMaterialSettings};
+        materialCommand.material.baseColor = {0.7f, 0.6f, 0.5f};
+        materialCommand.material.shininess = 96.0f;
+        editorSession_.request(std::move(materialCommand));
+        EditorCommand lightCommand{EditorCommandType::SetDirectionalLightSettings};
+        lightCommand.directionalLight.direction = {-0.25f, -0.9f, 0.1f};
+        lightCommand.directionalLight.ambientStrength = 0.12f;
+        lightCommand.directionalLight.diffuseStrength = 1.4f;
+        lightCommand.directionalLight.specularStrength = 0.65f;
+        editorSession_.request(std::move(lightCommand));
+        processEditorCommands();
+        check(!showGroundPlane_ && showComparisonObject_
+              && std::abs(groundColor_.y - 0.2f) < 1.0e-6f
+              && std::abs(groundOffset_ + 1.25f) < 1.0e-6f,
+              "Renderer Stage command did not update the scene stage");
+        check(std::abs(rendererSettings_.baseColor.x - 0.7f) < 1.0e-6f
+              && std::abs(rendererSettings_.shininess - 96.0f) < 1.0e-6f,
+              "Renderer Material command did not update renderer settings");
+        check(std::abs(rendererSettings_.lightDirection.y + 0.9f) < 1.0e-6f
+              && std::abs(rendererSettings_.ambientStrength - 0.12f) < 1.0e-6f
+              && std::abs(rendererSettings_.diffuseStrength - 1.4f) < 1.0e-6f
+              && std::abs(rendererSettings_.specularStrength - 0.65f) < 1.0e-6f,
+              "Renderer Directional light command did not update renderer settings");
+
+        EditorCommand restoreStage{EditorCommandType::SetStageSettings};
+        restoreStage.stage.groundReceiver = originalGroundReceiver;
+        restoreStage.stage.groundColor = {
+            originalGroundColor.x, originalGroundColor.y, originalGroundColor.z
+        };
+        restoreStage.stage.groundOffset = originalGroundOffset;
+        restoreStage.stage.comparisonObject = originalComparisonObject;
+        editorSession_.request(std::move(restoreStage));
+        EditorCommand restoreMaterial{EditorCommandType::SetMaterialSettings};
+        restoreMaterial.material.baseColor = {
+            originalBaseColor.x, originalBaseColor.y, originalBaseColor.z
+        };
+        restoreMaterial.material.shininess = originalShininess;
+        editorSession_.request(std::move(restoreMaterial));
+        EditorCommand restoreLight{EditorCommandType::SetDirectionalLightSettings};
+        restoreLight.directionalLight.direction = {
+            originalLightDirection.x, originalLightDirection.y, originalLightDirection.z
+        };
+        restoreLight.directionalLight.ambientStrength = originalAmbientStrength;
+        restoreLight.directionalLight.diffuseStrength = originalDiffuseStrength;
+        restoreLight.directionalLight.specularStrength = originalSpecularStrength;
+        editorSession_.request(std::move(restoreLight));
+        processEditorCommands();
+        check(showGroundPlane_ == originalGroundReceiver
+              && showComparisonObject_ == originalComparisonObject
+              && std::abs(rendererSettings_.shininess - originalShininess) < 1.0e-6f
+              && std::abs(rendererSettings_.diffuseStrength - originalDiffuseStrength) < 1.0e-6f,
+              "Renderer domain command restore did not restore editor state");
+
+        // A2b2b renderer domains. Each remaining Renderer Inspector group must reach
+        // renderer state only through its domain snapshot command, and an invalid
+        // payload must be rejected without touching the live settings.
+        const EditorPbrEnvironmentSettingsPayload originalPbr =
+            EditorDomain::capturePbrEnvironmentSettings(rendererSettings_);
+        const EditorShadingSettingsPayload originalShading =
+            EditorDomain::captureShadingSettings(rendererSettings_);
+        const EditorPostProcessingSettingsPayload originalPost =
+            EditorDomain::capturePostProcessingSettings(rendererSettings_);
+        const EditorRasterizationSettingsPayload originalRaster =
+            EditorDomain::captureRasterizationSettings(rendererSettings_);
+        const EditorCameraSettingsPayload originalCamera =
+            EditorDomain::captureCameraSettings(camera_);
+        const EditorRuntimeSettingsPayload originalRuntime =
+            EditorDomain::captureRuntimeSettings(vsync_, rendererSettings_);
+        const EditorGlassSettingsPayload originalGlass =
+            EditorDomain::captureGlassSettings(rendererSettings_);
+        const EditorCausticsSettingsPayload originalCaustics =
+            EditorDomain::captureCausticsSettings(rendererSettings_);
+        const EditorInstanceSettingsPayload originalInstance =
+            EditorDomain::captureInstanceSettings(rendererSettings_);
+
+        EditorPbrEnvironmentSettingsPayload pbr = originalPbr;
+        pbr.pbrEnabled = !pbr.pbrEnabled;
+        pbr.skyboxEnabled = !pbr.skyboxEnabled;
+        pbr.environmentIntensity = 1.35f;
+        EditorCommand pbrCommand{EditorCommandType::SetPbrEnvironmentSettings};
+        pbrCommand.pbrEnvironment = pbr;
+        editorSession_.request(std::move(pbrCommand));
+
+        EditorShadingSettingsPayload shading = originalShading;
+        shading.shadingMode = static_cast<int>(ShadingMode::Stylized);
+        shading.renderPath = static_cast<int>(RenderPath::Deferred);
+        shading.gBufferDebugView = static_cast<int>(GBufferDebugView::Albedo);
+        shading.stylizedBandCount = 7;
+        shading.stylizedRimIntensity = 1.75f;
+        shading.stylizedDitherEnabled = true;
+        shading.stylizedShadowTint = {0.11f, 0.22f, 0.33f};
+        EditorCommand shadingCommand{EditorCommandType::SetShadingSettings};
+        shadingCommand.shading = shading;
+        editorSession_.request(std::move(shadingCommand));
+
+        EditorPostProcessingSettingsPayload post = originalPost;
+        post.ssaoEnabled = true;
+        post.ssaoStrength = 2.25f;
+        post.temporalAaEnabled = true;
+        post.temporalHistoryWeight = 0.6f;
+        post.exposure = 1.45f;
+        EditorCommand postCommand{EditorCommandType::SetPostProcessingSettings};
+        postCommand.postProcessing = post;
+        editorSession_.request(std::move(postCommand));
+
+        EditorRasterizationSettingsPayload raster = originalRaster;
+        raster.wireframe = true;
+        raster.cullBackFaces = true;
+        raster.normalMapping = false;
+        raster.msaaSamples = originalRaster.msaaSamples == 4 ? 1 : 4;
+        raster.backgroundColor = {0.03f, 0.04f, 0.05f};
+        EditorCommand rasterCommand{EditorCommandType::SetRasterizationSettings};
+        rasterCommand.rasterization = raster;
+        editorSession_.request(std::move(rasterCommand));
+
+        EditorCameraSettingsPayload cameraSettings = originalCamera;
+        cameraSettings.fieldOfViewDegrees = 61.0f;
+        // Frame camera rebuilds the whole orbit pose (including the field of view), so
+        // it is requested before the explicit camera settings command that follows it.
+        camera_.setOrbitPose(glm::vec3(1.5f, 2.5f, -3.5f), 12.0f, 8.0f, 21.0f, 33.0f);
+        EditorCommand frameCommand{EditorCommandType::FrameCamera};
+        frameCommand.value = static_cast<std::uint64_t>(EditorCameraFrameTarget::Model);
+        editorSession_.request(std::move(frameCommand));
+        EditorCommand cameraCommand{EditorCommandType::SetCameraSettings};
+        cameraCommand.camera = cameraSettings;
+        editorSession_.request(std::move(cameraCommand));
+
+        EditorRuntimeSettingsPayload runtime = originalRuntime;
+        runtime.vsync = !runtime.vsync;
+        runtime.shaderHotReloadEnabled = false;
+        EditorCommand runtimeCommand{EditorCommandType::SetRuntimeSettings};
+        runtimeCommand.runtime = runtime;
+        editorSession_.request(std::move(runtimeCommand));
+
+        EditorGlassSettingsPayload glassSettings = originalGlass;
+        glassSettings.transmissionEnabled = false;
+        glassSettings.refractionSteps = 20;
+        glassSettings.volumeGlassAttenuationColor = {0.25f, 0.45f, 0.65f};
+        glassSettings.dispersionStrength = 1.25f;
+        glassSettings.glassDebugView = static_cast<int>(GlassDebugView::Thickness);
+        EditorCommand glassCommand{EditorCommandType::SetGlassSettings};
+        glassCommand.glass = glassSettings;
+        editorSession_.request(std::move(glassCommand));
+
+        EditorCausticsSettingsPayload caustics = originalCaustics;
+        caustics.causticsEnabled = true;
+        caustics.causticsMode = static_cast<int>(CausticsMode::Projector);
+        caustics.causticsStrength = 3.25f;
+        caustics.causticsDirection = {0.25f, 0.0f, -0.5f};
+        caustics.causticsAnimated = true;
+        EditorCommand causticsCommand{EditorCommandType::SetCausticsSettings};
+        causticsCommand.caustics = caustics;
+        editorSession_.request(std::move(causticsCommand));
+
+        EditorInstanceSettingsPayload instance = originalInstance;
+        instance.instanceOptimizationEnabled = true;
+        instance.frustumCullingEnabled = false;
+        EditorCommand instanceCommand{EditorCommandType::SetInstanceSettings};
+        instanceCommand.instance = instance;
+        editorSession_.request(std::move(instanceCommand));
+
+        processEditorCommands();
+        check(rendererSettings_.pbrEnabled == pbr.pbrEnabled
+              && rendererSettings_.skyboxEnabled == pbr.skyboxEnabled
+              && std::abs(rendererSettings_.environmentIntensity - 1.35f) < 1.0e-6f,
+              "Renderer PBR environment command did not update renderer settings");
+        check(rendererSettings_.shadingMode == ShadingMode::Stylized
+              && rendererSettings_.renderPath == RenderPath::Deferred
+              && rendererSettings_.gBufferDebugView == GBufferDebugView::Albedo
+              && rendererSettings_.stylizedBandCount == 7
+              && std::abs(rendererSettings_.stylizedRimIntensity - 1.75f) < 1.0e-6f
+              && rendererSettings_.stylizedDitherEnabled
+              && std::abs(rendererSettings_.stylizedShadowTint.z - 0.33f) < 1.0e-6f,
+              "Renderer shading command did not update renderer settings");
+        check(rendererSettings_.ssaoEnabled
+              && std::abs(rendererSettings_.ssaoStrength - 2.25f) < 1.0e-6f
+              && rendererSettings_.temporalAaEnabled
+              && std::abs(rendererSettings_.temporalHistoryWeight - 0.6f) < 1.0e-6f
+              && std::abs(rendererSettings_.exposure - 1.45f) < 1.0e-6f,
+              "Renderer post-processing command did not update renderer settings");
+        check(rendererSettings_.wireframe && rendererSettings_.cullBackFaces
+              && !rendererSettings_.normalMapping
+              && rendererSettings_.msaaSamples == raster.msaaSamples
+              && std::abs(rendererSettings_.backgroundColor.y - 0.04f) < 1.0e-6f,
+              "Renderer rasterization command did not update renderer settings");
+        check(std::abs(camera_.fieldOfView() - 61.0f) < 1.0e-4f,
+              "Renderer camera command did not update the camera");
+        check(std::abs(camera_.orbitState().distance - 3.2f) < 1.0e-4f
+              && std::abs(camera_.orbitState().target.x - modelPosition_.x) < 1.0e-4f,
+              "Renderer frame camera command did not reset the orbit pose");
+        check(vsync_ == runtime.vsync && !rendererSettings_.shaderHotReloadEnabled,
+              "Renderer runtime command did not update window settings");
+        check(!rendererSettings_.transmissionEnabled
+              && rendererSettings_.refractionSteps == 20
+              && std::abs(rendererSettings_.volumeGlassAttenuationColor.y - 0.45f) < 1.0e-6f
+              && std::abs(rendererSettings_.dispersionStrength - 1.25f) < 1.0e-6f
+              && rendererSettings_.glassDebugView == GlassDebugView::Thickness,
+              "Renderer glass command did not update renderer settings");
+        check(rendererSettings_.causticsEnabled
+              && rendererSettings_.causticsMode == CausticsMode::Projector
+              && std::abs(rendererSettings_.causticsStrength - 3.25f) < 1.0e-6f
+              && std::abs(rendererSettings_.causticsDirection.z + 0.5f) < 1.0e-6f
+              && rendererSettings_.causticsAnimated,
+              "Renderer caustics command did not update renderer settings");
+        check(rendererSettings_.instanceOptimizationEnabled
+              && !rendererSettings_.frustumCullingEnabled,
+              "Renderer instance command did not update renderer settings");
+
+        EditorCommand outOfRangeExposure{EditorCommandType::SetPostProcessingSettings};
+        outOfRangeExposure.postProcessing =
+            EditorDomain::capturePostProcessingSettings(rendererSettings_);
+        outOfRangeExposure.postProcessing.exposure = 12.0f;
+        editorSession_.request(std::move(outOfRangeExposure));
+        EditorCommand outOfRangeFieldOfView{EditorCommandType::SetCameraSettings};
+        outOfRangeFieldOfView.camera.fieldOfViewDegrees = 140.0f;
+        editorSession_.request(std::move(outOfRangeFieldOfView));
+        EditorCommand outOfRangeRefraction{EditorCommandType::SetGlassSettings};
+        outOfRangeRefraction.glass = EditorDomain::captureGlassSettings(rendererSettings_);
+        outOfRangeRefraction.glass.refractionSteps = 64;
+        editorSession_.request(std::move(outOfRangeRefraction));
+        EditorCommand unknownMsaa{EditorCommandType::SetRasterizationSettings};
+        unknownMsaa.rasterization = EditorDomain::captureRasterizationSettings(rendererSettings_);
+        unknownMsaa.rasterization.msaaSamples = 8;
+        editorSession_.request(std::move(unknownMsaa));
+        processEditorCommands();
+        check(std::abs(rendererSettings_.exposure - 1.45f) < 1.0e-6f
+              && std::abs(camera_.fieldOfView() - 61.0f) < 1.0e-4f
+              && rendererSettings_.refractionSteps == 20
+              && rendererSettings_.msaaSamples == raster.msaaSamples,
+              "out-of-range renderer payloads must be rejected without side effects");
+
+        // P1-0C module preview: the Viewport follows a module-driven runtime scene while
+        // the edit scene stays untouched, and the frame index is the only animation input.
+        {
+            const glm::vec3 editTranslation = scene_.find(first)->transform.translation;
+            const float baselineRotationY = scene_.find(first)->transform.rotationDegrees.y;
+            EditorCommand activate{EditorCommandType::SetActiveModule};
+            activate.text = BuiltinModules::turntableId;
+            editorSession_.request(std::move(activate));
+            processEditorCommands();
+            editorSession_.setFrameRange(0, 23);
+            editorSession_.setFrame(0);
+            updateModulePreview();
+            check(modulePreviewEnabled(), "module preview must report the selected module");
+            check(&viewportScene() != &scene_, "an active module must render the runtime scene");
+            check(viewportScene().size() == scene_.size(),
+                  "the runtime scene must mirror the edit scene");
+            check(std::abs(viewportScene().find(first)->transform.translation.x
+                           - editTranslation.x) < 1.0e-4f,
+                  "frame 0 must reproduce the authored transform");
+            editorSession_.setFrame(6);
+            updateModulePreview();
+            check(std::abs(viewportScene().find(first)->transform.rotationDegrees.y
+                           - (baselineRotationY + 90.0f)) < 1.0e-3f,
+                  "frame 6 must show a quarter turn of the turntable");
+            check(std::abs(scene_.find(first)->transform.rotationDegrees.y - baselineRotationY)
+                      < 1.0e-4f,
+                  "the module must never write into the edit scene");
+            editorSession_.setFrame(0);
+            updateModulePreview();
+            check(std::abs(viewportScene().find(first)->transform.rotationDegrees.y
+                           - baselineRotationY) < 1.0e-4f,
+                  "scrubbing back must rebuild the frame instead of keeping the last state");
+            EditorCommand parameter{EditorCommandType::SetModuleParameter};
+            parameter.text = "degreesPerFrame";
+            parameter.moduleParameter.type = static_cast<int>(ModuleParameterType::Float);
+            parameter.moduleParameter.number = 45.0f;
+            editorSession_.request(std::move(parameter));
+            processEditorCommands();
+            editorSession_.setFrame(1);
+            updateModulePreview();
+            check(std::abs(viewportScene().find(first)->transform.rotationDegrees.y
+                           - (baselineRotationY + 45.0f)) < 1.0e-3f,
+                  "a module parameter command must change the previewed frame");
+            editorSession_.request(EditorCommand{EditorCommandType::SetActiveModule});
+            processEditorCommands();
+            updateModulePreview();
+            check(!modulePreviewEnabled() && &viewportScene() == &scene_,
+                  "clearing the module must return the Viewport to the edit scene");
+            editorSession_.setFrame(0);
+        }
+
+        camera_.setOrbitPose(glm::vec3(0.5f, 0.5f, 0.5f), 30.0f, 20.0f, 12.0f, 40.0f);
+        EditorCommand unknownFrameTarget{EditorCommandType::FrameCamera};
+        unknownFrameTarget.value = 7U;
+        editorSession_.request(std::move(unknownFrameTarget));
+        processEditorCommands();
+        check(std::abs(camera_.orbitState().distance - 12.0f) < 1.0e-4f
+              && std::abs(camera_.fieldOfView() - 40.0f) < 1.0e-4f,
+              "an unknown camera frame target must not move the camera");
+
+        // A hand-edited or legacy .myscene is read without clamping, so capture has to
+        // normalise a value its Inspector control cannot produce; otherwise the strict
+        // entry point would make that whole domain permanently uneditable.
+        rendererSettings_.exposure = 9.0f;
+        rendererSettings_.stylizedBandCount = 32;
+        EditorPostProcessingSettingsPayload healedPost =
+            EditorDomain::capturePostProcessingSettings(rendererSettings_);
+        EditorShadingSettingsPayload healedShading =
+            EditorDomain::captureShadingSettings(rendererSettings_);
+        check(std::abs(healedPost.exposure - 4.0f) < 1.0e-6f
+              && healedShading.stylizedBandCount == 8,
+              "domain capture must clamp values outside the Inspector range");
+        EditorCommand healedPostCommand{EditorCommandType::SetPostProcessingSettings};
+        healedPostCommand.postProcessing = healedPost;
+        editorSession_.request(std::move(healedPostCommand));
+        EditorCommand healedShadingCommand{EditorCommandType::SetShadingSettings};
+        healedShadingCommand.shading = healedShading;
+        editorSession_.request(std::move(healedShadingCommand));
+        processEditorCommands();
+        check(std::abs(rendererSettings_.exposure - 4.0f) < 1.0e-6f
+              && rendererSettings_.stylizedBandCount == 8,
+              "command entry point must accept a normalised domain payload");
+
+        EditorCommand restorePbrCommand{EditorCommandType::SetPbrEnvironmentSettings};
+        restorePbrCommand.pbrEnvironment = originalPbr;
+        editorSession_.request(std::move(restorePbrCommand));
+        EditorCommand restoreShadingCommand{EditorCommandType::SetShadingSettings};
+        restoreShadingCommand.shading = originalShading;
+        editorSession_.request(std::move(restoreShadingCommand));
+        EditorCommand restorePostCommand{EditorCommandType::SetPostProcessingSettings};
+        restorePostCommand.postProcessing = originalPost;
+        editorSession_.request(std::move(restorePostCommand));
+        EditorCommand restoreRasterCommand{EditorCommandType::SetRasterizationSettings};
+        restoreRasterCommand.rasterization = originalRaster;
+        editorSession_.request(std::move(restoreRasterCommand));
+        EditorCommand restoreCameraCommand{EditorCommandType::SetCameraSettings};
+        restoreCameraCommand.camera = originalCamera;
+        editorSession_.request(std::move(restoreCameraCommand));
+        EditorCommand restoreRuntimeCommand{EditorCommandType::SetRuntimeSettings};
+        restoreRuntimeCommand.runtime = originalRuntime;
+        editorSession_.request(std::move(restoreRuntimeCommand));
+        EditorCommand restoreGlassCommand{EditorCommandType::SetGlassSettings};
+        restoreGlassCommand.glass = originalGlass;
+        editorSession_.request(std::move(restoreGlassCommand));
+        EditorCommand restoreCausticsCommand{EditorCommandType::SetCausticsSettings};
+        restoreCausticsCommand.caustics = originalCaustics;
+        editorSession_.request(std::move(restoreCausticsCommand));
+        EditorCommand restoreInstanceCommand{EditorCommandType::SetInstanceSettings};
+        restoreInstanceCommand.instance = originalInstance;
+        editorSession_.request(std::move(restoreInstanceCommand));
+        processEditorCommands();
+        check(rendererSettings_.pbrEnabled == originalPbr.pbrEnabled
+              && rendererSettings_.shadingMode == static_cast<ShadingMode>(originalShading.shadingMode)
+              && rendererSettings_.renderPath == static_cast<RenderPath>(originalShading.renderPath)
+              && std::abs(rendererSettings_.stylizedRimIntensity - originalShading.stylizedRimIntensity) < 1.0e-6f
+              && rendererSettings_.ssaoEnabled == originalPost.ssaoEnabled
+              && std::abs(rendererSettings_.exposure - originalPost.exposure) < 1.0e-6f
+              && rendererSettings_.wireframe == originalRaster.wireframe
+              && rendererSettings_.msaaSamples == originalRaster.msaaSamples
+              && std::abs(camera_.fieldOfView() - originalCamera.fieldOfViewDegrees) < 1.0e-4f
+              && vsync_ == originalRuntime.vsync
+              && rendererSettings_.transmissionEnabled == originalGlass.transmissionEnabled
+              && rendererSettings_.glassDebugView == static_cast<GlassDebugView>(originalGlass.glassDebugView)
+              && rendererSettings_.causticsEnabled == originalCaustics.causticsEnabled
+              && rendererSettings_.instanceOptimizationEnabled == originalInstance.instanceOptimizationEnabled,
+              "Renderer domain command restore did not restore editor state");
+
         camera_.reset();
         check(pickEntity(scene_.buildRenderItems(), 400, 300, 200, 150) == first, "viewport picks visible geometry");
         std::vector<unsigned char> lastOutlinePixels;

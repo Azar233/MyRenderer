@@ -14,6 +14,11 @@
 
 namespace pathtracer {
 
+enum class LightSelectionStrategy {
+    Uniform,
+    PowerWeighted
+};
+
 struct DirectLightSample {
     glm::vec3 direction{0.0f};
     glm::vec3 radiance{0.0f};
@@ -26,7 +31,8 @@ struct DirectLightSample {
 class SceneLights {
 public:
     SceneLights() = default;
-    SceneLights(const SceneSnapshot& snapshot, const std::vector<Triangle>& triangles);
+    SceneLights(const SceneSnapshot& snapshot, const std::vector<Triangle>& triangles,
+                LightSelectionStrategy strategy = LightSelectionStrategy::Uniform);
 
     bool empty() const { return entries_.empty(); }
     std::size_t size() const { return entries_.size(); }
@@ -57,6 +63,10 @@ private:
     std::vector<Entry> entries_;
     std::vector<EmissiveTriangle> emitters_;
     std::unordered_map<std::uint32_t, std::uint32_t> emitterByPrimitive_;
+    std::vector<float> selectionPdfs_;
+    std::vector<float> aliasProbabilities_;
+    std::vector<std::uint32_t> aliasIndices_;
+    std::size_t environmentEntry_{static_cast<std::size_t>(-1)};
 };
 
 float powerHeuristic(float firstPdf, float secondPdf);
