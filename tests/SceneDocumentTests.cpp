@@ -73,6 +73,9 @@ int main() {
         source.renderer.water.level = -0.8f;
         source.renderer.water.amplitude = 0.41f;
         source.renderer.water.windDirection = {0.4f, -0.7f};
+        source.renderer.atmosphere.nightSkyEnabled = true;
+        source.renderer.atmosphere.moonIntensity = 1.5f;
+        source.renderer.atmosphere.starIntensity = 0.7f;
         source.renderer.localLights.push_back(LocalLight{
             glm::vec3(2.0f, 3.0f, 4.0f),
             6.0f,
@@ -136,6 +139,10 @@ int main() {
                 && close(firstLoad.renderer.water.windDirection.x, 0.4f)
                 && close(firstLoad.renderer.water.windDirection.y, -0.7f),
                 "water settings survive first load");
+        require(firstLoad.renderer.atmosphere.nightSkyEnabled
+                && close(firstLoad.renderer.atmosphere.moonIntensity, 1.5f)
+                && close(firstLoad.renderer.atmosphere.starIntensity, 0.7f),
+                "night sky settings survive first load");
         require(firstLoad.renderer.shadingMode == ShadingMode::Stylized
                 && firstLoad.renderer.stylizedPreset == StylizedPreset::NightAurora
                 && firstLoad.renderer.stylizedBandCount == 4

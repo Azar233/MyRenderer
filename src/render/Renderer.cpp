@@ -417,9 +417,17 @@ void Renderer::render(
         const float luminance = 0.2126f * transmittance.r + 0.7152f * transmittance.g
             + 0.0722f * transmittance.b;
         const float keyScale = luminance * std::max(settings.atmosphere.sunIntensity, 0.0f);
-        diffuseStrength *= keyScale;
-        specularStrength *= keyScale;
-        lightColor = atmosphere::skyLightColor(settings.atmosphere);
+        const float moonScale = atmosphere::moonKeyStrength(settings.atmosphere);
+        if (moonScale > keyScale) {
+            lightDirection = -atmosphere::moonDirection(settings.atmosphere);
+            diffuseStrength *= moonScale;
+            specularStrength *= moonScale;
+            lightColor = glm::vec3(0.65f, 0.76f, 1.0f);
+        } else {
+            diffuseStrength *= keyScale;
+            specularStrength *= keyScale;
+            lightColor = atmosphere::skyLightColor(settings.atmosphere);
+        }
     }
     glm::vec3 sceneCenter(0.0f);
     glm::vec3 sceneMinimum(0.0f);
@@ -722,6 +730,13 @@ shader_->setMat4("uView", view);
             waterShader.setVec3("uLightColor", lightColor);
             waterShader.setFloat("uDiffuseStrength", diffuseStrength);
             waterShader.setFloat("uEnvironmentIntensity", settings.environmentIntensity);
+            const float solarTwilight = settings.atmosphere.enabled
+                ? 0.03f + 0.97f * std::clamp(
+                    (settings.atmosphere.sunElevationDegrees + 8.0f) / 12.0f, 0.0f, 1.0f)
+                : 1.0f;
+            const float twilight = std::max(solarTwilight,
+                atmosphere::moonKeyStrength(settings.atmosphere));
+            waterShader.setFloat("uTwilightFactor", twilight);
             waterShader.setBool("uShadowsEnabled", settings.shadowsEnabled);
             bindCascadeSettings(waterShader);
             waterShader.setInt("uPrefilteredEnvironmentMap", 0);

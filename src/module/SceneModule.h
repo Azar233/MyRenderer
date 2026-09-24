@@ -9,6 +9,9 @@
 #include "module/RuntimeScene.h"
 #include "runtime/Timeline.h"
 
+struct CameraOrbitState;
+struct RendererSettings;
+
 // Minimal C++ module contract for the rendering / simulation workbench.
 //
 // A module is statically compiled into `MyRendererModules` and created through the
@@ -127,6 +130,13 @@ public:
         double fixedDeltaSeconds,
         std::string& error
     ) = 0;
+
+    // Presentation output is evaluated from the authored baseline for each frame.
+    // This keeps editor controls and scene files untouched while allowing a module
+    // to animate camera, sky and water through the same timeline as entity motion.
+    virtual void applyPresentation(const SceneContext& context,
+        const CameraOrbitState& authoredCamera, const RendererSettings& authoredRenderer,
+        CameraOrbitState& camera, RendererSettings& renderer) const;
 
     // Optional deterministic cache write. Returning false with an empty error means
     // "nothing to bake".

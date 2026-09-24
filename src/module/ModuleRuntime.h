@@ -94,6 +94,10 @@ public:
     // frame must be inside the configured range and not before the current frame.
     bool runToFrame(int frame, std::string& error);
 
+    void applyPresentation(const CameraOrbitState& authoredCamera,
+        const RendererSettings& authoredRenderer, CameraOrbitState& camera,
+        RendererSettings& renderer) const;
+
     bool bake(std::string& error);
 
     // Sets the deterministic frame range without touching the runtime scene, so a host can

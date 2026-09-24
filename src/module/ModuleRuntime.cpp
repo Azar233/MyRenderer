@@ -1,4 +1,6 @@
 #include "module/ModuleRuntime.h"
+#include "render/Camera.h"
+#include "render/Renderer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -242,6 +244,16 @@ bool ModuleRuntime::runToFrame(int frame, std::string& error) {
     report_.contentHash = runtimeScene_.contentHash();
     report_.moduleState = module_->serializeState();
     return !failIfModuleLoggedError(error);
+}
+
+void ModuleRuntime::applyPresentation(const CameraOrbitState& authoredCamera,
+    const RendererSettings& authoredRenderer, CameraOrbitState& camera,
+    RendererSettings& renderer) const {
+    camera = authoredCamera;
+    renderer = authoredRenderer;
+    if (module_ != nullptr && report_.status == ModuleRunStatus::Ready) {
+        module_->applyPresentation(context_, authoredCamera, authoredRenderer, camera, renderer);
+    }
 }
 
 bool ModuleRuntime::failIfModuleLoggedError(std::string& error) {

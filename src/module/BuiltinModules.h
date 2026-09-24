@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include "module/ModuleRegistry.h"
 
 // Stable ids of the modules compiled into `MyRendererModules`. Tests, the
@@ -8,5 +10,8 @@
 namespace BuiltinModules {
 
 inline constexpr const char* turntableId = "myrenderer.core.turntable";
+inline constexpr const char* coastalSequenceId = "myrenderer.core.coastal-sequence";
 
 } // namespace BuiltinModules
+
+std::unique_ptr<ISceneModule> makeCoastalSequenceModule();

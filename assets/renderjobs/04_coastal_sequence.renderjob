@@ -1,0 +1,29 @@
+{
+  "format": "MyRendererRenderJob",
+  "schemaVersion": 2,
+  "scene": "../scenes/20_ocean_synthesis.myscene",
+  "renderer": "raster",
+  "camera": "scene",
+  "resolution": [640, 360],
+  "frames": {"start": 0, "end": 12, "fps": 12},
+  "sampling": {"spp": 1, "maxDepth": 1, "seed": 20260924},
+  "aovs": ["beauty"],
+  "output": {
+    "path": "../../build-ci-msvc/render-jobs/04_coastal_sequence/frame_{frame:04}",
+    "formats": ["png"],
+    "resume": false
+  },
+  "module": {
+    "id": "myrenderer.core.coastal-sequence",
+    "seed": 20260924,
+    "parameters": {
+      "sunStartElevation": 48.0,
+      "sunEndElevation": -8.0,
+      "fogStart": 0.35,
+      "fogEnd": 1.1,
+      "waveStartAmplitude": 0.08,
+      "waveEndAmplitude": 0.34
+    }
+  },
+  "failurePolicy": "stop"
+}

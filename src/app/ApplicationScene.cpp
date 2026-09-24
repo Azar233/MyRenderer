@@ -751,6 +751,10 @@ void Application::processEditorCommands() {
                     && atmosphere.sunIntensity >= 0.0f && atmosphere.sunIntensity <= 8.0f
                     && std::isfinite(atmosphere.groundAlbedo)
                     && atmosphere.groundAlbedo >= 0.0f && atmosphere.groundAlbedo <= 1.0f
+                    && std::isfinite(atmosphere.moonIntensity)
+                    && atmosphere.moonIntensity >= 0.0f && atmosphere.moonIntensity <= 4.0f
+                    && std::isfinite(atmosphere.starIntensity)
+                    && atmosphere.starIntensity >= 0.0f && atmosphere.starIntensity <= 4.0f
                     && std::isfinite(atmosphere.aerialPerspectiveStrength)
                     && atmosphere.aerialPerspectiveStrength >= 0.0f
                     && atmosphere.aerialPerspectiveStrength <= 4.0f
@@ -770,6 +774,9 @@ void Application::processEditorCommands() {
                 rendererSettings_.atmosphere.skyIntensity = atmosphere.skyIntensity;
                 rendererSettings_.atmosphere.sunIntensity = atmosphere.sunIntensity;
                 rendererSettings_.atmosphere.groundAlbedo = atmosphere.groundAlbedo;
+                rendererSettings_.atmosphere.nightSkyEnabled = atmosphere.nightSkyEnabled;
+                rendererSettings_.atmosphere.moonIntensity = atmosphere.moonIntensity;
+                rendererSettings_.atmosphere.starIntensity = atmosphere.starIntensity;
                 rendererSettings_.atmosphere.aerialPerspectiveEnabled =
                     atmosphere.aerialPerspectiveEnabled;
                 rendererSettings_.atmosphere.aerialPerspectiveStrength =

@@ -105,6 +105,9 @@ void writeRendererSettings(Writer& writer, const RendererSettings& settings) {
     writer.Key("skyIntensity"); writer.Double(settings.atmosphere.skyIntensity);
     writer.Key("sunIntensity"); writer.Double(settings.atmosphere.sunIntensity);
     writer.Key("groundAlbedo"); writer.Double(settings.atmosphere.groundAlbedo);
+    writer.Key("nightSkyEnabled"); writer.Bool(settings.atmosphere.nightSkyEnabled);
+    writer.Key("moonIntensity"); writer.Double(settings.atmosphere.moonIntensity);
+    writer.Key("starIntensity"); writer.Double(settings.atmosphere.starIntensity);
     // Aerial perspective is part of the same sky description; the distance field is in world
     // units, not metres, so a scene keeps its own unit scale.
     writer.Key("aerialPerspectiveEnabled"); writer.Bool(settings.atmosphere.aerialPerspectiveEnabled);
@@ -320,6 +323,13 @@ void readRendererSettings(const scene_json::Value& value, RendererSettings& sett
     settings.atmosphere.groundAlbedo = readFloat(
         value, "groundAlbedo", settings.atmosphere.groundAlbedo
     );
+    settings.atmosphere.nightSkyEnabled = readBool(
+        value, "nightSkyEnabled", settings.atmosphere.nightSkyEnabled
+    );
+    settings.atmosphere.moonIntensity = std::clamp(readFloat(
+        value, "moonIntensity", settings.atmosphere.moonIntensity), 0.0f, 4.0f);
+    settings.atmosphere.starIntensity = std::clamp(readFloat(
+        value, "starIntensity", settings.atmosphere.starIntensity), 0.0f, 4.0f);
     settings.atmosphere.aerialPerspectiveEnabled = readBool(
         value, "aerialPerspectiveEnabled", settings.atmosphere.aerialPerspectiveEnabled
     );

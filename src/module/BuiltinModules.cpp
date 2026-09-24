@@ -1,4 +1,6 @@
 #include "module/BuiltinModules.h"
+#include "render/Camera.h"
+#include "render/Renderer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,6 +13,13 @@
 
 #include <glm/common.hpp>
 #include <glm/trigonometric.hpp>
+
+void ISceneModule::applyPresentation(const SceneContext&,
+    const CameraOrbitState& authoredCamera, const RendererSettings& authoredRenderer,
+    CameraOrbitState& camera, RendererSettings& renderer) const {
+    camera = authoredCamera;
+    renderer = authoredRenderer;
+}
 
 namespace {
 
@@ -224,5 +233,7 @@ ModuleRegistry createBuiltinModuleRegistry() {
         },
         error
     );
+    const auto coastal = makeCoastalSequenceModule();
+    registry.add(coastal->manifest(), []() { return makeCoastalSequenceModule(); }, error);
     return registry;
 }

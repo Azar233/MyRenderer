@@ -4,6 +4,8 @@
 #include "module/ParameterRegistry.h"
 #include "module/SimulationCache.h"
 #include "module/RuntimeScene.h"
+#include "render/Camera.h"
+#include "render/Renderer.h"
 
 #include <cmath>
 #include <iostream>
@@ -537,6 +539,53 @@ void testModuleFailureIsolation(SceneEntityId first, const Scene& editScene) {
     }
 }
 
+void testCoastalSequence(const Scene& editScene) {
+    ModuleRegistry registry = createBuiltinModuleRegistry();
+    require(registry.contains(BuiltinModules::coastalSequenceId),
+            "the coastal sequence must be registered");
+    std::string error;
+    ModuleRuntime runtime(registry);
+    require(runtime.configure(BuiltinModules::coastalSequenceId, {}, 7U, error), error.c_str());
+    require(runtime.reset(editScene, 0, 24, 24, error), error.c_str());
+    CameraOrbitState authoredCamera;
+    RendererSettings authoredRenderer;
+    authoredRenderer.water.enabled = false;
+    authoredRenderer.atmosphere.enabled = false;
+    CameraOrbitState startCamera;
+    RendererSettings startRenderer;
+    runtime.applyPresentation(authoredCamera, authoredRenderer, startCamera, startRenderer);
+    require(startRenderer.water.enabled && startRenderer.atmosphere.enabled,
+            "the sequence must enable water and the common solar sky");
+    requireClose(startRenderer.atmosphere.sunElevationDegrees, 48.0f, "noon sun");
+    require(startRenderer.atmosphere.nightSkyEnabled,
+            "the sequence must enable optional moon and stars");
+    requireClose(startRenderer.water.amplitude, 0.08f, "calm sea");
+    requireClose(startRenderer.water.timeSeconds, 0.0f, "first wave time");
+    require(runtime.runToFrame(24, error), error.c_str());
+    CameraOrbitState endCamera;
+    RendererSettings endRenderer;
+    runtime.applyPresentation(authoredCamera, authoredRenderer, endCamera, endRenderer);
+    requireClose(endRenderer.atmosphere.sunElevationDegrees, -8.0f, "night sun");
+    requireClose(endRenderer.atmosphere.moonIntensity, 1.0f, "night moon intensity");
+    require(endRenderer.atmosphere.skyIntensity < startRenderer.atmosphere.skyIntensity,
+            "night sky energy must fall below daylight");
+    requireClose(endRenderer.atmosphere.aerialPerspectiveStrength, 1.1f, "sunset fog");
+    requireClose(endRenderer.water.amplitude, 0.34f, "rough sea");
+    requireClose(endRenderer.water.timeSeconds, 1.0f, "last wave time");
+    requireClose(endCamera.yawDegrees, 4.0f, "camera trajectory");
+    requireClose(authoredRenderer.water.amplitude, WaterSettings{}.amplitude,
+                 "preview must preserve authored settings");
+    require(runtime.reset(editScene, 0, 24, 24, error), error.c_str());
+    require(runtime.runToFrame(24, error), error.c_str());
+    CameraOrbitState repeatedCamera;
+    RendererSettings repeatedRenderer;
+    runtime.applyPresentation(authoredCamera, authoredRenderer, repeatedCamera, repeatedRenderer);
+    requireClose(repeatedRenderer.water.amplitude, endRenderer.water.amplitude,
+                 "reset and scrub must reproduce the same sea");
+    requireClose(repeatedRenderer.atmosphere.sunAzimuthDegrees,
+                 endRenderer.atmosphere.sunAzimuthDegrees, "reset and scrub must reproduce the sun");
+}
+
 } // namespace
 
 int main() {
@@ -552,6 +601,7 @@ int main() {
         testSimulationCache(first, second, stage, editScene);
         testModuleCancellation(editScene);
         testModuleFailureIsolation(first, editScene);
+        testCoastalSequence(editScene);
         std::cout << "Module runtime tests passed\n";
         return 0;
     } catch (const std::exception& error) {

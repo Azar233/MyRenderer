@@ -52,6 +52,7 @@ public:
     Application& operator=(const Application&) = delete;
 
     int run(const std::filesystem::path& initialModel = {});
+    int runRasterSequence(const RenderJob& job);
 
 private:
     void initializeWindow();
@@ -137,6 +138,7 @@ private:
 
     GLFWwindow* window_{nullptr};
     bool guiInitialized_{false};
+    bool rasterSequenceMode_{false};
     bool shutdownComplete_{false};
 
     std::unique_ptr<Renderer> renderer_;

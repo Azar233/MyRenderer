@@ -107,6 +107,37 @@ RgbaImage readRendererPng(const std::string& path) {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 3 && std::string(argv[1]) == "--night-check") {
+            const RgbaImage image = readRendererPng(argv[2]);
+            if (image.width != 640U || image.height != 360U) {
+                throw std::runtime_error("Coastal night frame must be 640x360");
+            }
+            double skySum = 0.0;
+            double waterSum = 0.0;
+            std::size_t skyBrightPixels = 0U;
+            for (std::uint32_t y = 0U; y < image.height; ++y) {
+                if (y >= 70U && (y < 120U || y >= 300U)) continue;
+                for (std::uint32_t x = 0U; x < image.width; ++x) {
+                    const std::size_t offset = (static_cast<std::size_t>(y) * image.width + x) * 4U;
+                    const std::uint8_t red = image.pixels[offset];
+                    const std::uint8_t green = image.pixels[offset + 1U];
+                    const std::uint8_t blue = image.pixels[offset + 2U];
+                    const double brightness = (static_cast<double>(red) + green + blue) / 3.0;
+                    if (y < 70U) {
+                        skySum += brightness;
+                        skyBrightPixels += std::max({red, green, blue}) > 180U ? 1U : 0U;
+                    } else {
+                        waterSum += brightness;
+                    }
+                }
+            }
+            const double skyMean = skySum / static_cast<double>(image.width * 70U);
+            const double waterMean = waterSum / static_cast<double>(image.width * 180U);
+            std::cout << "Coastal night: sky mean=" << skyMean
+                      << ", water mean=" << waterMean
+                      << ", bright sky pixels=" << skyBrightPixels << '\n';
+            return skyMean >= 40.0 && waterMean >= 25.0 && skyBrightPixels >= 8U ? 0 : 1;
+        }
         if (argc < 3 || argc > 5) {
             std::cerr << "Usage: ImageComparison baseline.png current.png [max-mae] [max-changed-fraction]\n";
             return 2;

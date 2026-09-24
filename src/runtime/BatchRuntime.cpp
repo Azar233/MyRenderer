@@ -141,6 +141,14 @@ void applyModuleResult(const Scene& scene, SceneDocument& document) {
     }
 }
 
+void applyModulePresentation(const ModuleRuntime& runtime, SceneDocument& document) {
+    CameraOrbitState camera;
+    RendererSettings renderer;
+    runtime.applyPresentation(document.camera, document.renderer, camera, renderer);
+    document.camera = camera;
+    document.renderer = renderer;
+}
+
 // Applies the job's module to `document` for `frame`.
 //
 // With `job.simulationCache` set, a matching baked frame is reused instead of stepping
@@ -199,6 +207,7 @@ bool applyJobModule(
                 applied.cacheStatus = SimulationCacheStatus::Hit;
                 applied.cacheMessage = message;
                 applyModuleResult(runtime.runtimeScene().scene(), document);
+                applyModulePresentation(runtime, document);
                 return true;
             } else {
                 status = SimulationCacheStatus::Stale;
@@ -215,6 +224,7 @@ bool applyJobModule(
     if (!runtime.runToFrame(frame, error)) return false;
     applied.report = runtime.report();
     applyModuleResult(runtime.runtimeScene().scene(), document);
+    applyModulePresentation(runtime, document);
     return true;
 }
 
@@ -700,6 +710,11 @@ bool runRenderJobFrame(const RenderJob& job, int frame, BatchFrameResult& result
                        const ModuleRegistry* modules) {
     result = BatchFrameResult{};
     result.frame = frame;
+    if (job.renderer != "cpu-path-traced") {
+        error = "Raster Render Jobs run with MyRenderer raster-sequence <job.renderjob>";
+        result.status = BatchFrameStatus::Failed;
+        return false;
+    }
     if (cancellation != nullptr && cancellation->isCancellationRequested()) {
         result.status = BatchFrameStatus::Cancelled;
         error = "Render Job cancelled";

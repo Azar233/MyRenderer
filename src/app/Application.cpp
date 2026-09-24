@@ -163,6 +163,69 @@ Application::~Application() {
     shutdown();
 }
 
+int Application::runRasterSequence(const RenderJob& job) {
+    if (job.renderer != "raster") {
+        std::cerr << "raster-sequence requires a Render Job with renderer 'raster'\n";
+        return 65;
+    }
+    rasterSequenceMode_ = true;
+    vsync_ = false;
+    initializeWindow();
+    initializeRenderer();
+    initializeImporters();
+    if (!openScene(job.scenePath)) {
+        std::cerr << statusMessage_ << '\n';
+        return 66;
+    }
+    ModuleRuntime runtime(moduleRegistry_);
+    std::string error;
+    if (!job.module.id.empty()) {
+        if (!runtime.configure(job.module.id, job.module.parameters, job.module.seed, error)
+            || !runtime.reset(scene_, job.startFrame, job.endFrame, job.framesPerSecond, error)) {
+            std::cerr << "Raster module failed: " << error << '\n';
+            return 70;
+        }
+    }
+    for (int frame = job.startFrame; frame <= job.endFrame; ++frame) {
+        glfwPollEvents();
+        if (glfwWindowShouldClose(window_)) return 130;
+        if (runtime.active() && !runtime.runToFrame(frame, error)) {
+            std::cerr << "Raster module frame " << frame << " failed: " << error << '\n';
+            return 70;
+        }
+        CameraOrbitState frameCamera = camera_.orbitState();
+        RendererSettings frameSettings = rendererSettings_;
+        if (runtime.active()) {
+            runtime.applyPresentation(camera_.orbitState(), rendererSettings_,
+                frameCamera, frameSettings);
+        } else {
+            frameSettings.water.timeSeconds = static_cast<float>(frame - job.startFrame)
+                / static_cast<float>(job.framesPerSecond);
+        }
+        Camera camera;
+        camera.setOrbitState(frameCamera);
+        const Scene& frameScene = runtime.active() ? runtime.runtimeScene().scene() : scene_;
+        renderer_->render(frameScene.buildRenderItems(), camera, frameSettings,
+            static_cast<int>(job.renderSettings.width),
+            static_cast<int>(job.renderSettings.height));
+        const std::filesystem::path output = renderJobFrameStem(job, frame).string() + ".png";
+        if (std::filesystem::exists(output)) {
+            std::cerr << "Raster frame output already exists: " << output << '\n';
+            return 73;
+        }
+        std::filesystem::create_directories(output.parent_path());
+        const std::filesystem::path partial = output.string() + ".partial.png";
+        if (!renderer_->saveScreenshot(partial, error)) {
+            std::cerr << "Raster frame " << frame << " failed: " << error << '\n';
+            return 74;
+        }
+        std::filesystem::rename(partial, output);
+        std::cout << "Raster frame " << frame << ": " << output << '\n';
+    }
+    shutdown();
+    return 0;
+}
+
 int Application::run(const std::filesystem::path& initialModel) {
     benchmarkMode_ = std::getenv("MYRENDERER_BENCHMARK_FRAMES") != nullptr
         || std::getenv("MYRENDERER_BENCHMARK_OUTPUT") != nullptr;
@@ -935,7 +998,8 @@ void Application::initializeWindow() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_SAMPLES, 0);
-    if (std::getenv("MYRENDERER_SMOKE_TEST") != nullptr || benchmarkMode_ || prismReelMode_) {
+    if (std::getenv("MYRENDERER_SMOKE_TEST") != nullptr || benchmarkMode_ || prismReelMode_
+        || rasterSequenceMode_) {
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
     }
 #ifndef NDEBUG
@@ -2774,6 +2838,15 @@ void Application::drawViewportPanel() {
         ? static_cast<float>(std::fmod(glfwGetTime() * 0.16, 1.0))
         : 0.0f;
     rendererSettings_.water.timeSeconds = animationTimeSeconds_;
+    Camera previewCamera = camera_;
+    RendererSettings previewSettings = rendererSettings_;
+    if (modulePreviewEnabled() && moduleRuntime_.active()
+        && moduleRuntime_.report().status == ModuleRunStatus::Ready) {
+        CameraOrbitState animatedCamera;
+        moduleRuntime_.applyPresentation(camera_.orbitState(), rendererSettings_,
+            animatedCamera, previewSettings);
+        previewCamera.setOrbitState(animatedCamera);
+    }
     if (lightStressDemoEnabled_ || instanceStressDemoEnabled_) {
         for (const RenderItem& item : viewportScene().buildRenderItems()) {
             if (std::find(stressEntities_.begin(), stressEntities_.end(), item.entityId) == stressEntities_.end()
@@ -2786,7 +2859,7 @@ void Application::drawViewportPanel() {
     if (cpuPreviewVisible) {
         updateCpuPreview(width, height);
     } else {
-        renderer_->render(renderItems, camera_, rendererSettings_, width, height);
+        renderer_->render(renderItems, previewCamera, previewSettings, width, height);
     }
     if (referenceComparisonMode_ && !referenceComparisonComplete_
         && !pendingModelImport_.has_value() && !scene_.entities().empty()) {
@@ -2798,7 +2871,7 @@ void Application::drawViewportPanel() {
     }
     if (!cpuPreviewVisible && !benchmarkMode_ && !prismReelMode_ && !referenceComparisonMode_
         && !hideSelectionOutlineForAutomation_) {
-        renderer_->drawSelectionOutline(renderItems, camera_, selectedSceneEntity_, rendererSettings_.cullBackFaces);
+        renderer_->drawSelectionOutline(renderItems, previewCamera, selectedSceneEntity_, previewSettings.cullBackFaces);
     }
 
     if (prismReelMode_ && model_ != nullptr && !pendingModelImport_.has_value()) {

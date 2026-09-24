@@ -245,6 +245,9 @@ inline EditorAtmosphereSettingsPayload captureAtmosphereSettings(const RendererS
     snapshot.skyIntensity = std::clamp(settings.atmosphere.skyIntensity, 0.0f, 20.0f);
     snapshot.sunIntensity = std::clamp(settings.atmosphere.sunIntensity, 0.0f, 8.0f);
     snapshot.groundAlbedo = std::clamp(settings.atmosphere.groundAlbedo, 0.0f, 1.0f);
+    snapshot.nightSkyEnabled = settings.atmosphere.nightSkyEnabled;
+    snapshot.moonIntensity = std::clamp(settings.atmosphere.moonIntensity, 0.0f, 4.0f);
+    snapshot.starIntensity = std::clamp(settings.atmosphere.starIntensity, 0.0f, 4.0f);
     // Aerial perspective is part of the atmosphere domain because it is the same air, integrated
     // between the camera and the geometry. The scale height is in world units, so its ceiling is
     // generous: a scene may model metres, kilometres or something arbitrary.

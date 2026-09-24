@@ -13,6 +13,7 @@ uniform vec3 uLightDirection;
 uniform vec3 uLightColor;
 uniform float uDiffuseStrength;
 uniform float uEnvironmentIntensity;
+uniform float uTwilightFactor;
 uniform float uFoamStrength;
 uniform bool uShadowsEnabled;
 uniform samplerCube uPrefilteredEnvironmentMap;
@@ -118,6 +119,7 @@ void main() {
     vec3 transmittance = exp(-absorption * thickness);
     vec3 subsurface = vec3(0.012, 0.085, 0.12)
         + texture(uIrradianceMap, normal).rgb * 0.025 * uEnvironmentIntensity;
+    subsurface *= uTwilightFactor;
     vec3 transmission = texture(uOpaqueSceneColor, refractedUv).rgb
         * transmittance + subsurface * (vec3(1.0) - transmittance);
     float waterShadow = shadowVisibility(normal);
@@ -135,6 +137,6 @@ void main() {
     float shoreline = (1.0 - smoothstep(0.08, 1.1, thickness))
         * (0.65 + 0.35 * crestNoise);
     float foam = clamp(max(whitecap, shoreline) * uFoamStrength, 0.0, 1.0);
-    color = mix(color, vec3(0.68, 0.82, 0.86), foam);
+    color = mix(color, vec3(0.68, 0.82, 0.86) * uTwilightFactor, foam);
     fragmentColor = vec4(color, 1.0);
 }

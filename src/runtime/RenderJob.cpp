@@ -246,8 +246,17 @@ bool validateRenderJob(const RenderJob& job, std::string& error) {
         error = "Render Job schemaVersion 1 cannot carry a module; use schemaVersion 2";
     } else if (!job.module.id.empty() && job.module.id.find_first_of(" \t\n") != std::string::npos) {
         error = "Render Job module id must not contain whitespace";
-    } else if (job.renderer != "cpu-path-traced") {
-        error = "P1-0B v1 supports renderer 'cpu-path-traced' only";
+    } else if (job.renderer != "cpu-path-traced" && job.renderer != "raster") {
+        error = "Render Job renderer must be 'cpu-path-traced' or 'raster'";
+    } else if (job.renderer == "raster"
+               && (job.outputs.size() != 1U || job.outputs.front() != pathtracer::RenderOutput::Beauty
+                   || job.outputFormats.size() != 1U
+                   || job.outputFormats.front() != pathtracer::RenderFileFormat::Png)) {
+        error = "Raster Render Job supports beauty PNG output only";
+    } else if (job.renderer == "raster" && job.resume) {
+        error = "Raster Render Job resume is unavailable until output manifests are verified";
+    } else if (job.renderer == "raster" && !job.simulationCache.empty()) {
+        error = "Raster Render Job does not consume a simulation cache";
     } else if (job.camera != "scene") {
         error = "P1-0B v1 supports camera 'scene' only";
     } else if (!std::filesystem::is_regular_file(job.scenePath)) {

@@ -40,6 +40,25 @@ int main() {
         require(renderJobFrameStem(job, 7).filename() == "frame_0007", "frame token expansion failed");
         require(validateRenderJobAssets(job, error), error.c_str());
 
+        RenderJob rasterJob;
+        require(loadRenderJob(sourceRoot / "assets" / "renderjobs"
+                    / "04_coastal_sequence.renderjob", rasterJob, error), error.c_str());
+        require(rasterJob.renderer == "raster", "coastal fixture must select the raster backend");
+        const ModuleRegistry rasterModules = createBuiltinModuleRegistry();
+        require(validateRenderJobAssets(rasterJob, error, &rasterModules), error.c_str());
+        BatchFrameResult wrongBackend;
+        require(!runRenderJobFrame(rasterJob, 0, wrongBackend, error),
+                "CPU Batch must reject raster frames explicitly");
+        require(error.find("raster-sequence") != std::string::npos,
+                "raster backend rejection must name its command");
+        rasterJob.resume = true;
+        require(!validateRenderJob(rasterJob, error),
+                "raster resume must be rejected until output manifests are implemented");
+        rasterJob.resume = false;
+        rasterJob.outputs.push_back(pathtracer::RenderOutput::Depth);
+        require(!validateRenderJob(rasterJob, error),
+                "raster AOVs must be rejected until supported");
+
         const std::filesystem::path outputRoot = std::filesystem::temp_directory_path()
             / "MyRendererRenderJobAcceptance";
         std::error_code cleanupError;

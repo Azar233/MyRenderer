@@ -71,9 +71,16 @@ SceneSnapshotLighting captureSceneLighting(const RendererSettings& settings) {
         const glm::vec3 transmittance = atmosphere::sunTransmittance(settings.atmosphere);
         const float luminance = 0.2126f * transmittance.r + 0.7152f * transmittance.g
             + 0.0722f * transmittance.b;
-        lighting.directional.radiance *= std::max(luminance, 0.0f)
-            * std::max(settings.atmosphere.sunIntensity, 0.0f)
-            * atmosphere::skyLightColor(settings.atmosphere);
+        const float sunScale = std::max(luminance, 0.0f)
+            * std::max(settings.atmosphere.sunIntensity, 0.0f);
+        const float moonScale = atmosphere::moonKeyStrength(settings.atmosphere);
+        if (moonScale > sunScale) {
+            lighting.directional.direction = -atmosphere::moonDirection(settings.atmosphere);
+            lighting.directional.radiance *= moonScale * glm::vec3(0.65f, 0.76f, 1.0f);
+        } else {
+            lighting.directional.radiance *= sunScale
+                * atmosphere::skyLightColor(settings.atmosphere);
+        }
     }
     lighting.environment.backgroundColor = settings.backgroundColor;
     lighting.environment.intensity = std::max(settings.environmentIntensity, 0.0f);

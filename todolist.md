@@ -358,7 +358,7 @@ P1-0 验收：一个固定 C++ Module 驱动场景与 24 帧参数动画，GUI P
 | 2 Aerial Perspective | 已收口 | `opticalDepthAlongSegment()` / `verticalOpticalDepth()` 有限线段积分器与整柱光学厚度、`.myscene` 三个新字段、Inspector `Aerial perspective` 子节、`postprocess.frag` 深度重建合成（Height Fog → Aerial Perspective → 显示变换）、disk-free 天顶/地平线 in-scatter、`MYRENDERER_AERIAL_*` 覆盖项、`gpu-smoke` On/Off 两条分支、[`docs/atmosphere-sky.md`](docs/atmosphere-sky.md) 记录实现与近似 | CPU Path Tracer 尚不做空中透视 |
 | 3 室外阴影 | 已收口 | 3～4 级 CSM、Texel Snapping、Bounds 拟合、Bias、Forward/Deferred 选层与调试视图、`.myscene`/Inspector、海岸夹具与 GPU 计时；证据见 [`docs/shadow-cascades.md`](docs/shadow-cascades.md) | PCSS 留给后续质量档 |
 | 4 海面 | 已收口 | 相机相关连续网格、Gerstner 波、场景颜色/深度透射、Beer-Lambert 吸收、白冠/岸线泡沫、水下雾、Forward/Deferred 与 TAA 运动矢量、Calm/Windy/Storm、Low/High 质量及 GPU 预算；证据见 [`docs/water-synthesis.md`](docs/water-synthesis.md) | 屏幕空间折射和 CPU Path Tracer 水面仍是已知边界 |
-| 5 昼夜与海况序列 | 未开始 | 切片 4 已提供海况预设和 Low/High GPU 预算 | 太阳/雾/风/波浪/相机轨迹的 Module 参数、Render Job 帧序列及昼夜海况过渡 |
+| 5 昼夜与海况序列 | 已收口 | `myrenderer.core.coastal-sequence` 参数化太阳、月光、星空、雾、风、波浪和相机；共享环境与方向光从日光过渡到月光，隐藏 OpenGL 栅格 Render Job 输出 13 帧 Beauty PNG，双运行哈希一致并检查夜帧亮度；证据见 [`docs/coastal-sequence.md`](docs/coastal-sequence.md) | 真实天体历、月相及恒星星表尚未实现；栅格任务的 AOV、Resume、Simulation Cache、逐帧 Report 留给 Batch 平台扩展；CPU Path Tracer 水面仍是已知边界 |
 | 6 体积云 | 调研完成，未开始 | 文献、算法流水线、OpenGL 3.3 可行性边界、集成风险、分阶段路径与确定性要求已写入 [`docs/research/volumetric_clouds_brief.md`](docs/research/volumetric_clouds_brief.md) | 见下方「P1-A 切片 6」工作包 C1～C7 |
 
 - [x] 实现 Rayleigh/Mie Atmosphere（解析单次散射 + Kasten-Young 气团 + 闭式指数积分）并统一太阳方向：天空、方向光、阴影贴图、方向光能量共用同一 `sunDirection()`；太阳盘亮度锚定到晴天地面照度比 `E_sun/E_sky≈10`，使环境下半球与关键光照亮的地面一致。
@@ -370,7 +370,9 @@ P1-0 验收：一个固定 C++ Module 驱动场景与 24 帧参数动画，GUI P
 - [x] 实现四组 Gerstner Waves，输出解析位移、法线、切线与速度；明确标注为 Wave Synthesis，`water-wave-synthesis` 用时间差分验算速度。
 - [x] 复用 Fresnel、IOR、Transmission、Beer-Lambert 与环境反射，增加真实海床水深、白冠/岸线泡沫和水下雾；固定深度与水下夹具及图像对照见 [`docs/water-synthesis.md`](docs/water-synthesis.md)。
 - [x] 水面接入 Shadow、Motion Vector、TAA 与运动调试图，制作 Calm / Windy / Storm 三组海况及 Low/High 档；`water-synthesis-acceptance` 覆盖 On/Off、时间变化、双路径、运动、水深、预设和质量档，`water-synthesis-benchmark` 固定 1280×720 GPU 预算。
-- [ ] 将太阳时间、雾、风、波浪和相机轨迹暴露为 C++ Module 参数；通过 Render Job 输出固定昼夜/海况帧序列，而不是只保存手调静帧。
+- [x] 将太阳方位、雾、风、波浪和相机轨迹暴露为 C++ Module 参数；通过栅格 Render Job 输出可重复的 13 帧正午、日落、夜间海况序列，证据见 [`docs/coastal-sequence.md`](docs/coastal-sequence.md)。
+- [x] 修复夜帧全黑：夜空开关默认关闭，海岸序列启用程序化星点与月盘、冷色月光主光及夜间海面照明；增加夜帧亮度与重复渲染验收，证据见 [`docs/coastal-sequence.md`](docs/coastal-sequence.md)。
+- [ ] 如需天文准确的昼夜循环，再加入经纬度/日期驱动的日月位置、月相和恒星星表；当前为可重复的视觉演示轨道。
 
 #### P1-A 切片 6：体积云
 
@@ -529,7 +531,7 @@ cmake --build build-ci-msvc --config Release --target renderer-benchmark-suite
 3. **P0-C GUI CPU Progressive Preview（已完成）**。
 4. **P0-D AOV Denoising + Sampling 改进（已完成；GPU 接口按门槛暂不冻结）**。
 5. **P1-0 C++ 模块渲染工作台（已完成）**：Workspace 业务化（A2a/A2b1/A2b2/A2b3、Log/Profile 汇总真实诊断）、Batch B1～B4、C1/C2（Timeline / Runtime Scene / Module API / ParameterRegistry / Registry / runner / Simulation Cache）、`.renderjob` schema 2 模块段与 `module-rendering-acceptance` 均已落地并通过总验收（含 GUI/CLI 同帧对照）。仅剩 A2c 的 Modules 构建与启停动作，不属于平台门槛。
-6. **P1-A 物理天空 + Aerial Perspective + 体积云 + CSM + Gerstner Water Hero Scene**，同时交付由 C++ Module 驱动的可重复昼夜/海况序列。切片 1「Rayleigh/Mie 天空与统一太阳方向」、切片 2「Aerial Perspective」、切片 3「3～4 级 CSM」与切片 4「Gerstner 海面、透射和水下雾」已完成；水面证据见 [`docs/water-synthesis.md`](docs/water-synthesis.md)。下一步是切片 5 的 C++ Module + Render Job 参数序列。切片 6「体积云」已完成文献与可行性调研，工作包 C1～C7 见第 4 节。
+6. **P1-A 物理天空 + Aerial Perspective + 体积云 + CSM + Gerstner Water Hero Scene**，同时交付由 C++ Module 驱动的可重复昼夜/海况序列。切片 1～5 已完成；序列证据见 [`docs/coastal-sequence.md`](docs/coastal-sequence.md)。下一步是切片 6「体积云」，其文献与可行性调研及工作包 C1～C7 见第 4 节。
 7. **P1-B Vulkan Raster → Ray Query → GPU Path Tracing + SVGF**，接入同一 Workspace/Render Job。
 8. **P1-C ReSTIR DI 对照实验**。
 9. 根据作品集缺口在 **P2 极光/体积扩展**、**P2 水体/天气 Compute** 与 **P2-D 动态 C++ Plugin/DCC 协作**中只选一个继续。

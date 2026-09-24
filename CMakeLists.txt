@@ -188,6 +188,7 @@ target_link_libraries(MyRendererBatch PRIVATE MyRendererBatchRuntime MyRendererM
 # the consumer, exactly like the other shared sources in this project.
 add_library(MyRendererModules STATIC
     src/module/BuiltinModules.cpp
+    src/module/CoastalSequenceModule.cpp
     src/module/ModuleRegistry.cpp
     src/module/ModuleRuntime.cpp
     src/module/ParameterRegistry.cpp
@@ -201,7 +202,7 @@ target_include_directories(MyRendererModules PRIVATE
 target_compile_definitions(MyRendererModules PRIVATE
     MYRENDERER_BUILD_ID="${MYRENDERER_BUILD_ID}"
 )
-target_link_libraries(MyRendererModules PUBLIC glm::glm)
+target_link_libraries(MyRendererModules PUBLIC glm::glm PRIVATE glad_gl_core_33)
 if(MSVC)
     target_compile_options(MyRendererModules PRIVATE /W4 /permissive- /utf-8)
 else()
@@ -314,6 +315,20 @@ target_link_libraries(MyRenderer PRIVATE
     MyRendererPathTracing
     MyRendererBatchRuntime
     MyRendererModules
+)
+
+if(BUILD_TESTING)
+    set(COASTAL_COMPARATOR "$<TARGET_FILE:MyRendererImageComparison>")
+endif()
+add_custom_target(coastal-sequence-acceptance
+    COMMAND ${CMAKE_COMMAND}
+            -DRENDERER=$<TARGET_FILE:MyRenderer>
+            -DCOMPARATOR=${COASTAL_COMPARATOR}
+            -DJOB=${CMAKE_CURRENT_SOURCE_DIR}/assets/renderjobs/04_coastal_sequence.renderjob
+            -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/CoastalSequenceAcceptance.cmake
+    DEPENDS MyRenderer
+    COMMENT "Checking deterministic raster Render Job day-to-sunset sequence"
 )
 
 add_custom_target(path-tracing-raster-comparison
@@ -442,7 +457,7 @@ if(BUILD_TESTING)
         tests/ModuleRuntimeTests.cpp
         src/scene/Scene.cpp
     )
-    target_link_libraries(MyRendererModuleTests PRIVATE MyRendererModules)
+    target_link_libraries(MyRendererModuleTests PRIVATE MyRendererModules glad_gl_core_33)
     target_include_directories(MyRendererModuleTests PRIVATE src)
     if(MSVC)
         target_compile_options(MyRendererModuleTests PRIVATE /W4 /permissive- /utf-8)
@@ -632,6 +647,7 @@ if(BUILD_TESTING)
         ${assimp_BINARY_DIR}/contrib/zlib
     )
     target_link_libraries(MyRendererImageComparison PRIVATE zlibstatic)
+    add_dependencies(coastal-sequence-acceptance MyRendererImageComparison)
     if(MSVC)
         target_compile_options(MyRendererImageComparison PRIVATE /W4 /permissive- /utf-8)
     else()

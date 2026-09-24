@@ -252,6 +252,9 @@ struct EditorAtmosphereSettingsPayload {
     float skyIntensity{1.0f};
     float sunIntensity{1.0f};
     float groundAlbedo{0.10f};
+    bool nightSkyEnabled{false};
+    float moonIntensity{1.0f};
+    float starIntensity{1.0f};
     bool aerialPerspectiveEnabled{false};
     float aerialPerspectiveStrength{1.0f};
     float aerialPerspectiveScaleHeight{60.0f};

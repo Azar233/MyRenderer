@@ -37,6 +37,11 @@ struct AtmosphereParameters {
     float skyIntensity{1.0f};
     float sunIntensity{1.0f};
     float groundAlbedo{0.10f};
+    // Optional artistic night sky. Off for existing scenes; the moon follows a repeatable
+    // presentation orbit driven by the sun, not a calendar-based ephemeris.
+    bool nightSkyEnabled{false};
+    float moonIntensity{1.0f};
+    float starIntensity{1.0f};
     // Aerial perspective: the air between the camera and the geometry, integrated with the same
     // coefficients as the sky (`opticalDepthAlongSegment`). Off by default so a scene that never
     // asked for it keeps exactly the pixels it had.
@@ -51,6 +56,9 @@ struct AtmosphereParameters {
 // Unit vector pointing from the scene towards the sun. The raster directional light travels
 // along `-sunDirection()`, which is what `RendererSettings::lightDirection` stores.
 glm::vec3 sunDirection(const AtmosphereParameters& parameters);
+glm::vec3 moonDirection(const AtmosphereParameters& parameters);
+float nightVisibility(const AtmosphereParameters& parameters);
+float moonKeyStrength(const AtmosphereParameters& parameters);
 
 // Whether two parameter sets are the same *in a render*. Evaluating the sky is expensive -- an
 // environment rebuild is a few hundred milliseconds, an equirectangular radiance map is tens -- so

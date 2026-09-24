@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include <glm/common.hpp>
 #include <glm/geometric.hpp>
@@ -32,6 +33,62 @@ constexpr float mieAnisotropy = 0.5f;
 // lights.
 constexpr float sunDiskRadianceScale = 4.6e3f;
 constexpr float sunAngularRadius = 0.6f;
+constexpr float moonAngularRadius = 1.3f; // wide enough to survive the environment map
+float saturate(float value);
+
+std::uint32_t starHash(std::uint32_t x) {
+    x ^= x >> 16U;
+    x *= 0x7feb352dU;
+    x ^= x >> 15U;
+    x *= 0x846ca68bU;
+    return x ^ (x >> 16U);
+}
+
+glm::vec3 nightRadiance(const glm::vec3& direction, const AtmosphereParameters& parameters) {
+    const float visibility = nightVisibility(parameters);
+    if (!parameters.nightSkyEnabled || direction.y <= 0.0f) return glm::vec3(0.0f);
+    const float fillT = saturate((10.0f - parameters.sunElevationDegrees) / 18.0f);
+    const float twilightFill = fillT * fillT * (3.0f - 2.0f * fillT);
+    if (twilightFill <= 0.0f) return glm::vec3(0.0f);
+    const glm::vec3 moon = moonDirection(parameters);
+    const float moonGlow = std::pow(std::max(glm::dot(direction, moon), 0.0f), 12.0f);
+    glm::vec3 result = glm::vec3(0.040f, 0.060f, 0.110f) * twilightFill
+        + glm::vec3(0.035f, 0.045f, 0.070f) * moonGlow
+            * std::max(parameters.moonIntensity, 0.0f) * visibility;
+
+    // Stable spherical cells yield small stars with no frame-dependent random state.
+    // Centers stay inside their cells, so one lookup per sky sample is sufficient.
+    const float phi = std::atan2(direction.x, direction.z) + pi;
+    const float theta = std::acos(std::clamp(direction.y, 0.0f, 1.0f));
+    const float u = phi * (64.0f / (2.0f * pi));
+    const float v = theta * (48.0f / pi);
+    const int cellX = static_cast<int>(u);
+    const int cellY = static_cast<int>(v);
+    const std::uint32_t hash = starHash(static_cast<std::uint32_t>(cellX)
+        + 131U * static_cast<std::uint32_t>(cellY));
+    if ((hash & 3U) == 0U) {
+        const float centerU = static_cast<float>(cellX) + 0.35f
+            + 0.3f * static_cast<float>((hash >> 8U) & 255U) / 255.0f;
+        const float centerV = static_cast<float>(cellY) + 0.35f
+            + 0.3f * static_cast<float>((hash >> 16U) & 255U) / 255.0f;
+        const float angularX = (u - centerU) * (2.0f * pi / 64.0f) * std::sin(theta);
+        const float angularY = (v - centerV) * (pi / 48.0f);
+        const float distanceDegrees = glm::degrees(std::sqrt(angularX * angularX + angularY * angularY));
+        const float star = saturate((0.45f - distanceDegrees) / 0.25f);
+        const float brightness = 1.5f + 1.5f * static_cast<float>((hash >> 24U) & 255U) / 255.0f;
+        result += glm::vec3(0.75f, 0.84f, 1.0f) * star * brightness
+            * std::max(parameters.starIntensity, 0.0f) * visibility;
+    }
+    const float cosAngle = glm::dot(direction, moon);
+    const float cosRadius = std::cos(glm::radians(moonAngularRadius));
+    if (moon.y > 0.0f && cosAngle > cosRadius) {
+        const float edge = saturate((cosAngle - cosRadius)
+            / std::max(1.0f - cosRadius, 1.0e-5f) * 8.0f);
+        result += glm::vec3(22.0f, 27.0f, 36.0f) * edge
+            * std::max(parameters.moonIntensity, 0.0f) * visibility;
+    }
+    return result;
+}
 
 // Normalises defensively: a degenerate direction (for example a zero vector from an
 // uninitialised uniform) must never turn into NaN radiance downstream.
@@ -147,8 +204,29 @@ glm::vec3 sunDirection(const AtmosphereParameters& parameters) {
     );
 }
 
+glm::vec3 moonDirection(const AtmosphereParameters& parameters) {
+    // A visual day/night orbit with an offset that puts the moon in the coastal camera's
+    // evening sky. A calendar-based orbit can replace this mapping later.
+    const float elevation = glm::radians(-parameters.sunElevationDegrees * 0.6f);
+    const float azimuth = glm::radians(parameters.sunAzimuthDegrees - 90.0f);
+    const float horizontal = std::cos(elevation);
+    return glm::vec3(horizontal * std::sin(azimuth), std::sin(elevation),
+        horizontal * std::cos(azimuth));
+}
+
+float nightVisibility(const AtmosphereParameters& parameters) {
+    if (!parameters.enabled || !parameters.nightSkyEnabled) return 0.0f;
+    const float t = saturate((-parameters.sunElevationDegrees - 2.0f) / 6.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+float moonKeyStrength(const AtmosphereParameters& parameters) {
+    return nightVisibility(parameters) * std::max(parameters.moonIntensity, 0.0f) * 0.55f;
+}
+
 bool parametersMatch(const AtmosphereParameters& a, const AtmosphereParameters& b) {
     if (a.enabled != b.enabled) return false;
+    if (a.nightSkyEnabled != b.nightSkyEnabled) return false;
     // The sun tolerances are angular degrees of movement; the rest are absolute parameter units.
     // Both are set at the point where the change stops being visible as noise in a rendered frame.
     constexpr float sunTolerance = 0.35f;
@@ -159,6 +237,8 @@ bool parametersMatch(const AtmosphereParameters& a, const AtmosphereParameters& 
         && std::abs(a.skyIntensity - b.skyIntensity) < parameterTolerance
         && std::abs(a.sunIntensity - b.sunIntensity) < parameterTolerance
         && std::abs(a.groundAlbedo - b.groundAlbedo) < parameterTolerance
+        && std::abs(a.moonIntensity - b.moonIntensity) < parameterTolerance
+        && std::abs(a.starIntensity - b.starIntensity) < parameterTolerance
         // Aerial perspective does not change the environment cubemap, but it does change what a
         // cached sky is used *for*, so a consumer caching derived data must see it as a change.
         && a.aerialPerspectiveEnabled == b.aerialPerspectiveEnabled
@@ -271,9 +351,13 @@ glm::vec3 skyRadiance(const glm::vec3& viewDirection, const AtmosphereParameters
         // under the horizon in any frame that sees past the ground geometry.
         const glm::vec3 irradianceOverPi = skyIrradianceOverPi(parameters)
             + sunIrradiance(parameters) * (std::max(sunDirection(parameters).y, 0.0f) / pi);
-        return irradianceOverPi * std::clamp(parameters.groundAlbedo, 0.0f, 1.0f);
+        const float fillT = parameters.nightSkyEnabled
+            ? saturate((10.0f - parameters.sunElevationDegrees) / 18.0f) : 0.0f;
+        const float twilightFill = fillT * fillT * (3.0f - 2.0f * fillT);
+        return (irradianceOverPi + glm::vec3(0.040f, 0.060f, 0.110f)
+            * twilightFill) * std::clamp(parameters.groundAlbedo, 0.0f, 1.0f);
     }
-    return scatteringRadiance(direction, parameters);
+    return scatteringRadiance(direction, parameters) + nightRadiance(direction, parameters);
 }
 
 float sunAngularRadiusDegrees() {

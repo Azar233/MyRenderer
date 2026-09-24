@@ -15,7 +15,7 @@ Hero Scene 的目标是一张海岸外景：天空读作白昼或读作金时刻
 
 ### 持久化：`RendererSettings::atmosphere` 与 `.myscene` 字段
 
-`RendererSettings::atmosphere` 保存全部大气参数，`.myscene` 持久化它们（`atmosphereEnabled`、`sunElevationDegrees`、`sunAzimuthDegrees`、`skyTurbidity`、`skyIntensity`、`sunIntensity`、`groundAlbedo` 七个天空字段，加上切片 2 的 `aerialPerspectiveEnabled`、`aerialPerspectiveStrength`、`aerialPerspectiveScaleHeight` 三个字段；旧文件缺少字段时取默认值），Inspector 通过 `EditorCommandType::SetAtmosphereSettings` 编辑它们。Aerial Perspective 与天空同属一个 domain，因为它就是同一片空气、只是积分区间换成相机到表面；入口层拒绝非有限与越界值，捕获层（`EditorDomain::captureAtmosphereSettings`）按控件范围先做归一化，避免手改 `.myscene` 的越界值锁死整个分组。
+`RendererSettings::atmosphere` 保存全部大气参数，`.myscene` 持久化它们（原有的太阳和天空七字段、切片 2 的 Aerial Perspective 三字段，以及昼夜序列新增的 `nightSkyEnabled`、`moonIntensity`、`starIntensity`；旧文件缺少字段时取默认值）。Inspector 通过 `EditorCommandType::SetAtmosphereSettings` 编辑大气域设置；海岸序列的月光和星光强度由 Module 参数控件调整。Aerial Perspective 与天空同属一个 domain，因为它就是同一片空气、只是积分区间换成相机到表面；入口层拒绝非有限与越界值，捕获层（`EditorDomain::captureAtmosphereSettings`）按控件范围先做归一化，避免手改 `.myscene` 的越界值锁死整个分组。夜空默认关闭，避免改变旧场景与已有视觉基线；其模型和局限见 [`coastal-sequence.md`](coastal-sequence.md)。
 
 ### 运行时：`src/optics/Atmosphere.h` / `.cpp` 是天空的唯一描述
 

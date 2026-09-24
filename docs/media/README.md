@@ -22,5 +22,6 @@
 | `p1a-water-synthesis-forward.png` | 固定时间的 Gerstner 海面，展示近景波形和远景连续网格（960 × 540） | `cmake --build build-ci-msvc --config Release --target water-synthesis-acceptance` 后复制 `build-ci-msvc/water-synthesis-acceptance/forward_t1.png` |
 | `p1a-water-depth.png` | 赭色海床经水深吸收透出，礁石接水处出现岸线泡沫（960 × 540） | 同一验收 target 后复制 `build-ci-msvc/water-synthesis-acceptance/depth_on.png` |
 | `p1a-water-underwater.png` | 水下相机的海面与全屏消光（960 × 540） | 同一验收 target 后复制 `build-ci-msvc/water-synthesis-acceptance/underwater_on.png` |
+| `p1a-coastal-sequence-noon-to-night.png` | 切片 5 正午、日落、月夜的天空、海况和相机对照（3 × 640 × 360）；夜帧显示月盘、星点与海面月光反射 | `coastal-sequence-acceptance` 输出 `frame_0000/0009/0012.png` 后横向拼接；详见 [`../coastal-sequence.md`](../coastal-sequence.md) |
 
 新增素材后在本表补一行：文件名、这张图证明什么、怎么重拍。

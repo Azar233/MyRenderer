@@ -319,6 +319,46 @@ int main() {
                     atmosphere::skyRadiance(glm::vec3(0.0f, -1.0f, 0.0f), belowHorizon)
                 ),
                 "a sun below the horizon must not make the ground negative or NaN");
+        require(atmosphere::nightVisibility(belowHorizon) == 0.0f,
+                "legacy night scenes must keep the optional night sky off");
+        const glm::vec3 legacyNight = atmosphere::skyRadiance(
+            glm::vec3(0.0f, 1.0f, 0.0f), belowHorizon);
+        belowHorizon.nightSkyEnabled = true;
+        require(atmosphere::nightVisibility(belowHorizon) == 1.0f,
+                "night sky must reach full strength at the sequence endpoint");
+        require(atmosphere::moonDirection(belowHorizon).y > 0.0f,
+                "the moon must rise as the sun sets");
+        require(atmosphere::moonKeyStrength(belowHorizon) > 0.0f,
+                "moonlight must illuminate night geometry");
+        require(glm::length(atmosphere::skyRadiance(glm::vec3(0.0f, 1.0f, 0.0f), belowHorizon))
+                    > glm::length(legacyNight),
+                "night sky must keep the zenith visible");
+        require(glm::length(atmosphere::skyRadiance(
+                    atmosphere::moonDirection(belowHorizon), belowHorizon)) > 10.0f,
+                "the moon must appear in the common environment");
+        atmosphere::AtmosphereParameters changedNight = belowHorizon;
+        changedNight.starIntensity = 2.0f;
+        require(!atmosphere::parametersMatch(belowHorizon, changedNight),
+                "changing stars must invalidate the cached environment");
+        atmosphere::AtmosphereParameters noStars = belowHorizon;
+        noStars.moonIntensity = 0.0f;
+        noStars.starIntensity = 0.0f;
+        atmosphere::AtmosphereParameters withStars = noStars;
+        withStars.starIntensity = 1.0f;
+        std::size_t visibleStars = 0U;
+        for (int elevation = 2; elevation <= 70; elevation += 2) {
+            for (int azimuth = 0; azimuth < 360; ++azimuth) {
+                const float altitude = glm::radians(static_cast<float>(elevation));
+                const float bearing = glm::radians(static_cast<float>(azimuth));
+                const glm::vec3 starDirection(
+                    std::cos(altitude) * std::sin(bearing), std::sin(altitude),
+                    std::cos(altitude) * std::cos(bearing));
+                visibleStars += glm::length(atmosphere::skyRadiance(starDirection, withStars)
+                    - atmosphere::skyRadiance(starDirection, noStars)) > 0.5f ? 1U : 0U;
+            }
+        }
+        require(visibleStars > 10U, "procedural stars must be visible across the night sky");
+        requireFiniteEverywhere(belowHorizon, "night sky must stay finite");
 
         // Rotating view and sun together must not change the sky: only the angle between them
         // and the view elevation matter.
