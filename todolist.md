@@ -234,7 +234,7 @@ Content Browser 只保留与渲染和模拟有关的分类：Scenes、Models、M
 
 | 工作包 | 当前状态 | 已有可复用基座 | 尚未关闭的验收口 |
 | --- | --- | --- | --- |
-| P1-0A Workspace | A2a/A2b1/A2b2a/A2b2b 已落地，继续业务闭环 | `EditorSession/EditorCommand`、默认 Dock、顶部状态栏、统一 Raster/CPU Overlay、递归十类 Asset Catalog、搜索/类型筛选/排序、Object Inspector 命令化、Renderer 全部设置分组（Stage/Material/Directional Light/PBR-Environment/Shading/Post/Raster/Camera/Runtime/Glass/Caustics/Instancing）领域快照命令与 `EditorDomain` 映射、View 菜单与视口快捷项命令化、Timeline/Modules/Queue/Log 工作区 | 真实图像缩略图、Simulation/Module Parameters、Modules/Log 操作、GPU PT Overlay、场景 Preset 构造动作与 CPU Preview 任务参数的命令化 |
+| P1-0A Workspace | A2a/A2b1/A2b2a/A2b2b 已落地，继续业务闭环 | `EditorSession/EditorCommand`、默认 Dock、顶部状态栏、统一 Raster/CPU Overlay、递归十类 Asset Catalog、搜索/类型筛选/排序、Scene/Model/Render Job 栅格缩略图与内容键失效、Object Inspector 命令化、Renderer 全部设置分组（Stage/Material/Directional Light/PBR-Environment/Shading/Post/Raster/Camera/Runtime/Glass/Caustics/Instancing）领域快照命令与 `EditorDomain` 映射、View 菜单与视口快捷项命令化、Timeline/Modules/Queue/Log 工作区 | 其余类型的预览、Simulation/Module Parameters、Modules/Log 操作、GPU PT Overlay、场景 Preset 构造动作与 CPU Preview 任务参数的命令化 |
 | P1-0B Render Job / Batch | B1～B4 已收口 | `.renderjob` v1、无 ImGui Batch Runtime、Validate、CPU 帧/序列、PNG/RGBE/OpenEXR+AOV、Output Override、原子提交/精确 Resume、Frame Report Manifest、部分产物诊断与安全恢复、Cancellation/状态、持久 Queue 主备恢复、GUI/CLI 一致性验收 | - |
 | P1-0C Timeline / Module Runtime | C1 主体已收口（GUI/Batch/Cache/验收） | `Timeline`、`RuntimeScene` 与内容哈希、`ISceneModule`/`SceneContext`、`ParameterRegistry`、Module Registry/Manifest/Build ID、`ModuleRuntime` runner、`MyRendererModules` 与首个模块 `myrenderer.core.turntable`、`.renderjob` schema 2 模块段与模块 Manifest Frame Report、`simulate`/`bake` 与 Simulation Cache（Hit/Missing/Stale）、`module-rendering-acceptance`、Modules 页面读取真实 Manifest、Inspector `Module` 页自动生成参数控件、Viewport/CPU 预览渲染模块运行态 | `.myscene` 模块选择与参数覆盖、GUI 运行/停止/超时交互、模块超时与进程级隔离、编译错误定位 |
 
@@ -290,7 +290,7 @@ Content Browser 只保留与渲染和模拟有关的分类：Scenes、Models、M
   - [x] Renderer Inspector 已完成 Stage / Material / Directional Light / PBR-Environment / Shading-Stylized / Post / Raster / Camera / Runtime / Glass / Caustics / Instancing 的语义重排与领域命令，且未新增占位状态。
 - [ ] Content Browser 增加 Scenes、Models、Materials、Textures、HDRI、Modules、Simulations、Caches、RenderJobs、Presets 分类，以及搜索、筛选、刷新和缩略图缓存。
   - [x] 递归目录、十类归档、搜索/扩展名筛选、排序、刷新、网格/列表、稳定预览缓存键与 Scene/Model/Render Job 命令动作。
-  - [ ] 为可预览资产生成真实栅格缩略图并按内容键失效；当前元数据卡不冒充最终缩略图。
+  - [x] Scene、Model、Render Job 已生成真实栅格缩略图并按稳定内容键失效；其余类型仍显示明确的元数据卡，见 [`docs/editor-workspace-p1.md`](docs/editor-workspace-p1.md)。
 - [ ] 底部增加 Timeline、Modules、Render Queue、Log/Profile 标签；第一版 Modules 提供打开 Visual Studio、构建指定 CMake Target、启动/停止模块实例和编译错误定位。
 - [ ] UI 只通过 EditorSession/Command 修改 Scene 与任务，不直接持有渲染线程或 GPU 资源生命周期。
   - [x] Scene Explorer、Asset 动作、Render Queue、Object Inspector，以及 Renderer 的 Stage/Material/Directional Light 已走命令入口。
@@ -356,20 +356,20 @@ P1-0 验收：一个固定 C++ Module 驱动场景与 24 帧参数动画，GUI P
 | --- | --- | --- | --- |
 | 1 天空与统一太阳 | 已收口 | `src/optics/Atmosphere.*` 解析式单次散射模型、`EnvironmentMap::useAtmosphere/useHdrSource`、`.myscene` atmosphere 字段、Inspector `Atmosphere` 分组（`SetAtmosphereSettings` 域命令）、`18_atmosphere_sky.myscene` 外景夹具、逐通道方向光颜色（`skyLightColor` + `uLightColor` + CPU PT 同一光源）、CPU Path Tracer 同一天空（`captureSceneLighting` 生成 equirect + `parametersMatch` 缓存，Raster/PT 对照 MAE 0.061）、`atmosphere-model` 测试与 `gpu-smoke` 双后端覆盖 | - |
 | 2 Aerial Perspective | 已收口 | `opticalDepthAlongSegment()` / `verticalOpticalDepth()` 有限线段积分器与整柱光学厚度、`.myscene` 三个新字段、Inspector `Aerial perspective` 子节、`postprocess.frag` 深度重建合成（Height Fog → Aerial Perspective → 显示变换）、disk-free 天顶/地平线 in-scatter、`MYRENDERER_AERIAL_*` 覆盖项、`gpu-smoke` On/Off 两条分支、[`docs/atmosphere-sky.md`](docs/atmosphere-sky.md) 记录实现与近似 | CPU Path Tracer 尚不做空中透视 |
-| 3 室外阴影 | 未开始 | - | 稳定 3～4 级 CSM、Texel Snapping、Bounds 拟合、Bias 与 Cascade 调试 |
-| 4 海面 | 未开始 | - | Projected Grid/Clipmap、Gerstner、Foam/Whitecap/Underwater Fog、水面 Shadow/Motion Vector/TAA |
-| 5 昼夜与海况序列 | 未开始 | - | Calm/Windy/Storm 预设、太阳/雾/风暴露为 Module 参数、Render Job 帧序列、Low/High GPU 预算 |
+| 3 室外阴影 | 已收口 | 3～4 级 CSM、Texel Snapping、Bounds 拟合、Bias、Forward/Deferred 选层与调试视图、`.myscene`/Inspector、海岸夹具与 GPU 计时；证据见 [`docs/shadow-cascades.md`](docs/shadow-cascades.md) | PCSS 留给后续质量档 |
+| 4 海面 | 已收口 | 相机相关连续网格、Gerstner 波、场景颜色/深度透射、Beer-Lambert 吸收、白冠/岸线泡沫、水下雾、Forward/Deferred 与 TAA 运动矢量、Calm/Windy/Storm、Low/High 质量及 GPU 预算；证据见 [`docs/water-synthesis.md`](docs/water-synthesis.md) | 屏幕空间折射和 CPU Path Tracer 水面仍是已知边界 |
+| 5 昼夜与海况序列 | 未开始 | 切片 4 已提供海况预设和 Low/High GPU 预算 | 太阳/雾/风/波浪/相机轨迹的 Module 参数、Render Job 帧序列及昼夜海况过渡 |
 | 6 体积云 | 调研完成，未开始 | 文献、算法流水线、OpenGL 3.3 可行性边界、集成风险、分阶段路径与确定性要求已写入 [`docs/research/volumetric_clouds_brief.md`](docs/research/volumetric_clouds_brief.md) | 见下方「P1-A 切片 6」工作包 C1～C7 |
 
 - [x] 实现 Rayleigh/Mie Atmosphere（解析单次散射 + Kasten-Young 气团 + 闭式指数积分）并统一太阳方向：天空、方向光、阴影贴图、方向光能量共用同一 `sunDirection()`；太阳盘亮度锚定到晴天地面照度比 `E_sun/E_sky≈10`，使环境下半球与关键光照亮的地面一致。
 - [x] 统一太阳的逐通道颜色：`skyLightColor()` 把 `sunTransmittance` 归一化到最亮通道，`uLightColor` 进入 Forward/Deferred 的 PBR、非 PBR 与 Stylized 三条直接光路径，`captureSceneLighting()` 让 CPU Path Tracer 的方向光共享同一方向、能量与颜色；大气关闭时恒为白色，既有固定图不变。
 - [x] 统一天空到 CPU Path Tracer：`captureSceneLighting()` 在大气启用时用 `atmosphere::generateEquirect()`（1024×512）生成同一模型的环境辐亮度，替换原先固定指向的打包 HDR；`atmosphere::parametersMatch()` 把「参数是否变化」的容差从 `Renderer` 提到模型层，GUI 每批 tile 与 Batch 每帧的重复捕获走同一份缓存（互斥保护）。`18_atmosphere_sky.myscene` 在 `256×256 / 512 SPP / Depth 8 / Seed 20260915` 下 Raster↔PT 为 MAE `0.061105`、PSNR `20.30 dB`，优于既有三个对照场景。
 - [x] 完成统一太阳的剩余部分：Aerial Perspective（相机到场景的同一积分器）。`opticalDepthAlongSegment()` 沿同一指数剖面与同一 Kasten-Young 气团约定积分有限线段，`verticalOpticalDepth()` 给出整根气柱作为计量单位；合成放在 `postprocess.frag`（复用已有的深度重建，透明物体与天空自动走同一路径），顺序为 Height Fog → Aerial Perspective → 显示变换；in-scatter 取不含太阳盘的天顶/地平线天空色，保证无穷远精确收敛到天空、零距离不改像素。`gpu-smoke` 增加 On/Off 两条分支，`atmosphere-model` 覆盖两个积分极限、单位换算与极端输入，证据见 [`docs/atmosphere-sky.md`](docs/atmosphere-sky.md)。已知边界：CPU Path Tracer 尚未接入。
-- [ ] 完成稳定 3～4 级 CSM、Texel Snapping、Bounds 拟合、Bias 与 Cascade 调试；PCSS 仅作为后续质量档。
-- [ ] 用 Projected Grid、Clipmap 或可解释的相机相关 LOD 承载大范围海面。
-- [ ] 实现多组 Gerstner Waves，输出解析位移、法线、切线与速度；明确标注为 Wave Synthesis。
-- [ ] 复用 Fresnel、IOR、Transmission、Beer-Lambert 与环境反射，增加水深、Foam、Whitecap 和 Underwater Fog。
-- [ ] 水面接入 Shadow、Motion Vector、TAA 与调试视图，制作 Calm / Windy / Storm 三组海况。
+- [x] 完成稳定 3～4 级 CSM、Texel Snapping、Bounds 拟合、Bias 与 Cascade 调试；`shadow-cascade-acceptance` 在海岸夹具上检查 Forward/Deferred 选层一致性并测量 1/3/4 级阴影 pass，PCSS 仅作为后续质量档。证据见 [`docs/shadow-cascades.md`](docs/shadow-cascades.md)。
+- [x] 用相机相关的连续平方映射网格承载大范围海面：`192×192` 逻辑网格在 `extent=110` 时由中心约 `0.012` 世界单位单格连续增长到边缘约 `2.28` 世界单位，避免分块接缝；证据见 [`docs/water-synthesis.md`](docs/water-synthesis.md)。
+- [x] 实现四组 Gerstner Waves，输出解析位移、法线、切线与速度；明确标注为 Wave Synthesis，`water-wave-synthesis` 用时间差分验算速度。
+- [x] 复用 Fresnel、IOR、Transmission、Beer-Lambert 与环境反射，增加真实海床水深、白冠/岸线泡沫和水下雾；固定深度与水下夹具及图像对照见 [`docs/water-synthesis.md`](docs/water-synthesis.md)。
+- [x] 水面接入 Shadow、Motion Vector、TAA 与运动调试图，制作 Calm / Windy / Storm 三组海况及 Low/High 档；`water-synthesis-acceptance` 覆盖 On/Off、时间变化、双路径、运动、水深、预设和质量档，`water-synthesis-benchmark` 固定 1280×720 GPU 预算。
 - [ ] 将太阳时间、雾、风、波浪和相机轨迹暴露为 C++ Module 参数；通过 Render Job 输出固定昼夜/海况帧序列，而不是只保存手调静帧。
 
 #### P1-A 切片 6：体积云
@@ -529,7 +529,7 @@ cmake --build build-ci-msvc --config Release --target renderer-benchmark-suite
 3. **P0-C GUI CPU Progressive Preview（已完成）**。
 4. **P0-D AOV Denoising + Sampling 改进（已完成；GPU 接口按门槛暂不冻结）**。
 5. **P1-0 C++ 模块渲染工作台（已完成）**：Workspace 业务化（A2a/A2b1/A2b2/A2b3、Log/Profile 汇总真实诊断）、Batch B1～B4、C1/C2（Timeline / Runtime Scene / Module API / ParameterRegistry / Registry / runner / Simulation Cache）、`.renderjob` schema 2 模块段与 `module-rendering-acceptance` 均已落地并通过总验收（含 GUI/CLI 同帧对照）。仅剩 A2c 的 Modules 构建与启停动作，不属于平台门槛。
-6. **P1-A 物理天空 + Aerial Perspective + 体积云 + CSM + Gerstner Water Hero Scene**，同时交付由 C++ Module 驱动的可重复昼夜/海况序列。切片 1「Rayleigh/Mie 天空与统一太阳方向」与切片 2「Aerial Perspective」已完成（解析式大气模型、环境贴图重建、`.myscene` 持久化、Inspector 分组、`18_atmosphere_sky` 夹具、逐通道方向光颜色、CPU Path Tracer 使用同一天空并与 Raster 达到现有对照场景中最好的一致性，以及相机到场景的同一光学厚度积分器）；切片 6「体积云」已完成文献与可行性调研，工作包 C1～C7 见第 4 节，排在切片 2 之后。下一步是切片 3（3～4 级 CSM）。
+6. **P1-A 物理天空 + Aerial Perspective + 体积云 + CSM + Gerstner Water Hero Scene**，同时交付由 C++ Module 驱动的可重复昼夜/海况序列。切片 1「Rayleigh/Mie 天空与统一太阳方向」、切片 2「Aerial Perspective」、切片 3「3～4 级 CSM」与切片 4「Gerstner 海面、透射和水下雾」已完成；水面证据见 [`docs/water-synthesis.md`](docs/water-synthesis.md)。下一步是切片 5 的 C++ Module + Render Job 参数序列。切片 6「体积云」已完成文献与可行性调研，工作包 C1～C7 见第 4 节。
 7. **P1-B Vulkan Raster → Ray Query → GPU Path Tracing + SVGF**，接入同一 Workspace/Render Job。
 8. **P1-C ReSTIR DI 对照实验**。
 9. 根据作品集缺口在 **P2 极光/体积扩展**、**P2 水体/天气 Compute** 与 **P2-D 动态 C++ Plugin/DCC 协作**中只选一个继续。

@@ -22,6 +22,8 @@ P1-0A 的纵向切片把现有四面板编辑器推进为渲染/模拟工作台�
 
 默认 Dock Layout 由中央 Viewport、左侧 Scene Explorer、右侧 Inspector 和底部 Workspace 组成；底部默认占中央列约 30%，使 1440×900 首屏可读资源名而不夺走 Viewport 的主区域。布局仍由 Dear ImGui 保存，用户可以自由拖动，`Reset layout` 恢复默认布局。
 
+Scene Explorer 按已有 `SceneEntity::parent` 显示可展开的对象树。对象可拖到另一对象上设为子对象，或拖到「Scene root」恢复为根对象；原有 Parent 下拉框保留键盘操作入口。可见性、复制、删除和父对象变化仍经 `EditorCommand`，父对象变化会失效子树的运动历史、TAA 历史和 CPU 预览。场景统计默认折叠，为树形列表留出空间。
+
 ### 顶部工作流工具栏
 
 顶部工作流工具栏统一显示 Backend 与 `Edit / Preview / Bake / Render` 状态，并提供 Pause、Single Step、Reset、Render Frame、Render Sequence。GPU Path Traced 显示为不可用，直到 Vulkan 后端存在。
@@ -72,6 +74,12 @@ build-ci-msvc/Release/MyRenderer.exe assets/scenes/18_atmosphere_sky.myscene
 
 复现：`MYRENDERER_EDITOR_WINDOW_WIDTH=1440`、`MYRENDERER_EDITOR_WINDOW_HEIGHT=900`、`MYRENDERER_EDITOR_SCREENSHOT=docs/media/p1-workspace-1440x900.png`，不设置 `MYRENDERER_EDITOR_SCREENSHOT_TAB`。
 
+在 `01_multi_model_hierarchy.myscene` 中，Scene Explorer 将五个对象显示为一个根节点和四个子节点；统计默认折叠，Viewport 仍占中央主区域。
+
+![1440×900 默认工作区：Scene Explorer 显示一个根节点和四个子节点，Inspector 的 Object 页可见](media/p1-workspace-hierarchy-1440x900.png)
+
+复现：设置 `MYRENDERER_SMOKE_TEST=1`、`MYRENDERER_EDITOR_WINDOW_WIDTH=1440`、`MYRENDERER_EDITOR_WINDOW_HEIGHT=900`、`MYRENDERER_EDITOR_SCREENSHOT=docs/media/p1-workspace-hierarchy-1440x900.png`，运行 `build-ci-msvc/Release/MyRenderer.exe assets/scenes/01_multi_model_hierarchy.myscene`。
+
 布局约束要求应用下限尺寸仍然可用，而不是只在 1440×900 下成立：1100×680 下各面板标签完整、内容可滚动，Viewport 仍是主区域。
 
 ![1100×680 应用下限下的同一工作区：标签完整、内容可滚动，Viewport 仍为主区域](media/p1-workspace-1100x680.png)
@@ -97,11 +105,15 @@ MSVC Release 使用 `build-ci-msvc`：
 ```powershell
 cmake --build build-ci-msvc --config Release --target MyRendererWorkspaceAssetsTests MyRendererEditorSessionTests MyRenderer --parallel
 ctest --test-dir build-ci-msvc -C Release -R "workspace-assets|editor-session" --output-on-failure
+ctest --test-dir build-ci-msvc -C Release -R "asset-thumbnails|workspace-assets" --output-on-failure
+cmake --build build-ci-msvc --config Release --target asset-thumbnail-layout-acceptance
 ctest --test-dir build-ci-msvc -C Release --output-on-failure
 cmake --build build-ci-msvc --config Release --target gpu-smoke
 ```
 
-最新结果：`workspace-assets`、`editor-session`、`render-job-runtime`、`batch-output-override` 与 `render-queue-runtime` 通过；完整 CTest 14/14 通过；真实 RTX 4060 Laptop GPU / OpenGL 3.3 smoke 通过。额外的 `MYRENDERER_EDITOR_INTERACTION_TEST=1` 已验证 Object Inspector 与 Renderer 全部领域命令真实更新状态、越界载荷被拒绝且可恢复原值：
+`asset-thumbnails` 验证模型、场景和 Job 的真实光栅像素、磁盘缓存复用以及源模型/Job 修改后的刷新失效。GPU 专项 `asset-thumbnail-layout-acceptance` 在真实 OpenGL 上以 1100×680 打开 Assets 页，断言缩略图已上传、面板尺寸达标且 Viewport 仍大于底部工作区；截图写到 `build-ci-msvc/asset-thumbnail-layout-1100x680.png`。
+
+最新结果：`workspace-assets`、`asset-thumbnails`、`editor-session`、`render-job-runtime`、`batch-output-override` 与 `render-queue-runtime` 通过；完整 CTest 19/19 通过；真实 RTX 4060 Laptop GPU / OpenGL 3.3 的 1100×680 缩略图验收通过。额外的 `MYRENDERER_EDITOR_INTERACTION_TEST=1` 已验证 Object Inspector 与 Renderer 全部领域命令真实更新状态、越界载荷被拒绝且可恢复原值：
 
 ```powershell
 $env:MYRENDERER_SMOKE_TEST = "1"
@@ -119,7 +131,7 @@ Remove-Item Env:MYRENDERER_SMOKE_TEST, Env:MYRENDERER_EDITOR_INTERACTION_TEST
 - Modules 页的启动/停止、参数控件、打开 Visual Studio、构建 Target 与编译错误定位仍未实现，随 C1 runner 落地；因此 Modules 页当前只有 Manifest 数据这一条真实数据链。
 - Log/Profile 页只汇总已经存在于应用中的结构化诊断，不制造任何未上报的状态。
 - Simulation 与 Module Parameters 不展示占位参数；它们等待 C1 Registry/Parameter 数据后再生成真实控件。
-- Asset Catalog 刷新采用事务式替换：扫描失败时保留上一代目录；预览缓存键由相对路径、大小和修改时间稳定导出。实际图像缩略图的生成、持久缓存与内容失效仍未实现，当前网格卡只表达类型和元数据。
+- Asset Catalog 刷新采用事务式替换：扫描失败时保留上一代目录。Scenes、Models、RenderJobs 网格卡显示 CPU 光栅化的真实几何缩略图；后台一次只生成一张，OpenGL 纹理仅在编辑器线程上传与释放。缓存写入忽略版本控制的 `.cache/asset-thumbnails/`，由原有相对路径/大小/修改时间键加场景、Job 引用及模型同目录资源元数据派生；刷新后仅替换失效缩略图。缩略图表现静态几何与材质基色，不执行 Job 的模块动画或完整渲染通道。
 - Scene Explorer、任务控制、Object Inspector 与全部 Renderer 设置分组（Stage、Material、Directional Light、PBR/Environment、Shading、Post、Raster、Camera、Runtime、Glass、Caustics、Instancing），以及 View 菜单和视口工具栏里的纯设置快捷项，都已走命令队列。仍然直接写入的编辑器界面只有三类，且都不属于 Renderer 设置快照：场景/Preset 构造动作（View 菜单的 Prism / Volume glass / Glass caustics / Local light stress / Instance stress preset，及对应分组的启用开关）、CPU Preview 任务参数弹窗（SPP/Depth/Seed/AOV/降噪，属于 P0-C 的预览任务语义而非渲染状态）、以及 GPU 蒙皮与 Prism 演示面板（含动画播放状态与 Prism 光学参数）。它们各自需要独立的命令设计，不在 A2b2b 的 Renderer 设置范围内。
 
 调整界面前还必须核对 [`todolist.md`](../todolist.md) 的「P1 GUI / Workspace 参考与约束」：那里给出可借鉴的设计语言与**不得照搬**清单，本节是同一约束在 P1-0A 切片上的具体化。

@@ -22,6 +22,7 @@ uniform mat4 uInverseViewProjection;
 uniform mat4 uLightViewProjection[MAX_SHADOW_CASCADES];
 uniform int uShadowCascadeCount;
 uniform float uCascadeSplits[MAX_SHADOW_CASCADES];
+uniform bool uShadowCascadeDebugView;
 // Depth planes of the camera projection. The G-buffer depth debug view linearises with these rather
 // than with a fitted exponent, so the view stays truthful if the camera's depth range ever changes.
 uniform float uCameraNearPlane;
@@ -156,6 +157,13 @@ int selectCascade(float viewDepth) {
     return selected;
 }
 
+vec3 cascadeDebugColor(int cascade) {
+    const vec3 colors[MAX_SHADOW_CASCADES] = vec3[MAX_SHADOW_CASCADES](
+        vec3(0.95, 0.28, 0.24), vec3(0.25, 0.80, 0.35),
+        vec3(0.25, 0.48, 0.96), vec3(0.96, 0.78, 0.22));
+    return colors[clamp(cascade, 0, MAX_SHADOW_CASCADES - 1)];
+}
+
 vec3 projectedCoordinates(vec3 worldPosition, int cascade) {
     vec4 shadowPosition = uLightViewProjection[cascade] * vec4(worldPosition, 1.0);
     return shadowPosition.xyz / max(shadowPosition.w, 0.0001) * 0.5 + 0.5;
@@ -195,8 +203,10 @@ vec3 causticRadiance(vec3 worldPosition) {
 
 void main() {
     float depth = texture(uGDepth, vUv).r;
-    vec3 albedo = texture(uGAlbedo, vUv).rgb;
-    vec3 encodedNormal = texture(uGNormal, vUv).rgb;
+    vec4 albedoSample = texture(uGAlbedo, vUv);
+    vec3 albedo = albedoSample.rgb;
+    vec4 normalSample = texture(uGNormal, vUv);
+    vec3 encodedNormal = normalSample.rgb;
     vec2 material = texture(uGMaterial, vUv).rg;
 
     if (uSkinningDebugActive) {
@@ -236,6 +246,12 @@ void main() {
         return;
     }
     if (depth >= 0.999999) discard;
+    if (uShadowCascadeDebugView && uShadowsEnabled) {
+        vec3 worldPosition = reconstructWorldPosition(depth);
+        float viewDepth = dot(worldPosition - uCameraPosition, uCameraForward);
+        fragmentColor = vec4(cascadeDebugColor(selectCascade(viewDepth)), 1.0);
+        return;
+    }
     vec3 normal = normalize(encodedNormal * 2.0 - 1.0);
     float metallic = material.r;
     float roughness = clamp(material.g, 0.04, 1.0);
@@ -248,9 +264,29 @@ void main() {
     float nDotV = max(dot(normal, viewDirection), 0.0);
     // View depth along the camera's forward axis, recovered from the basis rather than approximated
     // by the ray length: the two disagree by up to `1 / cos(angle)` away from the screen centre.
-    float viewDepth = -dot(worldPosition - uCameraPosition, uCameraForward);
+    float viewDepth = dot(worldPosition - uCameraPosition, uCameraForward);
     vec3 visibility = shadowVisibility(worldPosition, normal, lightDirection, viewDepth);
     vec3 caustics = causticRadiance(worldPosition);
+
+    if (normalSample.a > 0.25 && normalSample.a < 0.75) {
+        float nDotVWater = max(dot(normal, viewDirection), 0.0);
+        float f0Water = pow((1.333 - 1.0) / (1.333 + 1.0), 2.0);
+        float fresnelWater = f0Water + (1.0 - f0Water) * pow(1.0 - nDotVWater, 5.0);
+        vec3 reflectionWater = textureLod(uPrefilteredEnvironmentMap,
+            reflect(-viewDirection, normal), 1.5).rgb * uEnvironmentIntensity;
+        vec3 transmissionWater = vec3(0.015, 0.11, 0.16)
+            + texture(uIrradianceMap, normal).rgb * 0.045 * uEnvironmentIntensity;
+        vec3 halfWater = normalize(lightDirection + viewDirection);
+        float shadowWater = dot(visibility, vec3(0.333333));
+        transmissionWater *= mix(0.55, 1.0, shadowWater);
+        float sunGlint = pow(max(dot(normal, halfWater), 0.0), 128.0)
+            * max(dot(normal, lightDirection), 0.0) * uDiffuseStrength * shadowWater;
+        vec3 colorWater = mix(transmissionWater, reflectionWater, fresnelWater)
+            + uLightColor * sunGlint * 0.5;
+        colorWater = mix(colorWater, vec3(0.68, 0.82, 0.86), albedoSample.a);
+        fragmentColor = vec4(colorWater, 1.0);
+        return;
+    }
 
     if (uStylizedEnabled) {
         float diffuseBand = stylizedBand(nDotL);

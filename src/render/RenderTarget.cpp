@@ -199,14 +199,20 @@ void RenderTarget::resize(int width, int height, int samples) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hdrColorTexture_, 0);
-    glGenRenderbuffers(1, &refractiveDepthStencil_);
-    glBindRenderbuffer(GL_RENDERBUFFER, refractiveDepthStencil_);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width_, height_);
-    glFramebufferRenderbuffer(
+    glGenTextures(1, &refractiveDepthTexture_);
+    glBindTexture(GL_TEXTURE_2D, refractiveDepthTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, width_, height_, 0,
+                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(
         GL_FRAMEBUFFER,
         GL_DEPTH_STENCIL_ATTACHMENT,
-        GL_RENDERBUFFER,
-        refractiveDepthStencil_
+        GL_TEXTURE_2D,
+        refractiveDepthTexture_,
+        0
     );
     requireComplete("refractive HDR scene");
 
@@ -472,7 +478,7 @@ bool RenderTarget::saveDefaultFramebufferPng(
 }
 
 void RenderTarget::destroy() {
-    if (refractiveDepthStencil_ != 0U) glDeleteRenderbuffers(1, &refractiveDepthStencil_);
+    if (refractiveDepthTexture_ != 0U) glDeleteTextures(1, &refractiveDepthTexture_);
     if (multisampleDepthStencil_ != 0U) glDeleteRenderbuffers(1, &multisampleDepthStencil_);
     if (multisampleColor_ != 0U) glDeleteRenderbuffers(1, &multisampleColor_);
     if (finalColorTexture_ != 0U) glDeleteTextures(1, &finalColorTexture_);
@@ -492,7 +498,7 @@ void RenderTarget::destroy() {
     if (opaqueFramebuffer_ != 0U) glDeleteFramebuffers(1, &opaqueFramebuffer_);
     multisampleDepthStencil_ = 0U;
     multisampleColor_ = 0U;
-    refractiveDepthStencil_ = 0U;
+    refractiveDepthTexture_ = 0U;
     finalColorTexture_ = 0U;
     sceneDepthTexture_ = 0U;
     glassFrontfaceDepthTexture_ = 0U;

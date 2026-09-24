@@ -46,6 +46,7 @@ enum class EditorCommandType {
     SetMaterialSettings,
     SetDirectionalLightSettings,
     SetPbrEnvironmentSettings,
+    SetWaterSettings,
     SetShadingSettings,
     SetPostProcessingSettings,
     SetRasterizationSettings,
@@ -112,8 +113,23 @@ struct EditorPbrEnvironmentSettingsPayload {
     bool shadowsEnabled{true};
     int shadowCascadeCount{3};
     float shadowCascadeSplitLambda{0.75f};
+    bool shadowCascadeDebugView{false};
     bool coloredTransmissionShadowsEnabled{true};
     float environmentIntensity{0.55f};
+};
+
+struct EditorWaterSettingsPayload {
+    bool enabled{false};
+    int preset{0};
+    int quality{1};
+    float level{-0.45f};
+    float extent{110.0f};
+    float amplitude{0.22f};
+    float speed{1.0f};
+    float steepness{0.65f};
+    float foamStrength{0.7f};
+    float windX{0.9f};
+    float windZ{0.3f};
 };
 
 // Opaque shading mode, render path, G-buffer debug view and the stylized / NPR
@@ -281,6 +297,7 @@ struct EditorCommand {
     EditorMaterialSettingsPayload material;
     EditorDirectionalLightSettingsPayload directionalLight;
     EditorPbrEnvironmentSettingsPayload pbrEnvironment;
+    EditorWaterSettingsPayload water;
     EditorShadingSettingsPayload shading;
     EditorPostProcessingSettingsPayload postProcessing;
     EditorRasterizationSettingsPayload rasterization;

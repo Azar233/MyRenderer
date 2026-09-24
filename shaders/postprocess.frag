@@ -31,6 +31,9 @@ uniform float uAerialScaleHeight;
 uniform vec3 uAerialColumnDepth;
 uniform vec3 uAerialZenithColor;
 uniform vec3 uAerialHorizonColor;
+uniform bool uUnderwaterFogEnabled;
+uniform vec3 uUnderwaterAbsorption;
+uniform vec3 uUnderwaterColor;
 uniform bool uColorGradingEnabled;
 uniform float uColorGradingStrength;
 uniform int uStylizedDebugView;
@@ -221,7 +224,7 @@ void main() {
     float aerialDistance = 0.0;
     vec3 aerialSegment = vec3(0.0);
     bool aerialIsSky = true;
-    if (uAerialEnabled || uHeightFogEnabled) {
+    if (uAerialEnabled || uHeightFogEnabled || uUnderwaterFogEnabled) {
         worldSegment(deviceDepth, aerialDistance, aerialSegment, aerialIsSky);
     }
     float fogFactor = heightFogFactor(
@@ -238,6 +241,13 @@ void main() {
     // The air sits in front of the stylized fog, so it composites on top: the fog is a look, the
     // aerial perspective is the atmosphere the scene is standing in.
     color = aerialPerspectiveColor(color, deviceDepth, aerialDistance, aerialSegment);
+    if (uUnderwaterFogEnabled) {
+        float waterDistance = aerialIsSky ? 24.0 : min(aerialDistance, 24.0);
+        vec3 transmittance = exp(-max(uUnderwaterAbsorption, vec3(0.0))
+            * waterDistance);
+        color = color * transmittance
+            + uUnderwaterColor * (vec3(1.0) - transmittance);
+    }
     color *= max(uExposure, 0.0);
     color = uToneMapping ? aces(color) : clamp(color, 0.0, 1.0);
     color = uEncodeSrgb ? linearToSrgb(color) : color;

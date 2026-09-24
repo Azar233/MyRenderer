@@ -416,10 +416,42 @@ void Application::processEditorCommands() {
                 rendererSettings_.shadowCascadeCount = environment.shadowCascadeCount;
                 rendererSettings_.shadowCascadeSplitLambda =
                     environment.shadowCascadeSplitLambda;
+                rendererSettings_.shadowCascadeDebugView = environment.shadowCascadeDebugView;
                 rendererSettings_.coloredTransmissionShadowsEnabled =
                     environment.coloredTransmissionShadowsEnabled;
                 rendererSettings_.environmentIntensity = environment.environmentIntensity;
                 cpuPreviewRestartRequested_ = true;
+                if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                break;
+            }
+            case EditorCommandType::SetWaterSettings: {
+                const auto& water = command.water;
+                const auto within = [](float value, float low, float high) {
+                    return std::isfinite(value) && value >= low && value <= high;
+                };
+                if (water.preset < 0 || water.preset > 3
+                    || water.quality < 0 || water.quality > 1
+                    || !within(water.level, -10.0f, 10.0f)
+                    || !within(water.extent, 20.0f, 500.0f)
+                    || !within(water.amplitude, 0.0f, 2.0f)
+                    || !within(water.speed, 0.0f, 5.0f)
+                    || !within(water.steepness, 0.0f, 0.9f)
+                    || !within(water.foamStrength, 0.0f, 1.0f)
+                    || !within(water.windX, -1.0f, 1.0f)
+                    || !within(water.windZ, -1.0f, 1.0f)) {
+                    statusMessage_ = "Inspector rejected invalid water settings.";
+                    break;
+                }
+                rendererSettings_.water.enabled = water.enabled;
+                rendererSettings_.water.preset = static_cast<WaterPreset>(water.preset);
+                rendererSettings_.water.quality = static_cast<WaterQuality>(water.quality);
+                rendererSettings_.water.level = water.level;
+                rendererSettings_.water.extent = water.extent;
+                rendererSettings_.water.amplitude = water.amplitude;
+                rendererSettings_.water.speed = water.speed;
+                rendererSettings_.water.steepness = water.steepness;
+                rendererSettings_.water.foamStrength = water.foamStrength;
+                rendererSettings_.water.windDirection = glm::vec2(water.windX, water.windZ);
                 if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
                 break;
             }
@@ -857,9 +889,36 @@ void Application::processEditorCommands() {
                 }
                 break;
             case EditorCommandType::SetEntityParent:
-                scene_.setParent(static_cast<SceneEntityId>(command.entity),
-                                 static_cast<SceneEntityId>(command.value));
+            {
+                const auto childId = static_cast<SceneEntityId>(command.entity);
+                const auto parentId = static_cast<SceneEntityId>(command.value);
+                const SceneEntity* child = scene_.find(childId);
+                const SceneEntityId previousParent = child == nullptr
+                    ? invalidSceneEntityId : child->parent;
+                if (child == nullptr || !scene_.setParent(childId, parentId)) {
+                    statusMessage_ = "Scene rejected an invalid parent relationship.";
+                    break;
+                }
+                if (previousParent != parentId) {
+                    // A parent change affects the whole subtree, including temporal data.
+                    for (const SceneEntity& candidate : scene_.entities()) {
+                        SceneEntityId ancestor = candidate.id;
+                        for (std::size_t depth = 0; depth < scene_.size(); ++depth) {
+                            if (ancestor == childId) {
+                                scene_.find(candidate.id)->motionHistoryValid = false;
+                                break;
+                            }
+                            const SceneEntity* current = scene_.find(ancestor);
+                            if (current == nullptr || current->parent == invalidSceneEntityId) break;
+                            ancestor = current->parent;
+                        }
+                    }
+                    editedEntities_.insert(childId);
+                    cpuPreviewRestartRequested_ = true;
+                    if (renderer_ != nullptr) renderer_->invalidateTemporalHistory();
+                }
                 break;
+            }
         }
     }
 }
@@ -928,25 +987,88 @@ void Application::drawScenePanel() {
 
     ImGui::SeparatorText(EditorUi::label("Scene objects"));
     if (!scene_.entities().empty()) {
+        const char* rootLabel = EditorUi::chinese
+            ? "场景根节点（拖放对象到此）" : "Scene root (drop an object here)";
+        ImGui::Selectable(rootLabel, false, ImGuiSelectableFlags_SpanAvailWidth);
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("MYRENDERER_SCENE_ENTITY")) {
+                if (payload->DataSize == sizeof(SceneEntityId)) {
+                    const auto id = *static_cast<const SceneEntityId*>(payload->Data);
+                    editorSession_.request(EditorCommand{
+                        EditorCommandType::SetEntityParent, id, invalidSceneEntityId
+                    });
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        std::unordered_map<SceneEntityId, std::vector<const SceneEntity*>> children;
+        std::vector<const SceneEntity*> roots;
         for (const SceneEntity& entity : scene_.entities()) {
             if (!entity.enabledByPreset) continue;
+            const SceneEntity* parent = scene_.find(entity.parent);
+            if (parent != nullptr && parent->enabledByPreset) children[entity.parent].push_back(&entity);
+            else roots.push_back(&entity);
+        }
+        const auto drawEntity = [&](const auto& self, const SceneEntity& entity) -> void {
+            const std::string stableId = std::to_string(entity.id);
+            ImGui::PushID(stableId.c_str());
             bool visible = entity.visible;
-            const std::string visibilityId = "##Visible_" + std::to_string(entity.id);
-            if (EditorUi::Checkbox(visibilityId.c_str(), &visible)) {
+            if (EditorUi::Checkbox("##Visibility", &visible)) {
                 editorSession_.request(EditorCommand{
-                    EditorCommandType::SetEntityVisibility,
-                    static_cast<std::uint64_t>(entity.id), 0U, visible
+                    EditorCommandType::SetEntityVisibility, entity.id, 0U, visible
                 });
             }
-            ImGui::SameLine();
-            const bool selected = selectedSceneEntity_ == entity.id;
-            const std::string label = entity.name + "##Entity_" + std::to_string(entity.id);
-            if (ImGui::Selectable(label.c_str(), selected)) selectEntity(entity.id);
-            if (entity.parent != invalidSceneEntityId) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("child of #%llu", static_cast<unsigned long long>(entity.parent));
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", EditorUi::chinese
+                    ? (visible ? "可见" : "隐藏") : (visible ? "Visible" : "Hidden"));
             }
-        }
+            ImGui::SameLine(0.0f, 4.0f);
+            const auto childIt = children.find(entity.id);
+            const bool hasChildren = childIt != children.end() && !childIt->second.empty();
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth
+                | ImGuiTreeNodeFlags_OpenOnArrow
+                | (selectedSceneEntity_ == entity.id ? ImGuiTreeNodeFlags_Selected : 0);
+            if (hasChildren) flags |= ImGuiTreeNodeFlags_DefaultOpen;
+            else flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+            const bool open = ImGui::TreeNodeEx("##SceneEntity", flags, "%s", entity.name.c_str());
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)
+                || (ImGui::IsItemFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter))) {
+                selectEntity(entity.id);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entity.name.c_str());
+            if (ImGui::BeginDragDropSource()) {
+                const SceneEntityId id = entity.id;
+                ImGui::SetDragDropPayload("MYRENDERER_SCENE_ENTITY", &id, sizeof(id));
+                ImGui::TextUnformatted(entity.name.c_str());
+                ImGui::EndDragDropSource();
+            }
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("MYRENDERER_SCENE_ENTITY")) {
+                    if (payload->DataSize == sizeof(SceneEntityId)) {
+                        const auto id = *static_cast<const SceneEntityId*>(payload->Data);
+                        if (id != entity.id) {
+                            editorSession_.request(EditorCommand{
+                                EditorCommandType::SetEntityParent, id, entity.id
+                            });
+                        }
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            const float nameWidth = ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - 28.0f;
+            if (ImGui::CalcTextSize(entity.name.c_str()).x > nameWidth) {
+                ImGui::TextWrapped("%s", entity.name.c_str());
+            }
+            if (hasChildren && open) {
+                for (const SceneEntity* child : childIt->second) self(self, *child);
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        };
+        for (const SceneEntity* root : roots) drawEntity(drawEntity, *root);
+
+        ImGui::Separator();
         ImGui::BeginDisabled(selectedSceneEntity_ == invalidSceneEntityId);
         if (ImGui::Button(EditorUi::label("Duplicate selected"))) {
             editorSession_.request(EditorCommand{
@@ -975,6 +1097,7 @@ void Application::drawScenePanel() {
                 }
                 for (const SceneEntity& candidate : scene_.entities()) {
                     if (candidate.id == selected->id) continue;
+                    ImGui::PushID(&candidate);
                     const bool isParent = candidate.id == selected->parent;
                     if (ImGui::Selectable(candidate.name.c_str(), isParent)) {
                         editorSession_.request(EditorCommand{
@@ -983,35 +1106,27 @@ void Application::drawScenePanel() {
                             static_cast<std::uint64_t>(candidate.id)
                         });
                     }
+                    ImGui::PopID();
                 }
                 ImGui::EndCombo();
             }
         }
-        ImGui::TextDisabled("Entities: %zu", scene_.size());
-        ImGui::TextDisabled("Meshes: %zu", loadedMeshCount_);
-        ImGui::TextDisabled("Submeshes: %zu", loadedSubmeshCount_);
-        ImGui::TextDisabled("Vertices: %zu", loadedVertexCount_);
-        ImGui::TextDisabled("Triangles: %zu", loadedTriangleCount_);
-        if (lightStressDemoEnabled_) {
-            ImGui::TreeNodeEx("Stress instances x100", ImGuiTreeNodeFlags_Leaf);
-            ImGui::TreePop();
-            ImGui::TextDisabled("Local lights: %zu", rendererSettings_.localLights.size());
-        }
-        if (instanceStressDemoEnabled_) {
-            ImGui::TreeNodeEx("Instance stress x2500", ImGuiTreeNodeFlags_Leaf);
-            ImGui::TreePop();
-            ImGui::TextDisabled(
-                "Visible / culled: %zu / %zu",
-                renderer_->visibleInstanceCount(),
-                renderer_->culledInstanceCount()
-            );
-        }
-        if (rendererSettings_.showPrismIncidentBeam) {
-            ImGui::TreeNodeEx("Incident beam (Prism-0 placeholder)", ImGuiTreeNodeFlags_Leaf);
-            ImGui::TreePop();
+        if (EditorUi::section("Scene statistics")) {
+            ImGui::TextDisabled("Entities: %zu", scene_.size());
+            ImGui::TextDisabled("Meshes: %zu", loadedMeshCount_);
+            ImGui::TextDisabled("Submeshes: %zu", loadedSubmeshCount_);
+            ImGui::TextDisabled("Vertices: %zu", loadedVertexCount_);
+            ImGui::TextDisabled("Triangles: %zu", loadedTriangleCount_);
+            if (lightStressDemoEnabled_) {
+                ImGui::TextDisabled("Local lights: %zu", rendererSettings_.localLights.size());
+            }
+            if (instanceStressDemoEnabled_) {
+                ImGui::TextDisabled("Visible / culled: %zu / %zu",
+                    renderer_->visibleInstanceCount(), renderer_->culledInstanceCount());
+            }
         }
     } else {
-        ImGui::TextDisabled("No model loaded");
+        ImGui::TextDisabled("%s", EditorUi::chinese ? "场景为空" : "Scene is empty");
     }
 
     if (ImGui::IsWindowFocused() && !ImGui::GetIO().WantTextInput
@@ -1332,6 +1447,7 @@ void Application::drawAssetsPanel() {
             : ImGuiTabItemFlags_None;
         if (ImGui::BeginTabItem("Assets", nullptr, assetsTabFlags)) {
             focusAssetsTab_ = false;
+            updateAssetThumbnail();
             const auto queueAssetAction = [&](const WorkspaceAssetRecord& asset) {
                 EditorCommand command;
                 switch (asset.category) {
@@ -1419,6 +1535,15 @@ void Application::drawAssetsPanel() {
                 contentExtensionFilter_,
                 contentSortMode_ == 0 ? WorkspaceAssetSort::Name : WorkspaceAssetSort::Size
             );
+            if (contentGridView_) {
+                for (const WorkspaceAssetRecord* asset : visibleAssets) {
+                    if (isPreviewableAsset(asset->category)
+                        && uploadedThumbnails_.find(asset->path) == uploadedThumbnails_.end()) {
+                        requestAssetThumbnail(*asset);
+                        break;
+                    }
+                }
+            }
             const float reservedHeight = activeCategory == WorkspaceAssetCategory::Models
                 ? 178.0f : 112.0f;
             const float resultHeight = std::max(130.0f,
@@ -1437,17 +1562,40 @@ void Application::drawAssetsPanel() {
                             ImGui::TableNextColumn();
                             ImGui::PushID(asset->relativePath.generic_u8string().c_str());
                             const bool selected = selectedWorkspaceAsset_ == asset->path;
-                            const std::string cardLabel = std::string(workspaceAssetCategoryBadge(asset->category))
-                                + "\n" + (asset->extension.empty() ? "asset" : asset->extension)
-                                + "##Card";
-                            if (ImGui::Selectable(cardLabel.c_str(), selected,
-                                    ImGuiSelectableFlags_None, ImVec2(0.0f, 48.0f))) {
+                            const auto thumbnail = uploadedThumbnails_.find(asset->path);
+                            if (thumbnail != uploadedThumbnails_.end()
+                                && thumbnail->second.texture != 0U) {
+                                ImGui::Image(static_cast<ImTextureID>(static_cast<std::uintptr_t>(
+                                    thumbnail->second.texture)), ImVec2(128.0f, 80.0f));
+                            } else {
+                                ImGui::InvisibleButton("##ThumbnailPlaceholder", ImVec2(128.0f, 80.0f));
+                                const ImVec2 top = ImGui::GetItemRectMin();
+                                const ImVec2 bottom = ImGui::GetItemRectMax();
+                                ImGui::GetWindowDrawList()->AddRectFilled(top, bottom,
+                                    IM_COL32(40, 49, 62, 255));
+                                ImGui::GetWindowDrawList()->AddText(
+                                    ImVec2(top.x + 9.0f, top.y + 31.0f), IM_COL32(196, 207, 221, 255),
+                                    thumbnail != uploadedThumbnails_.end()
+                                        ? "UNAVAILABLE" : workspaceAssetCategoryBadge(asset->category));
+                                if (thumbnail != uploadedThumbnails_.end()
+                                    && !thumbnail->second.error.empty() && ImGui::IsItemHovered()) {
+                                    ImGui::SetTooltip("%s", thumbnail->second.error.c_str());
+                                }
+                            }
+                            if (selected) ImGui::GetWindowDrawList()->AddRect(
+                                ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                IM_COL32(113, 183, 255, 255), 0.0f, 0, 2.0f);
+                            if (ImGui::IsItemClicked()) {
+                                selectedWorkspaceAsset_ = asset->path;
+                                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) queueAssetAction(*asset);
+                            }
+                            const std::string cardLabel = asset->displayName + "##Card";
+                            if (ImGui::Selectable(cardLabel.c_str(), selected)) {
                                 selectedWorkspaceAsset_ = asset->path;
                                 if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                                     queueAssetAction(*asset);
                                 }
                             }
-                            ImGui::TextWrapped("%s", asset->displayName.c_str());
                             ImGui::TextDisabled("%s", formatAssetSize(asset->sizeBytes).c_str());
                             ImGui::PopID();
                         }
@@ -1883,7 +2031,9 @@ void Application::drawEditorLayout() {
         const float rightWidth = std::max(300.0f, workSize.x * 0.23f);
         const float rightRatio = std::min(rightWidth / remainingWidth, 0.38f);
         const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, rightRatio, nullptr, &center);
-        const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.30f, nullptr, &center);
+        const float bottomRatio = workSize.y < 700.0f ? 0.43f : 0.30f;
+        const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down,
+            bottomRatio, nullptr, &center);
         ImGui::DockBuilderDockWindow("###Hierarchy", left);
         ImGui::DockBuilderDockWindow("###Inspector", right);
         ImGui::DockBuilderDockWindow("###Viewport", center);
@@ -2390,6 +2540,26 @@ bool Application::editorInteractionRegression() {
         });
         processEditorCommands();
 
+        const SceneEntityId child = scene_.createEntity("Hierarchy child");
+        const SceneEntityId grandchild = scene_.createEntity("Hierarchy grandchild");
+        check(scene_.setParent(grandchild, child), "test hierarchy setup failed");
+        scene_.find(child)->motionHistoryValid = true;
+        scene_.find(grandchild)->motionHistoryValid = true;
+        cpuPreviewRestartRequested_ = false;
+        editorSession_.request(EditorCommand{EditorCommandType::SetEntityParent, child, first});
+        processEditorCommands();
+        check(scene_.find(child)->parent == first
+              && !scene_.find(child)->motionHistoryValid
+              && !scene_.find(grandchild)->motionHistoryValid
+              && cpuPreviewRestartRequested_,
+              "reparent command must invalidate the subtree and CPU preview");
+        editorSession_.request(EditorCommand{EditorCommandType::SetEntityParent, first, grandchild});
+        processEditorCommands();
+        check(scene_.find(first)->parent == invalidSceneEntityId,
+              "reparent command must reject hierarchy cycles");
+        scene_.destroyEntity(grandchild);
+        scene_.destroyEntity(child);
+
         const bool originalGroundReceiver = showGroundPlane_;
         const glm::vec3 originalGroundColor = groundColor_;
         const float originalGroundOffset = groundOffset_;
@@ -2465,6 +2635,8 @@ bool Application::editorInteractionRegression() {
         // payload must be rejected without touching the live settings.
         const EditorPbrEnvironmentSettingsPayload originalPbr =
             EditorDomain::capturePbrEnvironmentSettings(rendererSettings_);
+        const EditorWaterSettingsPayload originalWater =
+            EditorDomain::captureWaterSettings(rendererSettings_);
         const EditorShadingSettingsPayload originalShading =
             EditorDomain::captureShadingSettings(rendererSettings_);
         const EditorPostProcessingSettingsPayload originalPost =
@@ -2486,9 +2658,22 @@ bool Application::editorInteractionRegression() {
         pbr.pbrEnabled = !pbr.pbrEnabled;
         pbr.skyboxEnabled = !pbr.skyboxEnabled;
         pbr.environmentIntensity = 1.35f;
+        pbr.shadowCascadeCount = 4;
+        pbr.shadowCascadeSplitLambda = 0.35f;
+        pbr.shadowCascadeDebugView = true;
         EditorCommand pbrCommand{EditorCommandType::SetPbrEnvironmentSettings};
         pbrCommand.pbrEnvironment = pbr;
         editorSession_.request(std::move(pbrCommand));
+
+        EditorWaterSettingsPayload waterSettings = originalWater;
+        waterSettings.enabled = true;
+        waterSettings.preset = static_cast<int>(WaterPreset::Storm);
+        waterSettings.quality = static_cast<int>(WaterQuality::Low);
+        waterSettings.level = -0.6f;
+        waterSettings.amplitude = 0.4f;
+        EditorCommand waterCommand{EditorCommandType::SetWaterSettings};
+        waterCommand.water = waterSettings;
+        editorSession_.request(std::move(waterCommand));
 
         EditorShadingSettingsPayload shading = originalShading;
         shading.shadingMode = static_cast<int>(ShadingMode::Stylized);
@@ -2571,8 +2756,17 @@ bool Application::editorInteractionRegression() {
         processEditorCommands();
         check(rendererSettings_.pbrEnabled == pbr.pbrEnabled
               && rendererSettings_.skyboxEnabled == pbr.skyboxEnabled
-              && std::abs(rendererSettings_.environmentIntensity - 1.35f) < 1.0e-6f,
+              && std::abs(rendererSettings_.environmentIntensity - 1.35f) < 1.0e-6f
+              && rendererSettings_.shadowCascadeCount == 4
+              && std::abs(rendererSettings_.shadowCascadeSplitLambda - 0.35f) < 1.0e-6f
+              && rendererSettings_.shadowCascadeDebugView,
               "Renderer PBR environment command did not update renderer settings");
+        check(rendererSettings_.water.enabled
+              && rendererSettings_.water.preset == WaterPreset::Storm
+              && rendererSettings_.water.quality == WaterQuality::Low
+              && std::abs(rendererSettings_.water.level + 0.6f) < 1.0e-6f
+              && std::abs(rendererSettings_.water.amplitude - 0.4f) < 1.0e-6f,
+              "Water command did not update renderer settings");
         check(rendererSettings_.shadingMode == ShadingMode::Stylized
               && rendererSettings_.renderPath == RenderPath::Deferred
               && rendererSettings_.gBufferDebugView == GBufferDebugView::Albedo
@@ -2631,11 +2825,18 @@ bool Application::editorInteractionRegression() {
         unknownMsaa.rasterization = EditorDomain::captureRasterizationSettings(rendererSettings_);
         unknownMsaa.rasterization.msaaSamples = 8;
         editorSession_.request(std::move(unknownMsaa));
+        EditorCommand invalidWater{EditorCommandType::SetWaterSettings};
+        invalidWater.water = EditorDomain::captureWaterSettings(rendererSettings_);
+        invalidWater.water.preset = 4;
+        invalidWater.water.quality = static_cast<int>(WaterQuality::High);
+        editorSession_.request(std::move(invalidWater));
         processEditorCommands();
         check(std::abs(rendererSettings_.exposure - 1.45f) < 1.0e-6f
               && std::abs(camera_.fieldOfView() - 61.0f) < 1.0e-4f
               && rendererSettings_.refractionSteps == 20
-              && rendererSettings_.msaaSamples == raster.msaaSamples,
+              && rendererSettings_.msaaSamples == raster.msaaSamples
+              && rendererSettings_.water.preset == WaterPreset::Storm
+              && rendererSettings_.water.quality == WaterQuality::Low,
               "out-of-range renderer payloads must be rejected without side effects");
 
         // P1-0C module preview: the Viewport follows a module-driven runtime scene while
@@ -2724,6 +2925,9 @@ bool Application::editorInteractionRegression() {
         EditorCommand restorePbrCommand{EditorCommandType::SetPbrEnvironmentSettings};
         restorePbrCommand.pbrEnvironment = originalPbr;
         editorSession_.request(std::move(restorePbrCommand));
+        EditorCommand restoreWaterCommand{EditorCommandType::SetWaterSettings};
+        restoreWaterCommand.water = originalWater;
+        editorSession_.request(std::move(restoreWaterCommand));
         EditorCommand restoreShadingCommand{EditorCommandType::SetShadingSettings};
         restoreShadingCommand.shading = originalShading;
         editorSession_.request(std::move(restoreShadingCommand));

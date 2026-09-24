@@ -31,6 +31,7 @@
 #include "render/SsaoRenderer.h"
 #include "render/SpectralBeamRenderer.h"
 #include "render/Texture2D.h"
+#include "render/WaterSurface.h"
 
 namespace {
 
@@ -120,7 +121,15 @@ Renderer::Renderer(
         vertexShaderPath.parent_path() / "temporal_aa.frag"
     )),
     renderTarget_(std::make_unique<RenderTarget>()),
-    textureCache_(std::make_unique<TextureCache>()) {
+    textureCache_(std::make_unique<TextureCache>()),
+    waterSurface_(std::make_unique<WaterSurface>(water::gridResolution)),
+    waterSurfaceLow_(std::make_unique<WaterSurface>(water::lowGridResolution)),
+    waterForwardShader_(std::make_unique<Shader>(
+        vertexShaderPath.parent_path() / "water.vert",
+        vertexShaderPath.parent_path() / "water_forward.frag")),
+    waterGBufferShader_(std::make_unique<Shader>(
+        vertexShaderPath.parent_path() / "water.vert",
+        vertexShaderPath.parent_path() / "water_gbuffer.frag")) {
     glGenQueries(static_cast<GLsizei>(timingQueries_.size()), timingQueries_.data());
     glGenQueries(static_cast<GLsizei>(beamStartQueries_.size()), beamStartQueries_.data());
     glGenQueries(static_cast<GLsizei>(beamEndQueries_.size()), beamEndQueries_.data());
@@ -579,6 +588,7 @@ void Renderer::render(
             "uLightViewProjection[0]", cascadeMatrices.data(), cascadeMatrices.size()
         );
         targetShader.setInt("uShadowCascadeCount", static_cast<int>(cascadeCount));
+        targetShader.setBool("uShadowCascadeDebugView", settings.shadowCascadeDebugView);
         targetShader.setFloatArray(
             "uCascadeSplits[0]", cascadeSplits.data(), cascadeSplits.size()
         );
@@ -682,6 +692,63 @@ shader_->setMat4("uView", view);
         shadowMap_->bindTexture(4U);
         causticsMap_->bindTexture(15U);
         shadowMap_->bindTransmissionTexture(16U);
+    };
+
+    const auto drawWater = [&](bool deferred) {
+        if (!settings.water.enabled) return;
+        Shader& waterShader = deferred ? *waterGBufferShader_ : *waterForwardShader_;
+        waterShader.use();
+        waterShader.setMat4("uCurrentViewProjection", currentViewProjection);
+        waterShader.setMat4("uPreviousViewProjection",
+            previousViewProjectionValid_ ? previousViewProjection_ : currentViewProjection);
+        waterShader.setVec3("uCameraPosition", camera.position());
+        waterShader.setFloat("uTime", settings.water.timeSeconds);
+        waterShader.setFloat("uPreviousTime",
+            previousWaterValid_ ? previousWaterTime_ : settings.water.timeSeconds);
+        waterShader.setFloat("uExtent", settings.water.extent);
+        waterShader.setFloat("uLevel", settings.water.level);
+        waterShader.setFloat("uSpeed", settings.water.speed);
+        waterShader.setFloat("uSteepness", settings.water.steepness);
+        waterShader.setFloat("uFoamStrength", settings.water.foamStrength);
+        const auto waves = water::components(settings.water);
+        waterShader.setVec4Array("uWaves[0]", waves.data(), waves.size());
+        waterShader.setInt("uWaveCount", water::activeComponentCount(settings.water));
+        waterShader.setBool("uMotionHistoryValid", previousWaterValid_
+            && !resetTemporalHistory
+            && std::abs(settings.water.timeSeconds - previousWaterTime_) < 0.2f);
+        if (!deferred) {
+            waterShader.setVec3("uCameraForward", camera.forwardDirection());
+            waterShader.setVec3("uLightDirection", lightDirection);
+            waterShader.setVec3("uLightColor", lightColor);
+            waterShader.setFloat("uDiffuseStrength", diffuseStrength);
+            waterShader.setFloat("uEnvironmentIntensity", settings.environmentIntensity);
+            waterShader.setBool("uShadowsEnabled", settings.shadowsEnabled);
+            bindCascadeSettings(waterShader);
+            waterShader.setInt("uPrefilteredEnvironmentMap", 0);
+            waterShader.setInt("uIrradianceMap", 1);
+            waterShader.setInt("uShadowMap", 2);
+            waterShader.setInt("uOpaqueSceneColor", 3);
+            waterShader.setInt("uOpaqueSceneDepth", 4);
+            waterShader.setFloat("uInverseViewportWidth", 1.0f / static_cast<float>(width));
+            waterShader.setFloat("uInverseViewportHeight", 1.0f / static_cast<float>(height));
+            waterShader.setFloat("uCameraNearPlane", camera.nearPlane());
+            waterShader.setFloat("uCameraFarPlane", camera.farPlane());
+            waterShader.setBool("uHighQuality", settings.water.quality == WaterQuality::High);
+            environmentMap_->bindPrefiltered(0U);
+            environmentMap_->bindIrradiance(1U);
+            shadowMap_->bindTexture(2U);
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, renderTarget_->opaqueColorTexture());
+            glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, renderTarget_->sceneDepthTexture());
+        }
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_BLEND);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(deferred ? GL_FALSE : GL_TRUE);
+        (settings.water.quality == WaterQuality::Low ? *waterSurfaceLow_ : *waterSurface_).draw();
+        ++drawCallCount_;
     };
 
     drawCallCount_ = 0U;
@@ -1156,6 +1223,19 @@ deferredLightingShader_->setVec3("uCameraPosition", camera.position());
         // while drawing here without reading from the texture being written.
         renderTarget_->bindRefractiveScene();
         glViewport(0, 0, width, height);
+        if (settings.water.enabled && !gBufferDebugActive) {
+            if (deferredActive && temporalAaActive) {
+                // Keep opaque G-buffer material/depth intact while replacing only the
+                // visible water pixels in its resolved motion attachment.
+                glBindFramebuffer(GL_FRAMEBUFFER, gBuffer_->framebuffer());
+                const std::array<GLenum, 4> motionOnly{
+                    GL_NONE, GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT3};
+                glDrawBuffers(static_cast<GLsizei>(motionOnly.size()), motionOnly.data());
+                drawWater(true);
+                renderTarget_->bindHdrSceneForOverlay();
+            }
+            drawWater(false);
+        }
         if (!transparentDraws.empty() && !gBufferDebugActive) {
             glActiveTexture(GL_TEXTURE5);
             glBindTexture(GL_TEXTURE_2D, renderTarget_->opaqueColorTexture());
@@ -1341,7 +1421,7 @@ deferredLightingShader_->setVec3("uCameraPosition", camera.position());
             : 0;
         postSettings.resetTemporalHistory = resetTemporalHistory;
         postSettings.temporalHistoryWeight = settings.temporalHistoryWeight;
-        postSettings.depthTexture = renderTarget_->sceneDepthTexture();
+        postSettings.depthTexture = renderTarget_->refractiveDepthTexture();
         postSettings.objectMotionTexture = deferredActive ? gBuffer_->motionTexture() : 0U;
         postSettings.outline = settings.shadingMode == ShadingMode::Stylized
             && settings.stylizedOutlineEnabled
@@ -1371,7 +1451,10 @@ deferredLightingShader_->setVec3("uCameraPosition", camera.position());
         // smearing a 4.6e3 sun disk across the landscape would be the one thing that ruins the
         // effect, and the horizon sample is lifted 2 degrees so the fade reads as the sky the
         // raster actually drew at eye level.
-        postSettings.aerialPerspective = settings.atmosphere.enabled
+        const bool cameraUnderwater = settings.water.enabled
+            && camera.position().y < settings.water.level
+                - settings.water.amplitude * 0.25f;
+        postSettings.aerialPerspective = !cameraUnderwater && settings.atmosphere.enabled
             && settings.atmosphere.aerialPerspectiveEnabled
             && !gBufferDebugActive;
         postSettings.aerialPerspectiveStrength =
@@ -1390,6 +1473,7 @@ deferredLightingShader_->setVec3("uCameraPosition", camera.position());
                 settings.atmosphere
             )
             : glm::vec3(0.0f);
+        postSettings.underwaterFog = cameraUnderwater && !gBufferDebugActive;
         postSettings.colorGrading = settings.shadingMode == ShadingMode::Stylized
             && settings.stylizedColorGradingEnabled
             && !gBufferDebugActive;
@@ -1470,6 +1554,8 @@ deferredLightingShader_->setVec3("uCameraPosition", camera.position());
     } else {
         temporalFrameIndex_ = 0U;
     }
+    previousWaterValid_ = settings.water.enabled && temporalAaActive;
+    previousWaterTime_ = settings.water.timeSeconds;
 }
 
 unsigned int Renderer::colorTexture() const {
@@ -1518,7 +1604,8 @@ std::size_t Renderer::estimatedRenderMemoryBytes() const {
         + shadowMap_->estimatedBytes()
         + ssaoRenderer_->estimatedBytes()
         + causticsMap_->estimatedBytes()
-        + spectralBeamRenderer_->vertexBufferBytes();
+        + spectralBeamRenderer_->vertexBufferBytes()
+        + waterSurface_->estimatedBytes() + waterSurfaceLow_->estimatedBytes();
 }
 
 std::size_t Renderer::estimatedOpaqueTrafficBytesPerFrame() const {

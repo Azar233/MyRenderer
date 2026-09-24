@@ -234,7 +234,7 @@ build-ci-msvc/Release/MyRenderer.exe assets/scenes/18_atmosphere_sky.myscene
 
 ## 下一步
 
-1. 3～4 级级联阴影贴图（cascaded shadow maps），因为一个正交包围盒盖不住海岸场景。对应 `P1-A` 切片 3。
+1. 3～4 级级联阴影贴图（cascaded shadow maps）已在 `P1-A` 切片 3 完成，包含海岸夹具、调试视图与 GPU 计时，见 [`shadow-cascades.md`](shadow-cascades.md)。
 2. 体积云：ray march、时间累积与深度引导升采样都不需要 compute shader，因此已按调研结论提到 P1-A 切片 6，工作包见 `todolist.md`；云的 raymarch 要复用本文这套消光，所以排在 Aerial Perspective 之后。
 3. 用投影网格（projected grid）实现 Gerstner 海面，加上泡沫、白冠、水下雾与 TAA 安全的运动矢量。对应 `P1-A` 切片 4。
 4. Calm / Windy / Storm 预设，把太阳/雾/风暴露为 Module 参数，并在 Low 与 High 两档 GPU 预算下输出 Render Job 帧序列。对应 `P1-A` 切片 5。

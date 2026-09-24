@@ -32,6 +32,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include "app/EditorUi.h"
+#include "app/EditorDomain.h"
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
@@ -457,6 +458,50 @@ int Application::run(const std::filesystem::path& initialModel) {
     if (const char* value = std::getenv("MYRENDERER_SHADOW_CASCADES")) {
         rendererSettings_.shadowCascadeCount = std::clamp(std::atoi(value), 1, 4);
     }
+    if (const char* value = std::getenv("MYRENDERER_SHADOW_SPLIT_LAMBDA")) {
+        rendererSettings_.shadowCascadeSplitLambda = std::clamp(
+            std::strtof(value, nullptr), 0.0f, 1.0f);
+    }
+    if (const char* value = std::getenv("MYRENDERER_SHADOW_CASCADE_DEBUG")) {
+        rendererSettings_.shadowCascadeDebugView = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_WATER")) {
+        rendererSettings_.water.enabled = std::atoi(value) != 0;
+    }
+    if (const char* value = std::getenv("MYRENDERER_WATER_PRESET")) {
+        water::applyPreset(rendererSettings_.water,
+            static_cast<WaterPreset>(std::clamp(std::atoi(value), 0, 3)));
+    }
+    if (const char* value = std::getenv("MYRENDERER_WATER_QUALITY")) {
+        rendererSettings_.water.quality = static_cast<WaterQuality>(
+            std::clamp(std::atoi(value), 0, 1));
+    }
+    if (const char* value = std::getenv("MYRENDERER_WATER_AMPLITUDE")) {
+        const float amplitude = std::strtof(value, nullptr);
+        if (std::isfinite(amplitude)) {
+            rendererSettings_.water.amplitude = std::clamp(amplitude, 0.0f, 2.0f);
+        }
+    }
+    if (const char* value = std::getenv("MYRENDERER_WATER_FOAM")) {
+        const float foam = std::strtof(value, nullptr);
+        if (std::isfinite(foam) && foam >= 0.0f) {
+            rendererSettings_.water.foamStrength = std::clamp(foam, 0.0f, 1.0f);
+        }
+    }
+    if (const char* value = std::getenv("MYRENDERER_TAA_DEBUG")) {
+        rendererSettings_.temporalDebugView = std::clamp(std::atoi(value), 0, 2);
+    }
+    if (const char* value = std::getenv("MYRENDERER_ANIMATION_TIME")) {
+        animationTimeSeconds_ = std::max(std::strtof(value, nullptr), 0.0f);
+        animationTimeFixed_ = true;
+        animationPlaying_ = false;
+    }
+    if (const char* value = std::getenv("MYRENDERER_ANIMATION_FRAME_STEP")) {
+        animationFrameStep_ = std::max(std::strtof(value, nullptr), 0.0f);
+        animationEnabled_ = animationFrameStep_ > 0.0f;
+        animationPlaying_ = animationFrameStep_ > 0.0f;
+        animationTimeFixed_ = false;
+    }
 
     // Apply automation overrides after scene loading so a fixed .myscene can
     // be captured in both PBR and Stylized modes without duplicating assets or
@@ -609,9 +654,18 @@ int Application::run(const std::filesystem::path& initialModel) {
 
     const bool cpuPreviewSmoke = std::getenv("MYRENDERER_SMOKE_TEST") != nullptr
         && viewportRenderMode_ == 1;
+    const bool thumbnailAcceptance = std::getenv("MYRENDERER_ASSET_THUMBNAIL_ACCEPTANCE") != nullptr;
+    if (thumbnailAcceptance) {
+        focusAssetsTab_ = true;
+        contentCategory_ = static_cast<int>(WorkspaceAssetCategory::Scenes);
+        resetEditorLayout_ = true;
+    }
     int smokeTestFrames = std::getenv("MYRENDERER_SMOKE_TEST") == nullptr ? -1 : 5;
     const auto cpuPreviewSmokeDeadline = std::chrono::steady_clock::now()
         + std::chrono::seconds(30);
+    const auto thumbnailDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    bool thumbnailLayoutChecked = false;
+    bool thumbnailLayoutPassed = true;
     if (const char* extra = std::getenv("MYRENDERER_APPEND_TEST")) {
         droppedModelPaths_.push_back(std::filesystem::u8path(extra));
     }
@@ -646,12 +700,15 @@ int Application::run(const std::filesystem::path& initialModel) {
         if (temporalMotionDemoEnabled_) {
             camera_.orbit(0.012f, 0.0f);
         }
-        if (model_ != nullptr && model_->hasSkinning()) {
-            if (animationEnabled_ && animationFrameStep_ > 0.0f) {
+        if (animationEnabled_ && (rendererSettings_.water.enabled
+            || (model_ != nullptr && model_->hasSkinning()))) {
+            if (animationFrameStep_ > 0.0f) {
                 animationTimeSeconds_ = static_cast<float>(animationDemoFrame_++) * animationFrameStep_;
-            } else if (animationEnabled_ && animationPlaying_ && !animationTimeFixed_) {
+            } else if (animationPlaying_ && !animationTimeFixed_) {
                 animationTimeSeconds_ += deltaTime * animationSpeed_;
             }
+        }
+        if (model_ != nullptr && model_->hasSkinning()) {
             model_->updateAnimation(
                 animationEnabled_,
                 animationClipIndex_,
@@ -689,6 +746,20 @@ int Application::run(const std::filesystem::path& initialModel) {
             if (!used) it = importedModels_.erase(it); else ++it;
         }
         ImGui::Render();
+        if (thumbnailAcceptance) {
+            const ImGuiWindow* workspace = ImGui::FindWindowByName(EditorUi::label("Workspace###Workspace"));
+            const ImGuiWindow* viewport = ImGui::FindWindowByName(EditorUi::label("Viewport###Viewport"));
+            int windowWidth = 0, windowHeight = 0;
+            glfwGetWindowSize(window_, &windowWidth, &windowHeight);
+            if (workspace != nullptr && viewport != nullptr && workspace->Size.y > 0.0f) {
+                thumbnailLayoutChecked = true;
+                thumbnailLayoutPassed = windowWidth == 1100 && windowHeight == 680
+                    && workspace->Size.x >= EditorUi::minimumDockedPanelSize.x
+                    && workspace->Size.y >= 250.0f
+                    && viewport->Size.x >= EditorUi::minimumDockedPanelSize.x
+                    && viewport->Size.y > workspace->Size.y;
+            }
+        }
         int framebufferWidth = 0;
         int framebufferHeight = 0;
         glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
@@ -700,11 +771,14 @@ int Application::run(const std::filesystem::path& initialModel) {
         glClearColor(0.035f, 0.04f, 0.055f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        const bool thumbnailReady = std::any_of(uploadedThumbnails_.begin(), uploadedThumbnails_.end(),
+            [](const auto& entry) { return entry.second.texture != 0U; });
         if (!pendingEditorScreenshotPath_.empty() && !pendingModelImport_.has_value()
-            && !scene_.entities().empty() && pendingEditorScreenshotWarmupFrames_ > 0) {
+            && (!thumbnailAcceptance || thumbnailReady)
+            && pendingEditorScreenshotWarmupFrames_ > 0) {
             --pendingEditorScreenshotWarmupFrames_;
         } else if (!pendingEditorScreenshotPath_.empty() && !pendingModelImport_.has_value()
-            && !scene_.entities().empty()) {
+                   && (!thumbnailAcceptance || thumbnailReady)) {
             std::string screenshotError;
             if (renderer_->saveEditorScreenshot(
                     pendingEditorScreenshotPath_,
@@ -763,7 +837,12 @@ int Application::run(const std::filesystem::path& initialModel) {
         }
         if (smokeTestFrames > 0 && !pendingModelImport_.has_value()
             && droppedModelPaths_.empty()) {
-            if (cpuPreviewSmoke && cpuPreviewUploadedSamples_ == 0U) {
+            if (thumbnailAcceptance && !thumbnailReady) {
+                if (std::chrono::steady_clock::now() >= thumbnailDeadline) {
+                    std::cerr << "Thumbnail acceptance timed out before a raster upload\n";
+                    glfwSetWindowShouldClose(window_, GLFW_TRUE);
+                }
+            } else if (cpuPreviewSmoke && cpuPreviewUploadedSamples_ == 0U) {
                 if (std::chrono::steady_clock::now() >= cpuPreviewSmokeDeadline) {
                     std::cerr << "CPU preview smoke timed out before an OpenGL upload\n";
                     glfwSetWindowShouldClose(window_, GLFW_TRUE);
@@ -790,9 +869,26 @@ int Application::run(const std::filesystem::path& initialModel) {
     const bool referenceComparisonPassed = !referenceComparisonMode_
         || (referenceComparisonComplete_ && !referenceComparisonFailed_);
     const bool cpuPreviewSmokePassed = !cpuPreviewSmoke || cpuPreviewUploadedSamples_ > 0U;
+    const bool thumbnailAcceptancePassed = !thumbnailAcceptance
+        || (thumbnailLayoutChecked && thumbnailLayoutPassed
+            && std::any_of(uploadedThumbnails_.begin(), uploadedThumbnails_.end(),
+                [](const auto& entry) { return entry.second.texture != 0U; }));
+    if (thumbnailAcceptance) {
+        const ImGuiWindow* workspace = ImGui::FindWindowByName(EditorUi::label("Workspace###Workspace"));
+        const ImGuiWindow* viewport = ImGui::FindWindowByName(EditorUi::label("Viewport###Viewport"));
+        std::cout << "1100x680 thumbnail layout and upload: "
+            << (thumbnailAcceptancePassed ? "PASS" : "FAIL")
+            << " (checked=" << thumbnailLayoutChecked
+            << ", layout=" << thumbnailLayoutPassed
+            << ", workspace=" << (workspace == nullptr ? 0.0f : workspace->Size.x)
+            << "x" << (workspace == nullptr ? 0.0f : workspace->Size.y)
+            << ", viewport=" << (viewport == nullptr ? 0.0f : viewport->Size.x)
+            << "x" << (viewport == nullptr ? 0.0f : viewport->Size.y)
+            << ", uploads=" << uploadedThumbnails_.size() << ")\n";
+    }
     shutdown();
     return recoveryPassed && appendPassed && interactionsPassed
-        && referenceComparisonPassed && cpuPreviewSmokePassed ? 0 : 2;
+        && referenceComparisonPassed && cpuPreviewSmokePassed && thumbnailAcceptancePassed ? 0 : 2;
 }
 
 namespace {
@@ -1029,9 +1125,14 @@ void Application::shutdown() {
         }
         pendingModelImport_.reset();
     }
+    if (pendingThumbnail_.valid()) pendingThumbnail_.wait();
 
     if (window_ != nullptr) {
         glfwMakeContextCurrent(window_);
+        for (const auto& entry : uploadedThumbnails_) {
+            if (entry.second.texture != 0U) glDeleteTextures(1, &entry.second.texture);
+        }
+        uploadedThumbnails_.clear();
         cpuPreviewTask_.cancel();
         cpuPreviewTask_.wait();
         cpuPreviewProgress_.reset();
@@ -1208,7 +1309,7 @@ void Application::drawInspectorPanel() {
         if (ImGui::BeginTabItem(EditorUi::label("Object"), nullptr, showObject ? ImGuiTabItemFlags_SetSelected : 0)) {
             SceneEntity* selectedEntity = scene_.find(selectedSceneEntity_);
             if (selectedEntity) {
-                ImGui::TextUnformatted(selectedEntity->name.c_str());
+                ImGui::TextWrapped("%s", selectedEntity->name.c_str());
                 ImGui::TextDisabled("Render entity #%llu",
                     static_cast<unsigned long long>(selectedEntity->id));
             }
@@ -1622,6 +1723,20 @@ void Application::drawInspectorPanel() {
             EditorUi::Checkbox("Image-based lighting", &rendererSettings_.iblEnabled);
             EditorUi::Checkbox(EditorUi::label("Skybox"), &rendererSettings_.skyboxEnabled);
             EditorUi::Checkbox(EditorUi::label("Shadow mapping"), &rendererSettings_.shadowsEnabled);
+            {
+                auto cascades = EditorDomain::capturePbrEnvironmentSettings(rendererSettings_);
+                bool changed = EditorUi::SliderInt(EditorUi::label("Shadow cascades"),
+                    &cascades.shadowCascadeCount, 1, 4);
+                changed |= EditorUi::SliderFloat(EditorUi::label("Cascade split blend"),
+                    &cascades.shadowCascadeSplitLambda, 0.0f, 1.0f, "%.2f");
+                changed |= EditorUi::Checkbox(EditorUi::label("Show cascade regions"),
+                    &cascades.shadowCascadeDebugView);
+                if (changed) {
+                    EditorCommand command{EditorCommandType::SetPbrEnvironmentSettings};
+                    command.pbrEnvironment = cascades;
+                    editorSession_.request(std::move(command));
+                }
+            }
             EditorUi::Checkbox(
                 "Colored transmission shadows",
                 &rendererSettings_.coloredTransmissionShadowsEnabled
@@ -1673,6 +1788,54 @@ void Application::drawInspectorPanel() {
                         : 0.0
                 );
             }
+            }
+            if (EditorUi::section("Water surface")) {
+                auto waterSettings = EditorDomain::captureWaterSettings(rendererSettings_);
+                bool changed = EditorUi::Checkbox(EditorUi::label("Enable water"), &waterSettings.enabled);
+                const char* seaStates[] = {"Custom", "Calm", "Windy", "Storm"};
+                if (EditorUi::Combo(EditorUi::label("Sea state"),
+                        &waterSettings.preset, seaStates, 4)) {
+                    WaterSettings presetSettings;
+                    water::applyPreset(presetSettings,
+                        static_cast<WaterPreset>(waterSettings.preset));
+                    waterSettings.amplitude = presetSettings.amplitude;
+                    waterSettings.speed = presetSettings.speed;
+                    waterSettings.steepness = presetSettings.steepness;
+                    waterSettings.foamStrength = presetSettings.foamStrength;
+                    waterSettings.windX = presetSettings.windDirection.x;
+                    waterSettings.windZ = presetSettings.windDirection.y;
+                    changed = true;
+                }
+                const char* waterQualities[] = {"Low (96 x 96)", "High (192 x 192)"};
+                changed |= EditorUi::Combo(EditorUi::label("Water quality"),
+                    &waterSettings.quality, waterQualities, 2);
+                bool parametersChanged = false;
+                changed |= EditorUi::SliderFloat(EditorUi::label("Water level"),
+                    &waterSettings.level, -10.0f, 10.0f, "%.2f");
+                changed |= EditorUi::SliderFloat(EditorUi::label("Water extent"),
+                    &waterSettings.extent, 20.0f, 500.0f, "%.0f");
+                parametersChanged |= EditorUi::SliderFloat(EditorUi::label("Wave amplitude"),
+                    &waterSettings.amplitude, 0.0f, 2.0f, "%.2f");
+                parametersChanged |= EditorUi::SliderFloat(EditorUi::label("Wave speed"),
+                    &waterSettings.speed, 0.0f, 5.0f, "%.2f");
+                parametersChanged |= EditorUi::SliderFloat(EditorUi::label("Wave steepness"),
+                    &waterSettings.steepness, 0.0f, 0.9f, "%.2f");
+                parametersChanged |= EditorUi::SliderFloat(EditorUi::label("Foam strength"),
+                    &waterSettings.foamStrength, 0.0f, 1.0f, "%.2f");
+                parametersChanged |= EditorUi::SliderFloat(EditorUi::label("Wind east"),
+                    &waterSettings.windX, -1.0f, 1.0f, "%.2f");
+                parametersChanged |= EditorUi::SliderFloat(EditorUi::label("Wind north"),
+                    &waterSettings.windZ, -1.0f, 1.0f, "%.2f");
+                if (parametersChanged) waterSettings.preset = 0;
+                changed |= parametersChanged;
+                ImGui::TextDisabled("Wave Synthesis | 4 waves | %d x %d grid",
+                    waterSettings.quality == 0 ? water::lowGridResolution : water::gridResolution,
+                    waterSettings.quality == 0 ? water::lowGridResolution : water::gridResolution);
+                if (changed) {
+                    EditorCommand command{EditorCommandType::SetWaterSettings};
+                    command.water = waterSettings;
+                    editorSession_.request(std::move(command));
+                }
             }
             if (EditorUi::section("Glass feature toggles")) {
             EditorUi::Checkbox("Glass transmission", &rendererSettings_.transmissionEnabled);
@@ -2610,6 +2773,7 @@ void Application::drawViewportPanel() {
     rendererSettings_.causticsAnimationPhase = rendererSettings_.causticsAnimated
         ? static_cast<float>(std::fmod(glfwGetTime() * 0.16, 1.0))
         : 0.0f;
+    rendererSettings_.water.timeSeconds = animationTimeSeconds_;
     if (lightStressDemoEnabled_ || instanceStressDemoEnabled_) {
         for (const RenderItem& item : viewportScene().buildRenderItems()) {
             if (std::find(stressEntities_.begin(), stressEntities_.end(), item.entityId) == stressEntities_.end()
@@ -3008,10 +3172,79 @@ void Application::discoverModels() {
     availableScenes_ = std::move(scenes);
     unsupportedModelCount_ = 0U;
     thumbnailCacheGeneration_ = workspaceAssets_.generation();
+    std::map<std::filesystem::path, std::uint64_t> keys;
+    for (const WorkspaceAssetRecord& asset : workspaceAssets_.records()) {
+        if (isPreviewableAsset(asset.category)) {
+            keys.emplace(asset.path, assetThumbnailContentKey(asset));
+        }
+    }
+    thumbnailKeys_ = std::move(keys);
+    for (auto it = uploadedThumbnails_.begin(); it != uploadedThumbnails_.end();) {
+        const auto current = thumbnailKeys_.find(it->first);
+        if (current == thumbnailKeys_.end() || current->second != it->second.key) {
+            if (it->second.texture != 0U) glDeleteTextures(1, &it->second.texture);
+            it = uploadedThumbnails_.erase(it);
+        } else {
+            ++it;
+        }
+    }
     if (!selectedWorkspaceAsset_.empty()
         && workspaceAssets_.find(selectedWorkspaceAsset_) == nullptr) {
         selectedWorkspaceAsset_.clear();
     }
+}
+
+void Application::updateAssetThumbnail() {
+    if (!pendingThumbnail_.valid()
+        || pendingThumbnail_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    PendingThumbnail result = pendingThumbnail_.get();
+    const auto current = thumbnailKeys_.find(result.path);
+    if (current == thumbnailKeys_.end() || current->second != result.key) return;
+    UploadedThumbnail uploaded;
+    uploaded.key = result.key;
+    uploaded.error = result.image.error;
+    if (result.image.error.empty() && !result.image.rgba.empty()) {
+        GLint previousTexture = 0;
+        GLint previousAlignment = 4;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+        glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousAlignment);
+        glGenTextures(1, &uploaded.texture);
+        glBindTexture(GL_TEXTURE_2D, uploaded.texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, AssetThumbnail::width,
+                     AssetThumbnail::height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                     result.image.rgba.data());
+        glPixelStorei(GL_UNPACK_ALIGNMENT, previousAlignment);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    }
+    uploadedThumbnails_[result.path] = uploaded;
+}
+
+void Application::requestAssetThumbnail(const WorkspaceAssetRecord& asset) {
+    if (!isPreviewableAsset(asset.category)) return;
+    const auto key = thumbnailKeys_.find(asset.path);
+    if (key == thumbnailKeys_.end()) return;
+    const auto ready = uploadedThumbnails_.find(asset.path);
+    if (ready != uploadedThumbnails_.end() && ready->second.key == key->second) return;
+    if (pendingThumbnail_.valid()) return;
+    const WorkspaceAssetRecord copy = asset;
+    const std::uint64_t contentKey = key->second;
+    const std::filesystem::path cache = sourceRoot_ / ".cache" / "asset-thumbnails";
+    pendingThumbnail_ = std::async(std::launch::async, [copy, contentKey, cache] {
+        PendingThumbnail result;
+        result.path = copy.path;
+        result.key = contentKey;
+        try {
+            result.image = loadOrGenerateAssetThumbnail(copy, contentKey, cache);
+        } catch (const std::exception& exception) {
+            result.image.error = exception.what();
+        }
+        return result;
+    });
 }
 
 bool Application::loadModel(const std::filesystem::path& path, bool append) {

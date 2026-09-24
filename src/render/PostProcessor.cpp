@@ -345,6 +345,9 @@ void PostProcessor::process(RenderTarget& target, const PostProcessSettings& set
     compositeShader_->setVec3(
         "uAerialHorizonColor", glm::max(settings.aerialPerspectiveHorizonColor, glm::vec3(0.0f))
     );
+    compositeShader_->setBool("uUnderwaterFogEnabled", settings.underwaterFog);
+    compositeShader_->setVec3("uUnderwaterAbsorption", settings.underwaterAbsorption);
+    compositeShader_->setVec3("uUnderwaterColor", settings.underwaterColor);
     compositeShader_->setBool("uColorGradingEnabled", settings.colorGrading);
     compositeShader_->setFloat(
         "uColorGradingStrength", std::clamp(settings.colorGradingStrength, 0.0f, 1.0f)

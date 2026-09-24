@@ -72,6 +72,7 @@ int main() {
         // change the cascade count at all.
         pbrEnvironment.pbrEnvironment.shadowCascadeCount = 4;
         pbrEnvironment.pbrEnvironment.shadowCascadeSplitLambda = 0.25f;
+        pbrEnvironment.pbrEnvironment.shadowCascadeDebugView = true;
         session.request(std::move(pbrEnvironment));
         EditorCommand shading{EditorCommandType::SetShadingSettings};
         shading.shading.shadingMode = 1;
@@ -199,7 +200,8 @@ int main() {
                 && !commands[17].pbrEnvironment.coloredTransmissionShadowsEnabled
                 && commands[17].pbrEnvironment.environmentIntensity == 0.75f
                 && commands[17].pbrEnvironment.shadowCascadeCount == 4
-                && commands[17].pbrEnvironment.shadowCascadeSplitLambda == 0.25f,
+                && commands[17].pbrEnvironment.shadowCascadeSplitLambda == 0.25f
+                && commands[17].pbrEnvironment.shadowCascadeDebugView,
                 "PBR environment command payload was lost");
         require(commands[18].type == EditorCommandType::SetShadingSettings
                 && commands[18].shading.shadingMode == 1

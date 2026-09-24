@@ -1,10 +1,8 @@
 # P1-A 切片 3：级联阴影贴图（Cascaded Shadow Maps）
 
-> 状态：**GPU 侧已接线，基线已按流程更新**。数学层、GPU 路径与视觉基线都已落地并验证。
-> 剩余待办（`.myscene` 持久化、Inspector 分组、级联调试视图、`gpu-smoke` 分支）见文末清单。
-> 在这些待办完成前不要把 `todolist.md` 的切片 3 勾选为完成。
+> 状态：3～4 级 CSM、持久化、Inspector 控件、级联调试视图和 GPU 验收已落地。固定图回归的本次结果见下文。
 
-- 记录日期：2026-09-20
+- 记录日期：2026-09-24；源码基点 `fb4a6f2` 加本轮工作区改动
 - 构建目录：`build-ci-msvc`，Visual Studio 17 2022，Release，`BUILD_TESTING=ON`
 - GPU / 驱动 / OpenGL：NVIDIA GeForce RTX 4060 Laptop GPU / NVIDIA 591.44 / OpenGL 3.3.0
 
@@ -46,6 +44,10 @@
 - 顶点着色器输出每级 `vShadowPosition[MAX_SHADOW_CASCADES]` 与 `vViewDepth`；片元着色器按 `uCascadeSplits` 选层。**视深沿相机前向轴测量**（forward 路径来自 `uView` 的第三行，deferred 路径来自 `uCameraForward`），不能用视线长度——两者在画面边缘相差 `1 / cos(angle)`，足以选错级联。
 - 未使用的层重复最后一级的矩阵而不是留单位矩阵：读错层时会投影进一个真实的盒，比退化盒容易发现。
 - 彩色透射阴影与投影焦散**继续使用它们自己的旧框**（`ortho(±4, 0.1..16)` 乘 `lookAt(sceneCenter - lightDirection * 6)`）。这条是实测出来的：改用某一级的矩阵会让焦散位置明显移动（当时 MAE `0.0234`），因为它们当初就是围绕那个框调出来的。
+
+### 持久化、Inspector 与诊断
+
+`.myscene` 保存级联数、实用切分的 `lambda` 混合系数和调试视图开关。Inspector 的 `Lighting & environment` 区提供 `Shadow cascades`、`Cascade split blend` 和 `Show cascade regions` 控件；改动经 `SetPbrEnvironmentSettings` 命令应用。调试视图把实际选中的 0～3 级分别标成红、绿、蓝、黄，Forward 和 Deferred 共用同一切分数组。Deferred 原先对 `uCameraForward` 的点积取了负号，导致正向视深被错误地归到第 0 级；本轮把它改成与 Forward 相同的正向视深。调试视图使切分区域可以直接检查。
 
 ### 光源视图范围按场景内容而非相机远平面
 
@@ -92,10 +94,33 @@ build-ci-msvc/Release/MyRenderer.exe assets/scenes/19_coastal_cascades.myscene
 
 `gpu-smoke` 在这个夹具上跑级联 1 / 3 / 4 三条分支（第三条同时覆盖 Deferred 与 `lambda = 0.5`），因此三条 uniform 路径都在真实上下文里编译链接过。
 
-## 剩余待办
+同一 1280×720 机位、三级级联的调试视图能看到三个连续区域；Forward 与 Deferred 的区域边界一致。图中颜色经过现有后处理，因此显示为浅色，区域编号以近到远的顺序读取。
 
-- [ ] 级联调试视图：把所选层级着色到画面，供人工检查切分位置。当前只能靠上面对照图与不同级联数的 smoke 分支间接覆盖；这是本切片唯一还没有的**可检查性**手段，也是 `todolist.md` 切片 3 里明确要求的一项。
-- [ ] 帧分析：级联把光源 pass 从 1 次变成 N 次，逐级各画一遍所有投影物。本轮没有测量它对 GPU 时间的影响，`shadowCascadeCount` 的默认值目前只由画质决定，没有性能证据支撑。
+![三级级联调试视图：近、中、远三段与物体表面上的分界连续](media/p1a-shadow-cascade-debug-forward.png)
+
+复现：运行 `shadow-cascade-acceptance`，图像原件位于 `build-ci-msvc/shadow-cascade-acceptance/forward_cascade_3.png`；该 target 也产生同机位的 Deferred 图。正常画面与调试画面的 MAE 在 Forward / Deferred 分别为 `0.306069` / `0.306209`；单级与三级调试画面的 MAE 分别为 `0.096734` / `0.096601`。这些比较只要求图像明显不同，不将调试配色加入固定图基线。
+
+### GPU 帧分析
+
+`shadow-cascade-acceptance` 在 RTX 4060 Laptop GPU、NVIDIA 591.44、OpenGL 3.3.0 上以同一场景与 1280×720 分辨率预热 8 帧、测量 30 帧。连续两次独立运行的 `Shadow maps` pass GPU P50 如下：
+
+| 级联数 | 第一次 GPU P50 | 第二次 GPU P50 |
+| --- | ---: | ---: |
+| 1 | `0.045056 ms` | `0.019456 ms` |
+| 3 | `0.077824 ms` | `0.090112 ms` |
+| 4 | `0.086016 ms` | `0.082944 ms` |
+
+两次的三级与四级都高于单级，但三级和四级之间没有稳定次序；单级本身也从 `0.019` 变到 `0.045 ms`。整帧 GPU P50 同样不单调（第一次为 `6.086 / 4.357 / 3.748 ms`，第二次为 `3.678 / 5.632 / 3.559 ms`）。这些短测量能确认级联增加了阴影 pass 工作量，不能给出可靠的整帧增量或三级与四级的精确差值。
+
+## 验证
+
+MSVC Release 全量 CTest `19/19` 通过，其中 `shadow-cascade-fitting`、`scene-document-repeat-load` 和 `editor-session` 覆盖矩阵计算、字段往返与命令载荷；MinGW 的 `MyRenderer` 目标也构建成功。`tools/TestEditorScene.ps1` 的真实 GPU 编辑器交互回归通过，含级联数、`lambda` 与调试开关的命令应用。`gpu-smoke` 和完整 `renderer-regression-suite` 均以退出码 `0` 通过，原有固定图无需调整。
+
+`shadow-cascade-acceptance` 也以退出码 `0` 通过。除上述四组「正常/调试」「单级/三级」差异外，它要求 Forward 与 Deferred 的单级和三级区域分别满足 MAE ≤ `0.002` 且变化像素比例 ≤ `1%`；实测单级为 MAE `0.000256` / `0.203%`，三级为 MAE `0.000375` / `0.356%`。该阈值只用于核对调试区域，允许两条渲染路径在物体边缘有少量覆盖差异。
+
+## 限制与取舍
+
+彩色透射阴影与焦散仍使用独立旧框；PCSS 留待后续质量档。GPU 计时只覆盖此 GPU/驱动、海岸夹具和 30 帧窗口，不能外推为所有场景的性能预算。
 
 ## 复现命令
 
@@ -103,4 +128,9 @@ build-ci-msvc/Release/MyRenderer.exe assets/scenes/19_coastal_cascades.myscene
 cmake --build build-ci-msvc --config Release --target MyRendererShadowCascadeTests
 ctest --test-dir build-ci-msvc -C Release -R shadow-cascade-fitting --output-on-failure
 cmake --build build-ci-msvc --config Release --target renderer-regression-suite
+cmake --build build-ci-msvc --config Release --target gpu-smoke shadow-cascade-acceptance
 ```
+
+## 下一步
+
+按 [`todolist.md`](../todolist.md) 的 P1-A 切片 4，建立大范围 Gerstner 海面的几何 LOD、位移与阴影/运动矢量合同。

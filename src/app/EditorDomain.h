@@ -69,9 +69,26 @@ inline EditorPbrEnvironmentSettingsPayload capturePbrEnvironmentSettings(
     snapshot.shadowCascadeCount = std::clamp(settings.shadowCascadeCount, 1, 4);
     snapshot.shadowCascadeSplitLambda =
         std::clamp(settings.shadowCascadeSplitLambda, 0.0f, 1.0f);
+    snapshot.shadowCascadeDebugView = settings.shadowCascadeDebugView;
     snapshot.coloredTransmissionShadowsEnabled =
         settings.coloredTransmissionShadowsEnabled;
     snapshot.environmentIntensity = std::clamp(settings.environmentIntensity, 0.0f, 2.0f);
+    return snapshot;
+}
+
+inline EditorWaterSettingsPayload captureWaterSettings(const RendererSettings& settings) {
+    EditorWaterSettingsPayload snapshot;
+    snapshot.enabled = settings.water.enabled;
+    snapshot.preset = static_cast<int>(settings.water.preset);
+    snapshot.quality = static_cast<int>(settings.water.quality);
+    snapshot.level = std::clamp(settings.water.level, -10.0f, 10.0f);
+    snapshot.extent = std::clamp(settings.water.extent, 20.0f, 500.0f);
+    snapshot.amplitude = std::clamp(settings.water.amplitude, 0.0f, 2.0f);
+    snapshot.speed = std::clamp(settings.water.speed, 0.0f, 5.0f);
+    snapshot.steepness = std::clamp(settings.water.steepness, 0.0f, 0.9f);
+    snapshot.foamStrength = std::clamp(settings.water.foamStrength, 0.0f, 1.0f);
+    snapshot.windX = std::clamp(settings.water.windDirection.x, -1.0f, 1.0f);
+    snapshot.windZ = std::clamp(settings.water.windDirection.y, -1.0f, 1.0f);
     return snapshot;
 }
 

@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | `prism5_demo_reel.mp4` | Prism-5 确定性 360 帧参数动画，24 fps 编码为 15 秒 1280 × 720 作品集预览 | 见 [`../prism5-validation.md`](../prism5-validation.md)；PNG 序列只生成在构建目录，不入库 |
 | `p1-workspace-1440x900.png` | 默认 Dock 工作区：中央 Viewport、Scene Explorer、Inspector、底部多标签工作区 | `MYRENDERER_EDITOR_WINDOW_WIDTH=1440 MYRENDERER_EDITOR_WINDOW_HEIGHT=900` + `MYRENDERER_EDITOR_SCREENSHOT=docs/media/p1-workspace-1440x900.png` 运行 `build-ci-msvc/Release/MyRenderer.exe assets/scenes/18_atmosphere_sky.myscene` |
+| `p1-workspace-hierarchy-1440x900.png` | Scene Explorer 树形层级：一个根节点和四个子节点，统计默认折叠 | `MYRENDERER_SMOKE_TEST=1`、窗口 `1440×900`、`MYRENDERER_EDITOR_SCREENSHOT=docs/media/p1-workspace-hierarchy-1440x900.png`，运行 `build-ci-msvc/Release/MyRenderer.exe assets/scenes/01_multi_model_hierarchy.myscene` |
 | `p1-workspace-1100x680.png` | 同一工作区在 1100 × 680 应用下限下的布局与可达性 | 同上，窗口尺寸改为 `1100` × `680` |
 | `p1-workspace-render-queue.png` | Render Queue 标签页：任务路径输入、Enqueue、空队列状态与恢复诊断 | 加 `MYRENDERER_EDITOR_SCREENSHOT_TAB=render-queue` |
 | `p1-workspace-modules.png` | Modules 标签页：真实 Module Registry 清单（ID / Name / Kind / Target / Source / API 版本 / Build ID） | 加 `MYRENDERER_EDITOR_SCREENSHOT_TAB=modules` |
@@ -17,5 +18,9 @@
 | `c1-module-inspector.png` | Inspector 的 Module 页：模块选择、Seed 与空状态文案 | 加 `MYRENDERER_EDITOR_SCREENSHOT_TAB=module` |
 | `p1a-atmosphere-keylight-before-after.png` | 逐通道关键光颜色接入前后的金时刻对照（960 × 540 双栏合成） | `MYRENDERER_SUN_ELEVATION=10 MYRENDERER_SUN_AZIMUTH=120` 下各拍一张 960 × 540 截图后并排合成 |
 | `p1a-aerial-perspective-on-off.png` | Aerial Perspective 开关对照：关闭时地面一直铺到地平线，开启后远景失去对比度并向天空色靠拢（960 × 540 双栏合成） | `MYRENDERER_SUN_ELEVATION=14 MYRENDERER_SUN_AZIMUTH=128 MYRENDERER_SKY_TURBIDITY=1.4` 下分别用 `MYRENDERER_AERIAL_PERSPECTIVE=0` 与 `=1`（`MYRENDERER_AERIAL_SCALE_HEIGHT=12`）各拍一张后并排合成 |
+| `p1a-shadow-cascade-debug-forward.png` | 海岸夹具的 Forward 三级级联调试图；近、中、远三个色带显示实际选层边界（1280 × 720） | `cmake --build build-ci-msvc --config Release --target shadow-cascade-acceptance` 后复制 `build-ci-msvc/shadow-cascade-acceptance/forward_cascade_3.png` |
+| `p1a-water-synthesis-forward.png` | 固定时间的 Gerstner 海面，展示近景波形和远景连续网格（960 × 540） | `cmake --build build-ci-msvc --config Release --target water-synthesis-acceptance` 后复制 `build-ci-msvc/water-synthesis-acceptance/forward_t1.png` |
+| `p1a-water-depth.png` | 赭色海床经水深吸收透出，礁石接水处出现岸线泡沫（960 × 540） | 同一验收 target 后复制 `build-ci-msvc/water-synthesis-acceptance/depth_on.png` |
+| `p1a-water-underwater.png` | 水下相机的海面与全屏消光（960 × 540） | 同一验收 target 后复制 `build-ci-msvc/water-synthesis-acceptance/underwater_on.png` |
 
 新增素材后在本表补一行：文件名、这张图证明什么、怎么重拍。

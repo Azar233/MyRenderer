@@ -1,5 +1,6 @@
 #include "scene/SceneDocument.h"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
@@ -76,6 +77,18 @@ void writeRendererSettings(Writer& writer, const RendererSettings& settings) {
     writer.Key("shadowCascadeCount"); writer.Int(std::clamp(settings.shadowCascadeCount, 1, 4));
     writer.Key("shadowCascadeSplitLambda");
     writer.Double(std::clamp(settings.shadowCascadeSplitLambda, 0.0f, 1.0f));
+    WRITE_BOOL(shadowCascadeDebugView);
+    writer.Key("waterEnabled"); writer.Bool(settings.water.enabled);
+    writer.Key("waterPreset"); writer.Int(static_cast<int>(settings.water.preset));
+    writer.Key("waterQuality"); writer.Int(static_cast<int>(settings.water.quality));
+    writer.Key("waterLevel"); writer.Double(settings.water.level);
+    writer.Key("waterExtent"); writer.Double(settings.water.extent);
+    writer.Key("waterAmplitude"); writer.Double(settings.water.amplitude);
+    writer.Key("waterSpeed"); writer.Double(settings.water.speed);
+    writer.Key("waterSteepness"); writer.Double(settings.water.steepness);
+    writer.Key("waterFoamStrength"); writer.Double(settings.water.foamStrength);
+    writer.Key("waterWindX"); writer.Double(settings.water.windDirection.x);
+    writer.Key("waterWindZ"); writer.Double(settings.water.windDirection.y);
     WRITE_BOOL(causticsEnabled);
     writer.Key("causticsMode"); writer.Int(static_cast<int>(settings.causticsMode));
     WRITE_FLOAT(causticsStrength); WRITE_FLOAT(causticsScale); WRITE_VEC3(causticsDirection);
@@ -264,6 +277,22 @@ void readRendererSettings(const scene_json::Value& value, RendererSettings& sett
         readFloat(value, "shadowCascadeSplitLambda", settings.shadowCascadeSplitLambda),
         0.0f, 1.0f
     );
+    READ_BOOL(shadowCascadeDebugView);
+    settings.water.enabled = readBool(value, "waterEnabled", settings.water.enabled);
+    settings.water.preset = static_cast<WaterPreset>(std::clamp(
+        readInt(value, "waterPreset", static_cast<int>(settings.water.preset)), 0, 3));
+    settings.water.quality = static_cast<WaterQuality>(std::clamp(
+        readInt(value, "waterQuality", static_cast<int>(settings.water.quality)), 0, 1));
+    settings.water.level = std::clamp(readFloat(value, "waterLevel", settings.water.level), -10.0f, 10.0f);
+    settings.water.extent = std::clamp(readFloat(value, "waterExtent", settings.water.extent), 20.0f, 500.0f);
+    settings.water.amplitude = std::clamp(readFloat(value, "waterAmplitude", settings.water.amplitude), 0.0f, 2.0f);
+    settings.water.speed = std::clamp(readFloat(value, "waterSpeed", settings.water.speed), 0.0f, 5.0f);
+    settings.water.steepness = std::clamp(readFloat(value, "waterSteepness", settings.water.steepness), 0.0f, 0.9f);
+    settings.water.foamStrength = std::clamp(readFloat(value, "waterFoamStrength", settings.water.foamStrength), 0.0f, 1.0f);
+    settings.water.windDirection.x = std::clamp(
+        readFloat(value, "waterWindX", settings.water.windDirection.x), -1.0f, 1.0f);
+    settings.water.windDirection.y = std::clamp(
+        readFloat(value, "waterWindZ", settings.water.windDirection.y), -1.0f, 1.0f);
     READ_BOOL(causticsEnabled);
     settings.causticsMode = static_cast<CausticsMode>(readInt(value, "causticsMode", static_cast<int>(settings.causticsMode)));
     READ_FLOAT(causticsStrength); READ_FLOAT(causticsScale); READ_VEC3(causticsDirection);

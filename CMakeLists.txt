@@ -236,6 +236,7 @@ endif()
 add_executable(MyRenderer
     src/main.cpp
     src/app/AppIcon.cpp
+    src/app/AssetThumbnail.cpp
     src/app/Application.cpp
     src/app/ApplicationScene.cpp
     src/app/EditorSession.cpp
@@ -271,6 +272,8 @@ add_executable(MyRenderer
     src/render/SsaoRenderer.cpp
     src/render/SpectralBeamRenderer.cpp
     src/render/Texture2D.cpp
+    src/render/WaterSurface.cpp
+    src/render/WaterWaves.cpp
     src/scene/Scene.cpp
     src/scene/SceneDocument.cpp
 )
@@ -403,6 +406,19 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME shadow-cascade-fitting COMMAND MyRendererShadowCascadeTests)
 
+    add_executable(MyRendererWaterWavesTests
+        tests/WaterWavesTests.cpp
+        src/render/WaterWaves.cpp
+    )
+    target_link_libraries(MyRendererWaterWavesTests PRIVATE glm::glm)
+    target_include_directories(MyRendererWaterWavesTests PRIVATE src)
+    if(MSVC)
+        target_compile_options(MyRendererWaterWavesTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererWaterWavesTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME water-wave-synthesis COMMAND MyRendererWaterWavesTests)
+
     add_executable(MyRendererAtmosphereTests tests/AtmosphereTests.cpp)
     target_link_libraries(MyRendererAtmosphereTests PRIVATE MyRendererPathTracing)
     target_include_directories(MyRendererAtmosphereTests PRIVATE src)
@@ -446,6 +462,37 @@ if(BUILD_TESTING)
         target_compile_options(MyRendererWorkspaceAssetsTests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
     add_test(NAME workspace-assets COMMAND MyRendererWorkspaceAssetsTests)
+
+    add_executable(MyRendererAssetThumbnailTests
+        tests/AssetThumbnailTests.cpp
+        src/app/AssetThumbnail.cpp
+        src/app/WorkspaceAssets.cpp
+    )
+    target_include_directories(MyRendererAssetThumbnailTests PRIVATE src)
+    target_compile_definitions(MyRendererAssetThumbnailTests PRIVATE
+        MYRENDERER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    target_link_libraries(MyRendererAssetThumbnailTests PRIVATE
+        MyRendererBatchRuntime MyRendererModules glad_gl_core_33)
+    if(MSVC)
+        target_compile_options(MyRendererAssetThumbnailTests PRIVATE /W4 /permissive- /utf-8)
+    else()
+        target_compile_options(MyRendererAssetThumbnailTests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME asset-thumbnails COMMAND MyRendererAssetThumbnailTests)
+    add_custom_target(asset-thumbnail-layout-acceptance
+        COMMAND ${CMAKE_COMMAND} -E env
+            MYRENDERER_SMOKE_TEST=1
+            MYRENDERER_ASSET_THUMBNAIL_ACCEPTANCE=1
+            MYRENDERER_EDITOR_WINDOW_WIDTH=1100
+            MYRENDERER_EDITOR_WINDOW_HEIGHT=680
+            MYRENDERER_EDITOR_SCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/asset-thumbnail-layout-1100x680.png
+            $<TARGET_FILE:MyRenderer>
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/01_multi_model_hierarchy.myscene
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Checking raster thumbnail upload and the 1100x680 editor layout"
+    )
 
     add_executable(MyRendererAssetTests
         tests/AssetImportTests.cpp
@@ -590,6 +637,41 @@ if(BUILD_TESTING)
     else()
         target_compile_options(MyRendererImageComparison PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+
+    add_custom_target(shadow-cascade-acceptance
+        COMMAND ${CMAKE_COMMAND}
+            -DRENDERER=$<TARGET_FILE:MyRenderer>
+            -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+            -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/shadow-cascade-acceptance
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/ShadowCascadeAcceptance.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Checking CSM splits in Forward/Deferred and recording shadow GPU costs"
+    )
+
+    add_custom_target(water-synthesis-acceptance
+        COMMAND ${CMAKE_COMMAND}
+            -DRENDERER=$<TARGET_FILE:MyRenderer>
+            -DCOMPARATOR=$<TARGET_FILE:MyRendererImageComparison>
+            -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/water-synthesis-acceptance
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/WaterSynthesisAcceptance.cmake
+        DEPENDS MyRenderer MyRendererImageComparison
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Checking ocean transmission, underwater fog, sea states, quality, parity, and motion"
+    )
+
+    add_custom_target(water-synthesis-benchmark
+        COMMAND ${CMAKE_COMMAND}
+            -DRENDERER=$<TARGET_FILE:MyRenderer>
+            -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/water-synthesis-benchmark
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/WaterSynthesisBenchmark.cmake
+        DEPENDS MyRenderer
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Measuring ocean Low/High GPU budgets against the same dry scene"
+    )
 
     add_custom_target(module-rendering-acceptance
         COMMAND ${CMAKE_COMMAND}

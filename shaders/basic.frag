@@ -26,6 +26,7 @@ uniform sampler2DArray uShadowMap;
 // Cascade count and the ascending split distances that select between them.
 uniform int uShadowCascadeCount;
 uniform float uCascadeSplits[MAX_SHADOW_CASCADES];
+uniform bool uShadowCascadeDebugView;
 uniform sampler2D uCausticsMap;
 uniform sampler2D uTransmissionShadowMap;
 uniform sampler2D uOpaqueColorTexture;
@@ -189,6 +190,13 @@ int selectCascade() {
         if (vViewDepth <= uCascadeSplits[cascade]) break;
     }
     return selected;
+}
+
+vec3 cascadeDebugColor(int cascade) {
+    const vec3 colors[MAX_SHADOW_CASCADES] = vec3[MAX_SHADOW_CASCADES](
+        vec3(0.95, 0.28, 0.24), vec3(0.25, 0.80, 0.35),
+        vec3(0.25, 0.48, 0.96), vec3(0.96, 0.78, 0.22));
+    return colors[clamp(cascade, 0, MAX_SHADOW_CASCADES - 1)];
 }
 
 vec3 lightProjectionCoordinates() {
@@ -492,6 +500,10 @@ void main() {
         } else {
             fragmentColor = vec4(1.0 - weight, weight, 0.15 + 0.35 * weight, 1.0);
         }
+        return;
+    }
+    if (uShadowCascadeDebugView && uShadowsEnabled) {
+        fragmentColor = vec4(cascadeDebugColor(selectCascade()), outputAlpha);
         return;
     }
     vec2 materialSample = uHasMetallicRoughnessTexture

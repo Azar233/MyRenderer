@@ -16,6 +16,7 @@
 #include "render/OpenGlStateCache.h"
 #include "render/RenderPassSequence.h"
 #include "render/RenderItem.h"
+#include "render/WaterWaves.h"
 
 class Camera;
 class CausticsMap;
@@ -32,6 +33,7 @@ class ShadowMap;
 class SsaoRenderer;
 class SpectralBeamRenderer;
 class TextureCache;
+class WaterSurface;
 
 enum class GlassDebugView {
     Final = 0,
@@ -171,6 +173,9 @@ struct RendererSettings {
     // Blend between uniform (0) and logarithmic (1) split spacing. The practical value leans
     // logarithmic because the near cascade is what runs out of resolution first.
     float shadowCascadeSplitLambda{0.75f};
+    // Diagnostic palette showing which cascade receives each visible surface.
+    bool shadowCascadeDebugView{false};
+    WaterSettings water;
     // Sun-driven analytic sky. While enabled it *is* the environment: the skybox, the
     // irradiance and the prefiltered specular cubemaps are all rebuilt from this model, and the
     // directional light direction and colour are derived from the same sun, so the sky and the
@@ -325,6 +330,12 @@ private:
     std::unique_ptr<PostProcessor> postProcessor_;
     std::unique_ptr<RenderTarget> renderTarget_;
     std::unique_ptr<TextureCache> textureCache_;
+    std::unique_ptr<WaterSurface> waterSurface_;
+    std::unique_ptr<WaterSurface> waterSurfaceLow_;
+    std::unique_ptr<Shader> waterForwardShader_;
+    std::unique_ptr<Shader> waterGBufferShader_;
+    float previousWaterTime_{0.0f};
+    bool previousWaterValid_{false};
     unsigned int fullscreenVertexArray_{0};
     std::array<unsigned int, 4> timingQueries_{};
     std::array<bool, 4> timingQueryPending_{};

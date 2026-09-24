@@ -19,6 +19,7 @@
 #include "io/ModelImporter.h"
 #include "app/EditorSession.h"
 #include "app/WorkspaceAssets.h"
+#include "app/AssetThumbnail.h"
 #include "module/ModuleRegistry.h"
 #include "module/ModuleRuntime.h"
 #include "optics/PrismDemo.h"
@@ -108,6 +109,8 @@ private:
     void drawDiagnostics();
 
     void discoverModels();
+    void updateAssetThumbnail();
+    void requestAssetThumbnail(const WorkspaceAssetRecord& asset);
     bool loadModel(const std::filesystem::path& path, bool append = false);
     void updateModelLoad();
     void finishModelLoad(const std::filesystem::path& path, ModelImportResult loaded, bool append);
@@ -175,6 +178,19 @@ private:
     std::filesystem::path selectedWorkspaceAsset_;
     WorkspaceAssetCatalog workspaceAssets_;
     std::uint64_t thumbnailCacheGeneration_{0U};
+    struct UploadedThumbnail {
+        std::uint64_t key{0U};
+        unsigned int texture{0U};
+        std::string error;
+    };
+    struct PendingThumbnail {
+        std::filesystem::path path;
+        std::uint64_t key{0U};
+        AssetThumbnail image;
+    };
+    std::map<std::filesystem::path, std::uint64_t> thumbnailKeys_;
+    std::map<std::filesystem::path, UploadedThumbnail> uploadedThumbnails_;
+    std::future<PendingThumbnail> pendingThumbnail_;
     std::uint64_t sceneGeneration_{0};
     std::unique_ptr<Shader> pickingShader_;
     std::vector<SceneEntityId> stressEntities_;

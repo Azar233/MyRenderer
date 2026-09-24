@@ -38,6 +38,7 @@ public:
     unsigned int opaqueColorTexture() const { return opaqueColorTexture_; }
     unsigned int hdrColorTexture() const { return hdrColorTexture_; }
     unsigned int sceneDepthTexture() const { return sceneDepthTexture_; }
+    unsigned int refractiveDepthTexture() const { return refractiveDepthTexture_; }
     unsigned int glassFrontfaceDepthTexture() const { return glassFrontfaceDepthTexture_; }
     unsigned int glassBackfaceDepthTexture() const { return glassBackfaceDepthTexture_; }
     unsigned int glassExitNormalTexture() const { return glassExitNormalTexture_; }
@@ -58,7 +59,7 @@ private:
     unsigned int multisampleFramebuffer_{0};
     unsigned int multisampleColor_{0};
     unsigned int multisampleDepthStencil_{0};
-    unsigned int refractiveDepthStencil_{0};
+    unsigned int refractiveDepthTexture_{0};
     unsigned int opaqueColorTexture_{0};
     unsigned int hdrColorTexture_{0};
     unsigned int sceneDepthTexture_{0};

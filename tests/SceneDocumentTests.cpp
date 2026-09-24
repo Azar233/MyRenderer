@@ -64,6 +64,15 @@ int main() {
         source.renderer.stylizedColorGradingLut = StylizedColorGradingLut::Painterly;
         source.renderer.stylizedColorGradingStrength = 0.73f;
         source.renderer.stylizedDebugView = StylizedDebugView::Dither;
+        source.renderer.shadowCascadeCount = 4;
+        source.renderer.shadowCascadeSplitLambda = 0.35f;
+        source.renderer.shadowCascadeDebugView = true;
+        source.renderer.water.enabled = true;
+        source.renderer.water.preset = WaterPreset::Storm;
+        source.renderer.water.quality = WaterQuality::Low;
+        source.renderer.water.level = -0.8f;
+        source.renderer.water.amplitude = 0.41f;
+        source.renderer.water.windDirection = {0.4f, -0.7f};
         source.renderer.localLights.push_back(LocalLight{
             glm::vec3(2.0f, 3.0f, 4.0f),
             6.0f,
@@ -115,6 +124,18 @@ int main() {
         require(close(firstLoad.entities[0].tint.z, 0.9f), "tint survives first load");
         require(firstLoad.renderer.renderPath == RenderPath::Deferred && firstLoad.renderer.ssaoEnabled,
             "renderer mode survives first load");
+        require(firstLoad.renderer.shadowCascadeCount == 4
+                && close(firstLoad.renderer.shadowCascadeSplitLambda, 0.35f)
+                && firstLoad.renderer.shadowCascadeDebugView,
+                "cascade settings survive first load");
+        require(firstLoad.renderer.water.enabled
+                && firstLoad.renderer.water.preset == WaterPreset::Storm
+                && firstLoad.renderer.water.quality == WaterQuality::Low
+                && close(firstLoad.renderer.water.level, -0.8f)
+                && close(firstLoad.renderer.water.amplitude, 0.41f)
+                && close(firstLoad.renderer.water.windDirection.x, 0.4f)
+                && close(firstLoad.renderer.water.windDirection.y, -0.7f),
+                "water settings survive first load");
         require(firstLoad.renderer.shadingMode == ShadingMode::Stylized
                 && firstLoad.renderer.stylizedPreset == StylizedPreset::NightAurora
                 && firstLoad.renderer.stylizedBandCount == 4
